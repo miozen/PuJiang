@@ -9,6 +9,16 @@ obj/
 *.db-shm
 *.db-wal
 TestResults/
+*.trx
+.dotnet-cli/
+.nuget-packages/
+artifacts/
+AppData/
+LocalData/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
 [Dd]ebug/
 [Rr]elease/
 x64/

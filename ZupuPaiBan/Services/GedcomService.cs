@@ -11,7 +11,7 @@ public class GedcomService
         var members = new List<FamilyMember>();
         var indiDict = new Dictionary<string, int>(); // GEDCOM ID -> our ID
         var famDict = new Dictionary<string, (string? husb, string? wife)>(); // Family ID -> (husband, wife)
-        
+
         var lines = await File.ReadAllLinesAsync(filePath, Encoding.UTF8);
         int currentId = 1;
         string? currentIndi = null;
@@ -111,18 +111,18 @@ public class GedcomService
     public async Task ExportToGedcomAsync(List<FamilyMember> members, string filePath)
     {
         var sb = new StringBuilder();
-        
+
         // Header
         sb.AppendLine("0 HEAD");
-        sb.AppendLine("1 SOUR 族谱排版软件");
+        sb.AppendLine("1 SOUR 谱匠 PuJiang");
         sb.AppendLine("2 VERS 1.0");
         sb.AppendLine("1 GEDC");
         sb.AppendLine("2 VERS 5.5.1");
         sb.AppendLine("1 CHAR UTF-8");
-        
+
         int indiNum = 1;
         var idMap = new Dictionary<int, string>();
-        
+
         // Individuals
         foreach (var member in members)
         {
@@ -133,19 +133,19 @@ public class GedcomService
             sb.AppendLine($"0 @{indiId}@ INDI");
             sb.AppendLine($"1 NAME {member.Name.Replace("/", "//")}");
             sb.AppendLine($"1 SEX {(member.Gender == Gender.Male ? "M" : "F")}");
-            
+
             if (!string.IsNullOrEmpty(member.BirthDate))
             {
                 sb.AppendLine("1 BIRT");
                 sb.AppendLine($"2 DATE {member.BirthDate}");
             }
-            
+
             if (!string.IsNullOrEmpty(member.DeathDate))
             {
                 sb.AppendLine("1 DEAT");
                 sb.AppendLine($"2 DATE {member.DeathDate}");
             }
-            
+
             if (!string.IsNullOrEmpty(member.Biography))
             {
                 sb.AppendLine($"1 NOTE {member.Biography}");
@@ -155,21 +155,21 @@ public class GedcomService
         // Families
         int famNum = 1;
         var processedFamilies = new HashSet<int>();
-        
+
         foreach (var member in members.Where(m => m.Children.Any() || !string.IsNullOrEmpty(m.SpouseName)))
         {
             if (processedFamilies.Contains(member.Id)) continue;
-            
+
             string famId = $"F{famNum:D4}";
             famNum++;
 
             sb.AppendLine($"0 @{famId}@ FAM");
-            
+
             if (idMap.TryGetValue(member.Id, out var husbId))
             {
                 sb.AppendLine($"1 HUSB @{husbId}@");
             }
-            
+
             // Add children
             foreach (var child in member.Children)
             {
@@ -178,12 +178,12 @@ public class GedcomService
                     sb.AppendLine($"1 CHIL @{childId}@");
                 }
             }
-            
+
             processedFamilies.Add(member.Id);
         }
 
         sb.AppendLine("0 TRLR");
-        
+
         await File.WriteAllTextAsync(filePath, sb.ToString(), Encoding.UTF8);
     }
 }

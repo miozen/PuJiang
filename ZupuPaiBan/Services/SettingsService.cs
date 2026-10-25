@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ZupuPaiBan.Models;
+using ZupuPaiBan.Infrastructure;
 
 namespace ZupuPaiBan.Services;
 
@@ -10,9 +11,7 @@ namespace ZupuPaiBan.Services;
 /// </summary>
 public class SettingsService
 {
-    private static readonly string _settingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        "ZupuPaiBan", "layout-settings.json");
+    private static readonly string _settingsPath = Path.Combine(AppDataPaths.RootDirectory, "layout-settings.json");
 
     private static readonly JsonSerializerOptions _options = new()
     {

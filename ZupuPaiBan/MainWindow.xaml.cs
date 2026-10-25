@@ -1,6 +1,7 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Microsoft.EntityFrameworkCore;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 using ZupuPaiBan.ViewModels;
@@ -30,7 +31,7 @@ public partial class MainWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         var context = new ZupuDbContext();
-        await context.Database.EnsureCreatedAsync();
+        await context.Database.MigrateAsync();
         await _viewModel.LoadDataAsync();
     }
 

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="PuJiang.Tests/PuJiang.Tests.csproj" />
+  <Project Path="ZupuPaiBan/ZupuPaiBan.csproj" />
+</Solution>

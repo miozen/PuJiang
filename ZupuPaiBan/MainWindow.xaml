@@ -7,7 +7,7 @@
         xmlns:conv="clr-namespace:ZupuPaiBan.Converters"
         xmlns:models="clr-namespace:ZupuPaiBan.Models"
         mc:Ignorable="d"
-        Title="族谱排版软件" Height="700" Width="1000"
+        Title="谱匠" Height="700" Width="1000"
         WindowStartupLocation="CenterScreen"
         Loaded="Window_Loaded">
 

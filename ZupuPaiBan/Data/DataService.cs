@@ -92,6 +92,7 @@ public class DataService
         return childCount + 1;
     }
 
+    [Obsolete("Use Database.MigrateAsync through the application startup path.")]
     public async Task EnsureCreatedAsync()
     {
         await _context.Database.EnsureCreatedAsync();

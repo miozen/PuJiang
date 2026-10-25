@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore PuJiang.slnx
+      - run: dotnet build PuJiang.slnx --no-restore --configuration Release
+      - run: dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --configuration Release --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
+      - name: Upload failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore

@@ -13,7 +13,7 @@ public class PdfExportService
         {
             var document = new PdfDocument();
             document.Info.Title = settings.Title;
-            document.Info.Creator = "族谱排版软件";
+            document.Info.Creator = "谱匠 PuJiang";
 
             var pages = layoutResult.Pages.Count > 0 ? layoutResult.Pages : new List<PageLayout>
             {
@@ -31,7 +31,7 @@ public class PdfExportService
             foreach (var pageLayout in pages)
             {
                 var page = document.AddPage();
-                
+
                 // 设置页面尺寸 (A3 = 297x420mm, A4 = 210x297mm)
                 double pageWidthMm = settings.PageSize switch
                 {
@@ -57,7 +57,7 @@ public class PdfExportService
                 page.Height = XUnit.FromMillimeter(pageHeightMm);
 
                 using var gfx = XGraphics.FromPdfPage(page);
-                
+
                 // 绘制标题
                 var titleFont = MakeFont(settings, settings.TitleFontSize, XFontStyle.Bold);
                 var titleSize = gfx.MeasureString(settings.Title, titleFont);
@@ -71,10 +71,10 @@ public class PdfExportService
                 // 计算缩放
                 double availableWidth = page.Width.Millimeter - 20;
                 double availableHeight = page.Height.Millimeter - 40;
-                double contentWidth = pageLayout.Nodes.Count > 0 
+                double contentWidth = pageLayout.Nodes.Count > 0
                     ? pageLayout.Nodes.Max(n => n.X + n.Width + (n.SpouseNode?.Width ?? 0) + 20) / 3.78 // px to mm
                     : pageWidthMm;
-                double contentHeight = pageLayout.Nodes.Count > 0 
+                double contentHeight = pageLayout.Nodes.Count > 0
                     ? pageLayout.Nodes.Max(n => n.Y + n.Height) / 3.78
                     : pageHeightMm;
 
@@ -89,9 +89,9 @@ public class PdfExportService
                 // 绘制连线
                 foreach (var line in pageLayout.Lines)
                 {
-                    var pen = new XPen(line.IsSpouseLine 
-                        ? XColor.FromArgb(180, 50, 50) 
-                        : XColor.FromArgb(100, 70, 40), 
+                    var pen = new XPen(line.IsSpouseLine
+                        ? XColor.FromArgb(180, 50, 50)
+                        : XColor.FromArgb(100, 70, 40),
                         line.IsSpouseLine ? 1.5 : 1.2);
 
                     if (line.IsSpouseLine)
