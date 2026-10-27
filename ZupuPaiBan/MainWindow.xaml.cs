@@ -163,32 +163,52 @@ public partial class MainWindow : Window
     private async void TargetTree_AddChild_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: TargetMemberTreeNode node } || _genealogyViewModel is null) return;
+        await AddTreeChildAsync(node);
+    }
+
+    private async void TargetShortcut_AddChild_Click(object sender, RoutedEventArgs e)
+    {
+        try { await AddTreeChildAsync(_genealogyViewModel!.GetSelectedTreePersonNode()); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
+    private async Task AddTreeChildAsync(TargetMemberTreeNode node)
+    {
         var dialog = new TargetChildDialog(node.Label) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         genealogyPanel.IsEnabled = false;
-        targetTree.IsEnabled = false;
-        try { await _genealogyViewModel.AddBiologicalChildForTreeNodeAsync(node, dialog.ChildName); }
+        try { await _genealogyViewModel!.AddBiologicalChildForTreeNodeAsync(node, dialog.ChildName); }
         catch (Exception ex) { MessageBox.Show($"添加子女失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
-        finally { targetTree.IsEnabled = true; genealogyPanel.IsEnabled = true; }
+        finally { genealogyPanel.IsEnabled = true; }
     }
 
     private async void TargetTreePerson_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount != 2 || sender is not TextBlock { DataContext: TargetMemberTreeNode node } || _genealogyViewModel is null) return;
         e.Handled = true;
+        await EditTreePersonAsync(node);
+    }
+
+    private async void TargetShortcut_Edit_Click(object sender, RoutedEventArgs e)
+    {
+        try { await EditTreePersonAsync(_genealogyViewModel!.GetSelectedTreePersonNode()); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
+    private async Task EditTreePersonAsync(TargetMemberTreeNode node)
+    {
         try
         {
-            var person = _genealogyViewModel.GetTreePerson(node);
+            var person = _genealogyViewModel!.GetTreePerson(node);
             var dialog = new TargetPersonEditDialog(person) { Owner = this };
             if (dialog.ShowDialog() != true) return;
             genealogyPanel.IsEnabled = false;
-            targetTree.IsEnabled = false;
             try
             {
                 await _genealogyViewModel.SaveTreePersonProfileAsync(node, dialog.PersonName, dialog.Sex,
                     dialog.BirthDate, dialog.DeathDate, dialog.Biography);
             }
-            finally { targetTree.IsEnabled = true; genealogyPanel.IsEnabled = true; }
+            finally { genealogyPanel.IsEnabled = true; }
         }
         catch (Exception ex) { MessageBox.Show($"保存档案失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
     }

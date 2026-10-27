@@ -59,6 +59,16 @@ public partial class GenealogySelectionViewModel : ObservableObject
             ?? throw new InvalidOperationException("当前族谱中不存在该人物。");
     }
 
+    public TargetMemberTreeNode GetSelectedTreePersonNode()
+    {
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var person = SelectedPerson ?? throw new InvalidOperationException("请先选择目标人物。");
+        if (person.GenealogyId != genealogy.Id || !People.Any(p => ReferenceEquals(p, person)))
+            throw new InvalidOperationException("所选人物不属于当前族谱，请重新选择。");
+        return TargetTree.SingleOrDefault(node => node.PersonId == person.Id)
+            ?? throw new InvalidOperationException("所选人物已变化，请重新选择。");
+    }
+
     public async Task SaveTreePersonProfileAsync(TargetMemberTreeNode node, string? name, PersonSex sex,
         string? birthDate, string? deathDate, string? biography)
     {

@@ -10,6 +10,52 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Target_shortcuts_resolve_selected_person_by_id_and_reject_missing_or_foreign_selection()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext);
+        Assert.Contains("族谱", Assert.Throws<InvalidOperationException>(() => vm.GetSelectedTreePersonNode()).Message);
+        vm.NewName = "甲谱";
+        await vm.CreateAsync();
+        var first = vm.SelectedGenealogy!;
+        Assert.Contains("人物", Assert.Throws<InvalidOperationException>(() => vm.GetSelectedTreePersonNode()).Message);
+        Person firstPerson, namesake;
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            firstPerson = await service.AddPersonAsync(new Person { GenealogyId = first.Id, Name = "同名" });
+            namesake = await service.AddPersonAsync(new Person { GenealogyId = first.Id, Name = "同名" });
+        }
+        await vm.SelectAsync(first);
+        vm.SelectedPerson = vm.People.Single(p => p.Id == namesake.Id);
+        var selectedNode = vm.GetSelectedTreePersonNode();
+        Assert.Equal(namesake.Id, selectedNode.PersonId);
+        await vm.AddBiologicalChildForTreeNodeAsync(selectedNode, "快捷子女");
+        await using (var verify = database.CreateContext())
+        {
+            Assert.Equal(namesake.Id, (await verify.PersonRelationships.SingleAsync()).RelatedPersonId);
+            Assert.Equal("同名", (await verify.People.SingleAsync(p => p.Id == firstPerson.Id)).Name);
+        }
+        vm.SelectedPerson = vm.People.Single(p => p.Id == namesake.Id);
+        await vm.SaveTreePersonProfileAsync(vm.GetSelectedTreePersonNode(), "快捷编辑", PersonSex.Female, null, null, "档案");
+        Assert.Contains(vm.People, p => p.Id == namesake.Id && p.Name == "快捷编辑");
+        vm.SelectedPerson = vm.People.Single(p => p.Id == firstPerson.Id);
+        var foreign = vm.SelectedPerson;
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        Assert.Throws<InvalidOperationException>(() => vm.GetSelectedTreePersonNode());
+        vm.SelectedPerson = foreign;
+        Assert.Throws<InvalidOperationException>(() => vm.GetSelectedTreePersonNode());
+        vm.ClearSelectedPerson();
+        Assert.Throws<InvalidOperationException>(() => vm.GetSelectedTreePersonNode());
+        await using var final = database.CreateContext();
+        Assert.Single(await final.PersonRelationships.ToListAsync());
+        Assert.Equal("同名", (await final.People.SingleAsync(p => p.Id == firstPerson.Id)).Name);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Tree_profile_save_targets_clicked_person_and_rejects_stale_or_foreign_nodes()
     {
         await using var database = new TestDatabase();

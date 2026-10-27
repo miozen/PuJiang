@@ -192,7 +192,13 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <GroupBox Grid.Row="0" Header="目标谱系（关系清单，不选择主线）" Margin="5"
-                          BorderBrush="#C0A080" BorderThickness="1.5" DataContext="{Binding DataContext, ElementName=genealogyPanel}">
+                          BorderBrush="#C0A080" BorderThickness="1.5" DataContext="{Binding DataContext, ElementName=genealogyPanel}"
+                          IsEnabled="{Binding IsEnabled, ElementName=genealogyPanel}">
+                    <DockPanel>
+                        <WrapPanel DockPanel.Dock="Top" Margin="3">
+                            <Button Content="编辑目标人物" Click="TargetShortcut_Edit_Click" Margin="0,0,5,4" Padding="6,2"/>
+                            <Button Content="为目标人物新增子女" Click="TargetShortcut_AddChild_Click" Margin="0,0,0,4" Padding="6,2"/>
+                        </WrapPanel>
                     <TreeView x:Name="targetTree" ItemsSource="{Binding TargetTree}" SelectedItemChanged="TargetTree_SelectedItemChanged"
                               ToolTip="选择人物查看档案；双击编辑档案；右键添加生物子女。">
                         <TreeView.Resources>
@@ -208,6 +214,7 @@
                             </HierarchicalDataTemplate>
                         </TreeView.Resources>
                     </TreeView>
+                    </DockPanel>
                 </GroupBox>
             <GroupBox Grid.Row="1" Header="旧版原型成员树" Margin="5"
                       BorderBrush="#C0A080" BorderThickness="1.5">
