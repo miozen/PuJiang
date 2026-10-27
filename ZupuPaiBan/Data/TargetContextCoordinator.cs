@@ -30,7 +30,7 @@ public sealed class TargetContextCoordinator
             _active++;
         }
 
-        try { return new RegisteredContext(_options, this); }
+        try { return new ZupuDbContext(_options, Release); }
         catch { Release(false); throw; }
     }
 
@@ -114,25 +114,4 @@ public sealed class TargetContextCoordinator
         }
     }
 
-    private sealed class RegisteredContext(DbContextOptions<ZupuDbContext> options, TargetContextCoordinator owner)
-        : ZupuDbContext(options)
-    {
-        private int _released;
-
-        public override void Dispose()
-        {
-            if (Interlocked.Exchange(ref _released, 1) != 0) return;
-            var failed = true;
-            try { base.Dispose(); failed = false; }
-            finally { owner.Release(failed); }
-        }
-
-        public override async ValueTask DisposeAsync()
-        {
-            if (Interlocked.Exchange(ref _released, 1) != 0) return;
-            var failed = true;
-            try { await base.DisposeAsync(); failed = false; }
-            finally { owner.Release(failed); }
-        }
-    }
 }

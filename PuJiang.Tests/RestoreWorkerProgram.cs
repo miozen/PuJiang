@@ -5,6 +5,8 @@ internal static class RestoreWorkerProgram
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--wpf-lifecycle")
+            return await WpfLifecycleWorker.RunAsync(args[1]);
         if (args.Length != 3) return 2;
         var target = new TestDatabase(args[0]);
         var sourceDirectory = new TestDatabase(args[1]);

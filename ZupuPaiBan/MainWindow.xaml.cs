@@ -16,19 +16,30 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly TargetContextCoordinator _targetContexts;
+    private readonly string _backupDirectory;
     private GenealogySelectionViewModel? _genealogyViewModel;
 
-    public MainWindow()
+    public MainWindow() : this(CreateApplicationCoordinator(), AppDataPaths.BackupsDirectory)
     {
-        InitializeComponent();
+    }
 
+    private static TargetContextCoordinator CreateApplicationCoordinator()
+    {
         var targetOptions = new DbContextOptionsBuilder<ZupuDbContext>()
             .UseSqlite(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
             {
                 DataSource = AppDataPaths.DatabasePath,
                 Pooling = false
             }.ToString()).Options;
-        _targetContexts = new TargetContextCoordinator(targetOptions);
+        return new TargetContextCoordinator(targetOptions);
+    }
+
+    internal MainWindow(TargetContextCoordinator coordinator, string backupDirectory)
+    {
+        InitializeComponent();
+
+        _targetContexts = coordinator;
+        _backupDirectory = backupDirectory;
         var dataService = new DataService(_targetContexts);
         _viewModel = new MainViewModel(dataService);
         DataContext = _viewModel;
@@ -48,11 +59,7 @@ public partial class MainWindow : Window
         IsEnabled = false;
         try
         {
-            using var operation = _targetContexts.EnterOperation();
-            await using var context = _targetContexts.CreateContext();
-            await new DatabaseMigrationService(context, AppDataPaths.BackupsDirectory).MigrateAsync();
-            await _viewModel.LoadDataAsync();
-            await _genealogyViewModel!.LoadAsync();
+            await InitializeDatabaseAsync();
             genealogyPanel.IsEnabled = true;
             IsEnabled = true;
         }
@@ -64,9 +71,18 @@ public partial class MainWindow : Window
         }
     }
 
+    internal async Task InitializeDatabaseAsync()
+    {
+        using var operation = _targetContexts.EnterOperation();
+        await using var context = _targetContexts.CreateContext();
+        await new DatabaseMigrationService(context, _backupDirectory).MigrateAsync();
+        await _viewModel.LoadDataAsync();
+        await _genealogyViewModel!.LoadAsync();
+    }
+
     private void DatabaseBackup_Click(object sender, RoutedEventArgs e)
     {
-        new DatabaseBackupDialog(AppDataPaths.DatabasePath, AppDataPaths.BackupsDirectory, _targetContexts) { Owner = this }.ShowDialog();
+        new DatabaseBackupDialog(AppDataPaths.DatabasePath, _backupDirectory, _targetContexts) { Owner = this }.ShowDialog();
     }
 
     private async void CreateGenealogy_Click(object sender, RoutedEventArgs e)

@@ -119,9 +119,7 @@ public partial class CollaborationImportDialog : Window
 
         try
         {
-            using var operation = _dataService.EnterOperation();
-            var service = new CollaborationService();
-            int count = await service.ImportSubtreeJson(_selectedFilePath, _targetParentId.Value, _dataService);
+            int count = await ImportAsync(_selectedFilePath, _targetParentId.Value);
             MessageBox.Show($"导入成功！共导入 {count} 位成员", "协作导入", MessageBoxButton.OK, MessageBoxImage.Information);
             DialogResult = true;
             Close();
@@ -130,6 +128,12 @@ public partial class CollaborationImportDialog : Window
         {
             MessageBox.Show($"导入失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    internal async Task<int> ImportAsync(string path, int targetParentId)
+    {
+        using var operation = _dataService.EnterOperation();
+        return await new CollaborationService().ImportSubtreeJson(path, targetParentId, _dataService);
     }
 
     private void BtnCancel_Click(object sender, RoutedEventArgs e)

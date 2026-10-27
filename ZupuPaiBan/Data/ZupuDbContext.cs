@@ -16,6 +16,8 @@ public class ZupuDbContext : DbContext
     public DbSet<FamilyBranch> FamilyBranches => Set<FamilyBranch>();
 
     private readonly string _dbPath;
+    private readonly Action<bool>? _onDispose;
+    private int _released;
 
     public ZupuDbContext()
     {
@@ -26,6 +28,27 @@ public class ZupuDbContext : DbContext
     public ZupuDbContext(DbContextOptions<ZupuDbContext> options) : base(options)
     {
         _dbPath = string.Empty;
+    }
+
+    internal ZupuDbContext(DbContextOptions<ZupuDbContext> options, Action<bool> onDispose) : this(options)
+    {
+        _onDispose = onDispose;
+    }
+
+    public override void Dispose()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0) return;
+        var failed = true;
+        try { base.Dispose(); failed = false; }
+        finally { _onDispose?.Invoke(failed); }
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0) return;
+        var failed = true;
+        try { await base.DisposeAsync(); failed = false; }
+        finally { _onDispose?.Invoke(failed); }
     }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)

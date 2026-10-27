@@ -36,12 +36,17 @@ public partial class DatabaseBackupDialog : Window
         ResultText.Text = "正在创建并校验数据库备份…";
         try
         {
-            using var operation = _coordinator.EnterOperation();
-            await OfflineBackupPackageService.CreateAsync(_databasePath, dialog.FileName);
+            await CreateBackupAsync(dialog.FileName);
             ResultText.Text = $"数据库备份已创建并校验：\n{dialog.FileName}\n不包含照片、附件或配置。";
         }
         catch (Exception ex) { ResultText.Text = $"创建失败，未覆盖已有目标文件：\n{ex.Message}"; }
         finally { IsEnabled = true; }
+    }
+
+    internal async Task CreateBackupAsync(string destination)
+    {
+        using var operation = _coordinator.EnterOperation();
+        await OfflineBackupPackageService.CreateAsync(_databasePath, destination);
     }
 
     private async void ValidateBackup_Click(object sender, RoutedEventArgs e)
