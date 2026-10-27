@@ -15,6 +15,7 @@ namespace ZupuPaiBan;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
+    private readonly TargetContextCoordinator _targetContexts;
     private GenealogySelectionViewModel? _genealogyViewModel;
 
     public MainWindow()
@@ -25,7 +26,14 @@ public partial class MainWindow : Window
         var dataService = new DataService(context);
         _viewModel = new MainViewModel(dataService);
         DataContext = _viewModel;
-        _genealogyViewModel = new GenealogySelectionViewModel(() => new ZupuDbContext());
+        var targetOptions = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = AppDataPaths.DatabasePath,
+                Pooling = false
+            }.ToString()).Options;
+        _targetContexts = new TargetContextCoordinator(targetOptions);
+        _genealogyViewModel = new GenealogySelectionViewModel(_targetContexts.CreateContext);
         genealogyPanel.DataContext = _genealogyViewModel;
         _genealogyViewModel.PropertyChanged += GenealogyViewModel_PropertyChanged;
         genealogyPanel.IsEnabled = false;

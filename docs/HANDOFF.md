@@ -2,16 +2,16 @@
 
 - **Last Updated：** 2026-10-27（Asia/Shanghai）
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
-- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本跨电脑接力检查点基于 `ae93629bd4ca23f998ea7cda387a61e045a2ce92`。
+- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次目标上下文边界工作基于 `373065098ca203f45076087be9fd78118dcaf10b`。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 接力整理前通过 GitHub 连接器核实远端 `dev` 为 `ae93629bd4ca23f998ea7cda387a61e045a2ce92`；本接力文档提交后的状态需再次核实实际远端及 Git 状态。
+- **Remote Sync：** 本次工作开始前只读核实远端 `dev` 为 `373065098ca203f45076087be9fd78118dcaf10b`；检查点提交和推送后的状态以实际 Git 检查为准。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Last Completed：** 审计主窗口长期上下文、预览及导入的直接上下文、目标模型短生命周期上下文、备份和连接池；记录统一登记、拒绝新操作、排空、释放及失败关闭的待实施方案。测试工程新增停用闸门原型，未接入应用。
-- **Validation Performed：** Windows SDK 10.0.403；使用 `-p:BaseOutputPath=D:\20_Projects\PuJiang\artifacts\quiescence-verification\` 执行日常测试，106/106 通过，含真实上下文与连接池释放、并发操作排空、关闭失败、取消以及未登记上下文可绕过闸门；未访问正式用户数据库。
-- **Validation Pending：** 应用未接入该原型且存在未集中管理的上下文，不可据此启动生产恢复；原型不检测外部写入、真实 WAL 收敛或进程崩溃。此前进程结束后锁释放延迟原因未确定。生产恢复尚未实现，备份不包含附件和配置；真实性能、Performance、远端 CI、完整备份包和导入/恢复事务亦未完成。
+- **Last Completed：** 主窗口目标族谱 ViewModel 的上下文创建接入 `TargetContextCoordinator`；支持登记、排空、拒绝新上下文和取消后保持关闭，目标连接禁用池化。旧模型与生产恢复界面未改动。
+- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --no-restore --configuration Release --filter "Category!=Performance"` 为 108/108 通过，包含真实目标 ViewModel、SQLite 上下文排空及取消测试；未访问正式用户数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
+- **Validation Pending：** 协调器只覆盖目标 ViewModel 的上下文，未覆盖完整多步骤业务操作、旧模型、启动迁移、预览、导入及备份；不可据此启动生产恢复。外部写入、真实 WAL 收敛及进程崩溃未覆盖。生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
 - **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；旧导入缺少预检和事务。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 按连接生命周期审计结果，限定目标模型用例设计并验证可登记、可排空的上下文管理边界；保持旧模型及生产恢复界面不变，明确未接入入口仍不允许恢复。
-- **Cross-machine Ready：** 须确认工作区干净且远端 `dev` 已包含本检查点。
+- **Exact Next Action：** 为目标 ViewModel 的多步骤业务操作设计可复用的外层操作许可，并用 SQLite 测试验证排空期间嵌套调用与并发边界；在其他连接入口完成登记或隔离之前继续禁止生产恢复。
+- **Cross-machine Ready：** 须确认工作区干净且远端 `dev` 已包含本检查点；本机 `ZupuPaiBan/App.xaml` 有此前同步留下的行尾差异，不属于本次检查点。
 
 ## 下一台电脑接力
 
