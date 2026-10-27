@@ -2,15 +2,15 @@
 
 - **Last Updated：** 2026-10-27（Asia/Shanghai）
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
-- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次隔离 WPF 生命周期工作基于 `aa3296e`。
+- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次显示窗口与排空工作基于 `420f823`。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 前一检查点 `aa3296e` 已推送到 `origin/dev`；本轮改动的提交和推送状态以实际 Git 检查为准。
+- **Remote Sync：** 前一检查点 `420f823` 已推送到 `origin/dev`；本轮改动的提交和推送状态以实际 Git 检查为准。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Last Completed：** 隔离 WPF 进程构造主窗口、预览、协作导入和备份对话框并验证共用操作代码；修复协调器使用 `DbContext` 子类导致 EF 未发现启动迁移的问题。应用级排空接入仅有设计，生产恢复未接入。
-- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --no-restore --configuration Release --filter "Category!=Performance"` 为 114/114 通过；隔离 WPF 测试验证真实窗口对象的初始化、预览、导入、备份、排空后拒绝及数据库独占打开；未显示窗口或访问正式用户数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
-- **Validation Pending：** 真实显示窗口、文件选择对话框、UI 事件重入和实际窗口关闭期间的并发尚未验证；应用级排空未实现。外部写入、真实 WAL 收敛、崩溃和生产恢复尚未覆盖；完整备份包、真实性能与远端 CI 尚未验证。
+- **Last Completed：** 新增主窗口内部排空准备入口，成功或取消/失败均保持界面关闭并显示状态，不执行恢复；隔离 UI 测试显示主窗口与预览、打开真实保存对话框，在模态事件循环中排空并取消，验证等待活动连接、失败关闭和释放。
+- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-restore --configuration Release --filter "Category=UI"` 为 1/1 通过；日常测试（`Category!=Performance&Category!=UI`）为 114/114 通过；使用临时虚构数据库，未访问正式用户数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
+- **Validation Pending：** 文件已选定后提交、其他导入对话框、窗口关闭/后台任务与排空并发未验证；内部排空入口未接入生产恢复，也不负责关闭子窗口。外部写入、真实 WAL 收敛、崩溃和生产恢复尚未覆盖；完整备份包、真实性能与远端 CI 尚未验证。
 - **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；旧导入缺少预检和事务。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 在独立测试数据目录中验证真实显示窗口、文件选择对话框和 UI 事件重入与排空的竞争，完善应用级排空失败呈现；继续保持生产恢复关闭。
+- **Exact Next Action：** 在独立测试数据目录中验证文件已选定后提交、其他导入对话框及窗口关闭/后台任务与排空竞争，设计数据目录锁持有期间的子窗口关闭协调；继续保持生产恢复关闭。
 - **Cross-machine Ready：** 须确认工作区干净且远端 `dev` 已包含本检查点；本机 `ZupuPaiBan/App.xaml` 有此前同步留下的行尾差异，不属于本次检查点。
 
 ## 下一台电脑接力

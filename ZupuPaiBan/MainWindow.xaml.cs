@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly TargetContextCoordinator _targetContexts;
     private readonly string _backupDirectory;
+    private int _quiescenceStarted;
     private GenealogySelectionViewModel? _genealogyViewModel;
 
     public MainWindow() : this(CreateApplicationCoordinator(), AppDataPaths.BackupsDirectory)
@@ -60,8 +61,11 @@ public partial class MainWindow : Window
         try
         {
             await InitializeDatabaseAsync();
-            genealogyPanel.IsEnabled = true;
-            IsEnabled = true;
+            if (Volatile.Read(ref _quiescenceStarted) == 0)
+            {
+                genealogyPanel.IsEnabled = true;
+                IsEnabled = true;
+            }
         }
         catch (Exception ex)
         {
@@ -78,6 +82,27 @@ public partial class MainWindow : Window
         await new DatabaseMigrationService(context, _backupDirectory).MigrateAsync();
         await _viewModel.LoadDataAsync();
         await _genealogyViewModel!.LoadAsync();
+    }
+
+    // Preparation only: no database replacement or restore is performed here.
+    internal async Task<bool> QuiesceForMaintenanceAsync(CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Exchange(ref _quiescenceStarted, 1) != 0)
+            throw new InvalidOperationException("数据库停用已经开始，不能重复执行。");
+        IsEnabled = false;
+        _viewModel.StatusText = "正在等待数据库操作结束……";
+        try
+        {
+            await _targetContexts.DrainAsync(cancellationToken);
+            _viewModel.StatusText = "数据库操作已停止；恢复功能尚未开放。";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            FileAppLogger.Write(AppLogLevel.Error, "Database quiescence failed; restart required.", ex);
+            _viewModel.StatusText = "数据库停用未完成，请关闭并重新启动应用；不会执行恢复。";
+            return false;
+        }
     }
 
     private void DatabaseBackup_Click(object sender, RoutedEventArgs e)

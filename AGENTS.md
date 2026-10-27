@@ -47,7 +47,7 @@
 - 未运行的测试不得标记为通过。
 - 启动应用或初始化数据库时必须配置独立测试数据目录；不得触碰真实用户数据库。
 - 构建、测试产生的 `bin`、`obj`、测试库或临时文件不得误纳入 Git。
-- 日常测试入口为 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance"`；`Performance` 和人工 `UI` 验收须显式单独执行并如实报告。
+- 日常测试入口为 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance&Category!=UI"`；`Performance` 和 `UI` 测试须显式单独执行，人工验收另行记录。
 
 ## Handoff 与 Git 安全
 

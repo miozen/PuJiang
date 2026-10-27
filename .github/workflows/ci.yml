@@ -14,7 +14,7 @@ jobs:
           dotnet-version: 10.0.x
       - run: dotnet restore PuJiang.slnx
       - run: dotnet build PuJiang.slnx --no-restore --configuration Release
-      - run: dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --configuration Release --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
+      - run: dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --configuration Release --filter "Category!=Performance&Category!=UI" --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
       - name: Upload failed test diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

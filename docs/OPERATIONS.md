@@ -8,11 +8,11 @@
 dotnet restore PuJiang.slnx
 dotnet tool restore
 dotnet build PuJiang.slnx --no-restore --configuration Release
-dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance"
+dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance&Category!=UI"
 dotnet publish ZupuPaiBan/ZupuPaiBan.csproj -c Release -r win-x64 --self-contained true
 ```
 
-CI 使用相同 restore/build/test 入口。`Performance` 须显式以 `--filter "Category=Performance"` 运行；人工 UI 验收不属于日常 test 命令。
+CI 使用相同 restore/build/test 入口。`Performance` 与显示窗口的 `UI` 测试须分别使用 `--filter "Category=Performance"` 和 `--filter "Category=UI"` 显式运行；人工 UI 验收另行记录。
 
 ## 跨电脑接力
 

@@ -8,6 +8,14 @@ public class WpfLifecycleTests
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Isolated_wpf_windows_use_shared_drain_and_release_database()
+        => await RunWorkerAsync("--wpf-lifecycle");
+
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Displayed_windows_file_dialog_and_dispatcher_reentry_remain_closed_after_quiescence()
+        => await RunWorkerAsync("--wpf-displayed");
+
+    private static async Task RunWorkerAsync(string mode)
     {
         await using var database = new TestDatabase();
         await using (var context = database.CreateContext()) { }
@@ -19,7 +27,7 @@ public class WpfLifecycleTests
             RedirectStandardError = true
         };
         start.ArgumentList.Add(typeof(RestoreWorkerProgram).Assembly.Location);
-        start.ArgumentList.Add("--wpf-lifecycle");
+        start.ArgumentList.Add(mode);
         start.ArgumentList.Add(Path.GetDirectoryName(database.DatabasePath)!);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离测试进程。");
         var stdout = process.StandardOutput.ReadToEndAsync();
