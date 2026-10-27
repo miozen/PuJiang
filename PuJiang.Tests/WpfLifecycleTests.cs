@@ -15,6 +15,11 @@ public class WpfLifecycleTests
     public async Task Displayed_windows_file_dialog_and_dispatcher_reentry_remain_closed_after_quiescence()
         => await RunWorkerAsync("--wpf-displayed");
 
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Selected_import_and_window_close_keep_inflight_work_registered()
+        => await RunWorkerAsync("--wpf-inflight");
+
     private static async Task RunWorkerAsync(string mode)
     {
         await using var database = new TestDatabase();
