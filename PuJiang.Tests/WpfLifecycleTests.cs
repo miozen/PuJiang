@@ -20,7 +20,17 @@ public class WpfLifecycleTests
     public async Task Selected_import_and_window_close_keep_inflight_work_registered()
         => await RunWorkerAsync("--wpf-inflight");
 
-    private static async Task RunWorkerAsync(string mode)
+    [Theory]
+    [InlineData("success")]
+    [InlineData("cancel")]
+    [InlineData("timeout")]
+    [InlineData("child-refusal")]
+    [InlineData("child-error")]
+    [Trait("Category", "UI")]
+    public async Task Application_exit_retains_lock_until_safe_or_fails_closed(string scenario)
+        => await RunWorkerAsync("--wpf-app-exit", scenario);
+
+    private static async Task RunWorkerAsync(string mode, string? scenario = null)
     {
         await using var database = new TestDatabase();
         await using (var context = database.CreateContext()) { }
@@ -34,6 +44,7 @@ public class WpfLifecycleTests
         start.ArgumentList.Add(typeof(RestoreWorkerProgram).Assembly.Location);
         start.ArgumentList.Add(mode);
         start.ArgumentList.Add(Path.GetDirectoryName(database.DatabasePath)!);
+        if (scenario is not null) start.ArgumentList.Add(scenario);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离测试进程。");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();

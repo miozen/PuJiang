@@ -2,6 +2,7 @@
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.ComponentModel;
 using Microsoft.EntityFrameworkCore;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
@@ -17,10 +18,13 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly TargetContextCoordinator _targetContexts;
     private readonly string _backupDirectory;
+    private readonly TimeSpan _exitTimeout;
     private int _quiescenceStarted;
+    private bool _exitStarted;
+    private bool _exitReady;
     private GenealogySelectionViewModel? _genealogyViewModel;
 
-    public MainWindow() : this(CreateApplicationCoordinator(), AppDataPaths.BackupsDirectory)
+    public MainWindow() : this(CreateApplicationCoordinator(), AppDataPaths.BackupsDirectory, true)
     {
     }
 
@@ -35,12 +39,13 @@ public partial class MainWindow : Window
         return new TargetContextCoordinator(targetOptions);
     }
 
-    internal MainWindow(TargetContextCoordinator coordinator, string backupDirectory)
+    internal MainWindow(TargetContextCoordinator coordinator, string backupDirectory, bool coordinateExit = false, TimeSpan? exitTimeout = null)
     {
         InitializeComponent();
 
         _targetContexts = coordinator;
         _backupDirectory = backupDirectory;
+        _exitTimeout = exitTimeout ?? TimeSpan.FromSeconds(30);
         var dataService = new DataService(_targetContexts);
         _viewModel = new MainViewModel(dataService);
         DataContext = _viewModel;
@@ -53,6 +58,7 @@ public partial class MainWindow : Window
         _viewModel.OnOpenPreviewRequested += OnOpenPreviewRequested;
         _viewModel.OnExportCollaborationRequested += OnExportCollaborationRequested;
         _viewModel.OnImportCollaborationRequested += OnImportCollaborationRequested;
+        if (coordinateExit) Closing += MainWindow_Closing;
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -102,6 +108,47 @@ public partial class MainWindow : Window
             FileAppLogger.Write(AppLogLevel.Error, "Database quiescence failed; restart required.", ex);
             _viewModel.StatusText = "数据库停用未完成，请关闭并重新启动应用；不会执行恢复。";
             return false;
+        }
+    }
+
+    internal async Task<bool> PrepareForExitAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (!await QuiesceForMaintenanceAsync(cancellationToken)) return false;
+            foreach (Window child in OwnedWindows.Cast<Window>().ToArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var closed = false;
+                EventHandler onClosed = (_, _) => closed = true;
+                child.Closed += onClosed;
+                try { child.Close(); }
+                finally { child.Closed -= onClosed; }
+                if (!closed) throw new InvalidOperationException("子窗口拒绝关闭。");
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            _viewModel.StatusText = "数据库操作和子窗口已关闭。";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            FileAppLogger.Write(AppLogLevel.Error, "Window shutdown coordination failed; restart required.", ex);
+            _viewModel.StatusText = "窗口关闭未完成，数据目录仍被占用；不会执行恢复。";
+            return false;
+        }
+    }
+
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_exitReady) return;
+        e.Cancel = true;
+        if (_exitStarted) return;
+        _exitStarted = true;
+        using var timeout = new CancellationTokenSource(_exitTimeout);
+        if (await PrepareForExitAsync(timeout.Token))
+        {
+            _exitReady = true;
+            Close();
         }
     }
 
@@ -351,7 +398,7 @@ public partial class MainWindow : Window
 
     private void MenuExit_Click(object sender, RoutedEventArgs e)
     {
-        Application.Current.Shutdown();
+        Close();
     }
 
     private async void OnExportCollaborationRequested(object? sender, EventArgs e)

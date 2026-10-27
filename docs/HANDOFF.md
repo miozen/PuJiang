@@ -2,15 +2,15 @@
 
 - **Last Updated：** 2026-10-27（Asia/Shanghai）
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
-- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次导入与关闭竞争工作基于 `afe1f76`。
+- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次应用正常退出协调工作基于 `a116776`。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 前一检查点 `afe1f76` 已推送到 `origin/dev`；本轮改动的提交和推送状态以实际 Git 检查为准。
+- **Remote Sync：** 前一检查点 `a116776` 已推送到 `origin/dev`；本轮改动的提交和推送状态以实际 Git 检查为准。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Last Completed：** 隔离 UI 测试以预先指定的虚构文件执行协作导入，在真实 SQLite 插入暂停期间排空并关闭主窗口，验证在途导入完成前排空等待、新备份提交被拒、测试显式持有的目录锁及数据库句柄释放；已记录子窗口关闭协调设计。生产恢复未接入。
-- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --no-restore --configuration Release --filter "Category=UI"` 为 2/2 通过；日常测试（`Category!=Performance&Category!=UI`）为 114/114 通过；使用临时虚构数据库，未访问正式用户数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
-- **Validation Pending：** 新测试未操作真实打开文件对话框或导入确认消息框；测试锁由测试显式持有，未证明 `App.OnExit` 在在途操作完成前保留锁。子窗口拒绝关闭、后台任务、超时、取消及应用级退出协调尚未验证。外部写入、真实 WAL 收敛、崩溃和生产恢复尚未覆盖；完整备份包、真实性能与远端 CI 尚未验证。
+- **Last Completed：** 正常主窗口关闭及菜单退出先排空登记操作、关闭已拥有子窗口，成功后才允许 `App.OnExit` 释放数据目录锁；取消、超时、子窗口拒绝或抛异常时保持失败关闭。生产恢复未接入。
+- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-restore --configuration Release --filter "Category=UI"` 为 7/7 通过，含真实 `App.OnStartup`/`OnExit`、在途连接、目录锁、成功/取消/超时/子窗口拒绝及关闭异常；日常测试（`Category!=Performance&Category!=UI`）为 114/114 通过；仅使用临时虚构数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
+- **Validation Pending：** `Application.Shutdown`、系统关机、强制终止可绕过普通关闭协调；同步阻塞的 `Closing` 处理程序不能被超时抢占。原生文件对话框、未登记后台任务、外部写入、真实 WAL 收敛和崩溃时的退出边界尚未覆盖；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
 - **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；旧导入缺少预检和事务。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 实现并在隔离进程验证应用关闭期间的数据目录锁与在途操作协调，覆盖子窗口拒绝关闭、取消和超时；在这些边界完成前继续保持生产恢复关闭。
+- **Exact Next Action：** 在独立测试目录验证原生模态文件选择与正常退出/排空的竞争，审计绕过主窗口关闭的退出入口和未登记后台任务；继续保持生产恢复关闭。
 - **Cross-machine Ready：** 须确认工作区干净且远端 `dev` 已包含本检查点；本机 `ZupuPaiBan/App.xaml` 有此前同步留下的行尾差异，不属于本次检查点。
 
 ## 下一台电脑接力
