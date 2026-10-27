@@ -42,6 +42,7 @@ public partial class MainViewModel : ObservableObject
 
     public async Task LoadDataAsync()
     {
+        using var operation = _dataService.EnterOperation();
         try
         {
             var allMembers = await _dataService.GetAllMembersAsync();
@@ -80,6 +81,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task AddRootMemberAsync()
     {
+        using var operation = _dataService.EnterOperation();
         var member = new FamilyMember
         {
             Name = "新成员",
@@ -95,6 +97,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task AddChildMemberAsync()
     {
+        using var operation = _dataService.EnterOperation();
         if (SelectedNode == null)
         {
             MessageBox.Show("请先选择一个成员", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -132,6 +135,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task DeleteMemberAsync()
     {
+        using var operation = _dataService.EnterOperation();
         if (SelectedNode == null)
         {
             MessageBox.Show("请先选择一个成员", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -176,26 +180,26 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
+            using var operation = _dataService.EnterOperation();
             var excelService = new ExcelService();
             var members = await excelService.ImportFromExcelAsync(dialog.FileName);
-            
+
             // 清空现有数据并导入
-            var context = new ZupuDbContext();
-            var dataService = new DataService(context);
-            
+            var dataService = _dataService;
+
             // 删除所有现有成员
             var existing = await dataService.GetAllMembersAsync();
             foreach (var m in existing)
             {
                 await dataService.DeleteMemberAsync(m.Id);
             }
-            
+
             // 添加新成员
             foreach (var member in members)
             {
                 await dataService.AddMemberAsync(member);
             }
-            
+
             await LoadDataAsync();
             StatusText = $"已导入 {members.Count} 位成员";
         }
@@ -251,23 +255,23 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
+            using var operation = _dataService.EnterOperation();
             var gedcomService = new GedcomService();
             var members = await gedcomService.ImportFromGedcomAsync(dialog.FileName);
-            
-            var context = new ZupuDbContext();
-            var dataService = new DataService(context);
-            
+
+            var dataService = _dataService;
+
             var existing = await dataService.GetAllMembersAsync();
             foreach (var m in existing)
             {
                 await dataService.DeleteMemberAsync(m.Id);
             }
-            
+
             foreach (var member in members)
             {
                 await dataService.AddMemberAsync(member);
             }
-            
+
             await LoadDataAsync();
             StatusText = $"已导入 {members.Count} 位成员";
         }

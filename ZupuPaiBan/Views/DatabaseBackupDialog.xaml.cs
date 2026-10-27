@@ -9,12 +9,14 @@ public partial class DatabaseBackupDialog : Window
 {
     private readonly string _databasePath;
     private readonly string _backupDirectory;
+    private readonly TargetContextCoordinator _coordinator;
 
-    public DatabaseBackupDialog(string databasePath, string backupDirectory)
+    public DatabaseBackupDialog(string databasePath, string backupDirectory, TargetContextCoordinator coordinator)
     {
         InitializeComponent();
         _databasePath = databasePath;
         _backupDirectory = backupDirectory;
+        _coordinator = coordinator;
     }
 
     private async void CreateBackup_Click(object sender, RoutedEventArgs e)
@@ -34,6 +36,7 @@ public partial class DatabaseBackupDialog : Window
         ResultText.Text = "正在创建并校验数据库备份…";
         try
         {
+            using var operation = _coordinator.EnterOperation();
             await OfflineBackupPackageService.CreateAsync(_databasePath, dialog.FileName);
             ResultText.Text = $"数据库备份已创建并校验：\n{dialog.FileName}\n不包含照片、附件或配置。";
         }

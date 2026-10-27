@@ -121,4 +121,60 @@ public class TargetContextCoordinatorTests
         }
         await coordinator.DrainAsync();
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Legacy_service_uses_disposed_contexts_and_respects_shared_drain()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").Options;
+        var coordinator = new TargetContextCoordinator(options);
+        var service = new DataService(coordinator);
+        var member = await service.AddMemberAsync(new FamilyMember { Name = "虚构成员" });
+        member.Name = "虚构更名";
+        await service.UpdateMemberAsync(member);
+        Assert.Equal("虚构更名", Assert.Single(await service.GetAllMembersAsync()).Name);
+
+        await coordinator.DrainAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GetAllMembersAsync());
+        await using var verify = database.CreateContext();
+        Assert.Equal("虚构更名", (await verify.Members.SingleAsync()).Name);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Registered_migration_and_backup_finish_before_drain_and_release_sqlite_files()
+    {
+        await using var database = new TestDatabase();
+        Directory.CreateDirectory(Path.GetDirectoryName(database.DatabasePath)!);
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").Options;
+        var coordinator = new TargetContextCoordinator(options);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proceed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var work = Task.Run(async () =>
+        {
+            using var operation = coordinator.EnterOperation();
+            await using (var context = coordinator.CreateContext())
+                await new DatabaseMigrationService(context, database.BackupDirectory).MigrateAsync();
+            Directory.CreateDirectory(database.BackupDirectory);
+            entered.SetResult();
+            await proceed.Task;
+            await OfflineBackupPackageService.CreateAsync(database.DatabasePath, Path.Combine(database.BackupDirectory, "backup.zip"));
+        });
+        await entered.Task;
+        var drain = coordinator.DrainAsync();
+        Assert.False(drain.IsCompleted);
+        Assert.Throws<InvalidOperationException>(() => coordinator.EnterOperation());
+        proceed.SetResult();
+        await work;
+        await drain;
+        var manifest = await OfflineBackupPackageService.ValidateAsync(Path.Combine(database.BackupDirectory, "backup.zip"));
+        Assert.True(manifest.DatabaseBytes > 0);
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={database.DatabasePath};Pooling=False");
+        await connection.OpenAsync();
+        await connection.CloseAsync();
+    }
 }

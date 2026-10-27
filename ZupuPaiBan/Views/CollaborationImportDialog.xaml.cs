@@ -119,6 +119,7 @@ public partial class CollaborationImportDialog : Window
 
         try
         {
+            using var operation = _dataService.EnterOperation();
             var service = new CollaborationService();
             int count = await service.ImportSubtreeJson(_selectedFilePath, _targetParentId.Value, _dataService);
             MessageBox.Show($"导入成功！共导入 {count} 位成员", "协作导入", MessageBoxButton.OK, MessageBoxImage.Information);

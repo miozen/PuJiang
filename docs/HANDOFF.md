@@ -2,15 +2,15 @@
 
 - **Last Updated：** 2026-10-27（Asia/Shanghai）
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
-- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次外层操作许可工作基于 `fe5b0a5`。
+- **HEAD / Last Commit：** 以 `git log -1 --oneline` 为准；本次连接生命周期工作基于 `a005583`。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 前一检查点 `fe5b0a5` 已推送到 `origin/dev`；本轮后续操作许可改动的提交和推送状态以实际 Git 检查为准。
+- **Remote Sync：** 前一检查点 `a005583` 已推送到 `origin/dev`；本轮连接生命周期改动的提交和推送状态以实际 Git 检查为准。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Last Completed：** 主窗口目标族谱 ViewModel 的异步业务用例已登记外层许可，允许已登记操作在排空期间完成嵌套上下文访问；拒绝独立新操作并防止操作等待自身排空。旧模型与生产恢复界面未改动。
-- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-restore --configuration Release --filter "Category!=Performance"` 为 111/111 通过，含真实 SQLite 下多步骤创建/加载/选择与排空竞争、防自身排空；未访问正式用户数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
-- **Validation Pending：** 协调器只覆盖目标 ViewModel，旧模型、启动迁移、预览、导入及备份仍未登记；不可据此启动生产恢复。外部写入、真实 WAL 收敛及进程崩溃未覆盖。生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
+- **Last Completed：** 主窗口目标和旧模型服务共用协调器；旧 `DataService` 每次读写使用并释放短生命周期上下文，预览/协作导入复用该服务；启动迁移、旧批量导入和数据库备份创建登记外层操作；隔离预检仍使用临时副本。生产恢复未接入。
+- **Validation Performed：** 本机 Windows SDK 10.0.402；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-restore --configuration Release --filter "Category!=Performance"` 为 113/113 通过，含旧服务读写/排空、真实 SQLite 迁移及备份与排空竞争；未访问正式用户数据库。NuGet 漏洞索引本轮无法访问；已有 ImageSharp 告警仍需处理。
+- **Validation Pending：** 未启动 WPF，实际主窗口/预览/导入/备份 UI 与排空协同需隔离环境验证；备份预检和设计时上下文不属于当前库操作。外部写入、真实 WAL 收敛、崩溃和生产恢复尚未覆盖；完整备份包、真实性能与远端 CI 尚未验证。
 - **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；旧导入缺少预检和事务。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 审计并设计旧模型、启动迁移、预览、导入和备份等未登记入口的统一生命周期及停用边界，添加真实资源释放和并发测试；所有入口完成登记或隔离之前继续禁止生产恢复。
+- **Exact Next Action：** 在独立测试数据目录中验证实际主窗口、预览、导入与备份在排空时的资源释放和失败行为，并设计应用级排空接入；继续保持生产恢复关闭。
 - **Cross-machine Ready：** 须确认工作区干净且远端 `dev` 已包含本检查点；本机 `ZupuPaiBan/App.xaml` 有此前同步留下的行尾差异，不属于本次检查点。
 
 ## 下一台电脑接力

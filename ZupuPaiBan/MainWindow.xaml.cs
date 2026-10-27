@@ -22,10 +22,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        var context = new ZupuDbContext();
-        var dataService = new DataService(context);
-        _viewModel = new MainViewModel(dataService);
-        DataContext = _viewModel;
         var targetOptions = new DbContextOptionsBuilder<ZupuDbContext>()
             .UseSqlite(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
             {
@@ -33,6 +29,9 @@ public partial class MainWindow : Window
                 Pooling = false
             }.ToString()).Options;
         _targetContexts = new TargetContextCoordinator(targetOptions);
+        var dataService = new DataService(_targetContexts);
+        _viewModel = new MainViewModel(dataService);
+        DataContext = _viewModel;
         _genealogyViewModel = new GenealogySelectionViewModel(_targetContexts.CreateContext, _targetContexts);
         genealogyPanel.DataContext = _genealogyViewModel;
         _genealogyViewModel.PropertyChanged += GenealogyViewModel_PropertyChanged;
@@ -49,7 +48,8 @@ public partial class MainWindow : Window
         IsEnabled = false;
         try
         {
-            await using var context = new ZupuDbContext();
+            using var operation = _targetContexts.EnterOperation();
+            await using var context = _targetContexts.CreateContext();
             await new DatabaseMigrationService(context, AppDataPaths.BackupsDirectory).MigrateAsync();
             await _viewModel.LoadDataAsync();
             await _genealogyViewModel!.LoadAsync();
@@ -66,7 +66,7 @@ public partial class MainWindow : Window
 
     private void DatabaseBackup_Click(object sender, RoutedEventArgs e)
     {
-        new DatabaseBackupDialog(AppDataPaths.DatabasePath, AppDataPaths.BackupsDirectory) { Owner = this }.ShowDialog();
+        new DatabaseBackupDialog(AppDataPaths.DatabasePath, AppDataPaths.BackupsDirectory, _targetContexts) { Owner = this }.ShowDialog();
     }
 
     private async void CreateGenealogy_Click(object sender, RoutedEventArgs e)
@@ -282,8 +282,8 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true)
         {
             editVm.ApplyToMember(member);
-            var context = new ZupuDbContext();
-            var dataService = new DataService(context);
+            using var operation = _targetContexts.EnterOperation();
+            var dataService = new DataService(_targetContexts);
             await dataService.UpdateMemberAsync(member);
             await _viewModel.LoadDataAsync();
             _viewModel.StatusText = $"已更新成员: {member.Name}";
@@ -292,8 +292,7 @@ public partial class MainWindow : Window
 
     private async void OnOpenPreviewRequested(object? sender, EventArgs e)
     {
-        var context = new ZupuDbContext();
-        var dataService = new DataService(context);
+        var dataService = new DataService(_targetContexts);
         var printService = new Services.PrintService();
         var previewWindow = new PrintPreviewWindow(dataService, printService);
         previewWindow.Owner = this;
@@ -329,8 +328,7 @@ public partial class MainWindow : Window
 
     private async void OnImportCollaborationRequested(object? sender, EventArgs e)
     {
-        var context = new ZupuDbContext();
-        var dataService = new DataService(context);
+        var dataService = new DataService(_targetContexts);
         var allMembers = await dataService.GetAllMembersAsync();
         if (allMembers.Count == 0)
         {
