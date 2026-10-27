@@ -21,6 +21,8 @@ public partial class DatabaseBackupDialog : Window
 
     private async void CreateBackup_Click(object sender, RoutedEventArgs e)
     {
+        using var operation = TryEnterOperation();
+        if (operation is null) return;
         var dialog = new SaveFileDialog
         {
             Title = "保存数据库专用备份",
@@ -51,6 +53,8 @@ public partial class DatabaseBackupDialog : Window
 
     private async void ValidateBackup_Click(object sender, RoutedEventArgs e)
     {
+        using var operation = TryEnterOperation();
+        if (operation is null) return;
         var dialog = new OpenFileDialog
         {
             Title = "选择数据库备份包",
@@ -63,7 +67,7 @@ public partial class DatabaseBackupDialog : Window
         ResultText.Text = "正在校验备份包…";
         try
         {
-            var manifest = await OfflineBackupPackageService.ValidateAsync(dialog.FileName);
+            var manifest = await ValidateBackupAsync(dialog.FileName);
             ResultText.Text = $"校验通过：版本 {manifest.FormatVersion}，数据库 {manifest.DatabaseBytes:N0} 字节。\n不包含照片、附件或配置；校验不证明备份来源。";
         }
         catch (Exception ex) { ResultText.Text = $"校验失败：\n{ex.Message}"; }
@@ -72,6 +76,8 @@ public partial class DatabaseBackupDialog : Window
 
     private async void PreflightBackup_Click(object sender, RoutedEventArgs e)
     {
+        using var operation = TryEnterOperation();
+        if (operation is null) return;
         var dialog = new OpenFileDialog
         {
             Title = "选择要预检的数据库备份包",
@@ -84,7 +90,7 @@ public partial class DatabaseBackupDialog : Window
         ResultText.Text = "正在隔离检查数据库备份，不会替换当前数据库…";
         try
         {
-            var report = await new BackupRestorePreflightService(_backupDirectory).CheckAsync(dialog.FileName);
+            var report = await PreflightBackupAsync(dialog.FileName);
             ResultText.Text = FormatPreflightReport(report);
         }
         catch (AggregateException ex)
@@ -95,8 +101,28 @@ public partial class DatabaseBackupDialog : Window
         finally { IsEnabled = true; }
     }
 
+    internal async Task<OfflineBackupManifest> ValidateBackupAsync(string path,
+        Func<string, Task<OfflineBackupManifest>>? validate = null)
+    {
+        using var operation = _coordinator.EnterOperation();
+        return await (validate ?? (file => OfflineBackupPackageService.ValidateAsync(file)))(path);
+    }
+
+    internal async Task<BackupRestorePreflightReport> PreflightBackupAsync(string path,
+        Func<string, Task<BackupRestorePreflightReport>>? preflight = null)
+    {
+        using var operation = _coordinator.EnterOperation();
+        return await (preflight ?? (file => new BackupRestorePreflightService(_backupDirectory).CheckAsync(file)))(path);
+    }
+
     internal static string FormatPreflightReport(BackupRestorePreflightReport report) =>
         $"预检通过：备份格式版本 {report.FormatVersion}，数据库结构和迁移版本符合当前程序。\n" +
         $"数据库：{(report.IncludesDatabase ? "包含" : "不包含")}；照片和附件：{(report.IncludesAttachments ? "包含" : "不包含")}；配置：{(report.IncludesConfiguration ? "包含" : "不包含")}。\n" +
         "仅完成预检，未恢复或替换数据库；不证明数据内容正确或备份来源真实性。";
+
+    private IDisposable? TryEnterOperation()
+    {
+        try { return _coordinator.EnterOperation(); }
+        catch (InvalidOperationException ex) { ResultText.Text = $"无法开始操作：{ex.Message}"; return null; }
+    }
 }

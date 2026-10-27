@@ -34,7 +34,7 @@ CI 使用相同 restore/build/test 入口。`Performance` 与显示窗口的 `UI
 
 4. 验证实际同步：`git status --short --branch`、`git rev-parse HEAD`、`git rev-parse origin/dev`；必要时用 `git ls-remote origin refs/heads/dev` 核对实际远端。如果获取失败、本地有独有提交或哈希不一致，先报告差异；本地 `origin/dev` 是上次获取的引用，不等于实时远端。
 5. 按 [AI 开发协议](../AGENTS.md) 依次阅读 [接力状态](HANDOFF.md)、[当前计划](CURRENT_PLAN.md)、与任务有关的 [架构契约](ARCHITECTURE.md) 及 [决策契约](DECISIONS.md)。检查源码、测试与接力是否一致，再执行 `HANDOFF.md` 的 **Exact Next Action**；当前状态以这些文件和 Git 核实结果为准。
-6. 在仓库根目录执行 `dotnet restore PuJiang.slnx`、`dotnet build PuJiang.slnx --no-restore --configuration Release`、`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance"`。迁移工具检查需要时再执行 `dotnet tool restore`；不要把未运行的 Performance 或人工 UI 验收报告为通过。Windows 日常测试中的进程级用例需要 `dotnet` 和 Windows PowerShell 可执行文件。
+6. 在仓库根目录执行 `dotnet restore PuJiang.slnx`、`dotnet build PuJiang.slnx --no-restore --configuration Release`、`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance&Category!=UI"`。UI 和 Performance 测试须显式单独执行；不要把跳过或未运行的测试及人工 UI 验收报告为通过。迁移工具检查需要时再执行 `dotnet tool restore`；Windows 日常测试中的进程级用例需要 `dotnet` 和 Windows PowerShell 可执行文件。
 7. Git 只同步已提交的文件；`.gitignore` 排除 `artifacts/`、常见数据库、日志和构建产物，但并不保证忽略所有附件或任意位置的测试数据，暂存前必须检查。正式用户数据位于仓库外，新电脑不会通过源码同步自动获得本机数据库、附件或配置。真实数据的迁移和恢复须单独安排；当前数据库专用备份包不含附件、配置，且正式恢复尚未实现。开发启动必须使用新的独立测试目录，详见下节。
 
 每次检查点的提交、推送和实际远端结果必须分开核实；验收通过后的同步按 [AI 开发协议](../AGENTS.md#handoff-与-git-安全) 和用户的当前指令执行。

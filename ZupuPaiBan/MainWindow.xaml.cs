@@ -410,7 +410,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dialog = new CollaborationExportDialog(allMembers) { Owner = this };
+        var dialog = new CollaborationExportDialog(allMembers, new DataService(_targetContexts)) { Owner = this };
         dialog.ShowDialog();
     }
 

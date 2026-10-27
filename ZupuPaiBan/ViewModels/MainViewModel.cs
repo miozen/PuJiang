@@ -20,6 +20,8 @@ public partial class MemberTreeNode : ObservableObject
 public partial class MainViewModel : ObservableObject
 {
     private readonly DataService _dataService;
+    internal Func<SaveFileDialog>? GedcomSaveDialogFactory { get; set; }
+    internal Func<List<FamilyMember>, string, Task>? GedcomExportOverride { get; set; }
 
     [ObservableProperty]
     private ObservableCollection<MemberTreeNode> _treeNodes = new();
@@ -213,6 +215,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task ExportToExcelAsync()
     {
+        using var operation = _dataService.EnterOperation();
         var allMembers = await _dataService.GetAllMembersAsync();
         if (allMembers.Count == 0)
         {
@@ -231,8 +234,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var excelService = new ExcelService();
-            await excelService.ExportToExcelAsync(allMembers, dialog.FileName);
+            await ExportExcelFileAsync(allMembers, dialog.FileName);
             StatusText = $"已导出到: {dialog.FileName}";
         }
         catch (Exception ex)
@@ -240,6 +242,13 @@ public partial class MainViewModel : ObservableObject
             MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             StatusText = "导出失败";
         }
+    }
+
+    internal async Task ExportExcelFileAsync(List<FamilyMember> members, string path,
+        Func<List<FamilyMember>, string, Task>? export = null)
+    {
+        using var operation = _dataService.EnterOperation();
+        await (export ?? ((items, file) => new ExcelService().ExportToExcelAsync(items, file)))(members, path);
     }
 
     [RelayCommand]
@@ -285,6 +294,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task ExportToGedcomAsync()
     {
+        using var operation = _dataService.EnterOperation();
         var allMembers = await _dataService.GetAllMembersAsync();
         if (allMembers.Count == 0)
         {
@@ -292,7 +302,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        var dialog = new SaveFileDialog
+        var dialog = GedcomSaveDialogFactory?.Invoke() ?? new SaveFileDialog
         {
             Title = "导出 GEDCOM 数据",
             Filter = "GEDCOM 文件|*.ged",
@@ -303,8 +313,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var gedcomService = new GedcomService();
-            await gedcomService.ExportToGedcomAsync(allMembers, dialog.FileName);
+            await ExportGedcomFileAsync(allMembers, dialog.FileName, GedcomExportOverride);
             StatusText = $"已导出到: {dialog.FileName}";
         }
         catch (Exception ex)
@@ -312,6 +321,13 @@ public partial class MainViewModel : ObservableObject
             MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             StatusText = "导出失败";
         }
+    }
+
+    internal async Task ExportGedcomFileAsync(List<FamilyMember> members, string path,
+        Func<List<FamilyMember>, string, Task>? export = null)
+    {
+        using var operation = _dataService.EnterOperation();
+        await (export ?? ((items, file) => new GedcomService().ExportToGedcomAsync(items, file)))(members, path);
     }
 
     [RelayCommand]

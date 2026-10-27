@@ -22,6 +22,28 @@ public class WpfLifecycleTests
 
     [Theory]
     [InlineData("success")]
+    [InlineData("native-dialog")]
+    [InlineData("native-dialog-idle")]
+    [InlineData("native-dialog-accept")]
+    [InlineData("modal-backup-cancel")]
+    [InlineData("modal-backup-accept")]
+    [InlineData("excel")]
+    [InlineData("excel-error")]
+    [InlineData("gedcom")]
+    [InlineData("gedcom-error")]
+    [InlineData("collaboration")]
+    [InlineData("collaboration-error")]
+    [InlineData("native-gedcom")]
+    [InlineData("native-collaboration")]
+    [InlineData("complete-gedcom-success")]
+    [InlineData("complete-gedcom-error")]
+    [InlineData("complete-collaboration-success")]
+    [InlineData("complete-collaboration-error")]
+    [InlineData("preview-pdf-cancel")]
+    [InlineData("preview-pdf-save")]
+    [InlineData("preview-xps-cancel")]
+    [InlineData("backup-validate")]
+    [InlineData("backup-preflight")]
     [InlineData("cancel")]
     [InlineData("timeout")]
     [InlineData("child-refusal")]
@@ -29,6 +51,11 @@ public class WpfLifecycleTests
     [Trait("Category", "UI")]
     public async Task Application_exit_retains_lock_until_safe_or_fails_closed(string scenario)
         => await RunWorkerAsync("--wpf-app-exit", scenario);
+
+    [Fact(Skip = "本机隔离进程的打印对话框未能识别，需在可交互 Windows 打印环境专项验证；不得提交打印任务。")]
+    [Trait("Category", "UI")]
+    public async Task Print_dialog_cancel_and_exit_race_requires_interactive_print_environment()
+        => await RunWorkerAsync("--wpf-app-exit", "preview-print-cancel");
 
     private static async Task RunWorkerAsync(string mode, string? scenario = null)
     {
@@ -50,7 +77,14 @@ public class WpfLifecycleTests
         var stderr = process.StandardError.ReadToEndAsync();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         try { await process.WaitForExitAsync(timeout.Token); }
-        catch (OperationCanceledException) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); throw; }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            var timedOutOutput = await stdout;
+            var timedOutError = await stderr;
+            throw new TimeoutException($"隔离 WPF 测试超时: {timedOutOutput} {timedOutError}");
+        }
         var output = await stdout;
         var error = await stderr;
         Assert.True(process.ExitCode == 0, $"隔离 WPF 测试退出码 {process.ExitCode}: {output} {error}");

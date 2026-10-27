@@ -17,6 +17,8 @@ public partial class PreviewViewModel : ObservableObject
 {
     private readonly DataService _dataService;
     private readonly PrintService _printService;
+    internal Func<Microsoft.Win32.SaveFileDialog>? PdfSaveDialogFactory { get; set; }
+    internal Func<LayoutResult, LayoutSettings, string, bool>? PdfExportOverride { get; set; }
     private readonly SettingsService _settingsService = new();
     private List<FixedPage> _pages = new();
     private LayoutResult _lastLayoutResult = new();
@@ -101,8 +103,8 @@ public partial class PreviewViewModel : ObservableObject
             CurrentPage = 1;
             ShowPage(1);
 
-            string rangeInfo = _printRootMemberId != null 
-                ? $"范围: 从第{_printRootMemberId}号起 {_printGenerations}代" 
+            string rangeInfo = _printRootMemberId != null
+                ? $"范围: 从第{_printRootMemberId}号起 {_printGenerations}代"
                 : "全部";
             StatusText = $"预览: {filteredMembers.Count} 位成员, {TotalPages} 页, {rangeInfo}";
         }
@@ -210,6 +212,8 @@ public partial class PreviewViewModel : ObservableObject
     [RelayCommand]
     private void Print()
     {
+        using var operation = TryEnterOutputOperation();
+        if (operation is null) return;
         if (_pages.Count > 0)
         {
             var result = _printService.Print(_pages, Settings.Title);
@@ -220,6 +224,8 @@ public partial class PreviewViewModel : ObservableObject
     [RelayCommand]
     private void ExportXps()
     {
+        using var operation = TryEnterOutputOperation();
+        if (operation is null) return;
         if (_pages.Count == 0) return;
 
         var dialog = new Microsoft.Win32.SaveFileDialog
@@ -241,6 +247,7 @@ public partial class PreviewViewModel : ObservableObject
     {
         try
         {
+            using var operation = _dataService.EnterOperation();
             var allMembers = await _dataService.GetAllMembersAsync();
             if (allMembers.Count == 0)
             {
@@ -248,7 +255,7 @@ public partial class PreviewViewModel : ObservableObject
                 return;
             }
 
-            var dialog = new Microsoft.Win32.SaveFileDialog
+            var dialog = PdfSaveDialogFactory?.Invoke() ?? new Microsoft.Win32.SaveFileDialog
             {
                 Title = "导出为 PDF",
                 Filter = "PDF 文件|*.pdf",
@@ -263,13 +270,19 @@ public partial class PreviewViewModel : ObservableObject
 
             var layoutService = new TreeLayoutService(Settings);
             var layoutResult = layoutService.CalculateLayout(filteredMembers);
-            var pdfService = new PdfExportService();
-            var result = pdfService.ExportToPdf(layoutResult, Settings, dialog.FileName);
+            var result = (PdfExportOverride ?? ((layout, settings, path) => new PdfExportService().ExportToPdf(layout, settings, path)))
+                (layoutResult, Settings, dialog.FileName);
             StatusText = result ? $"已导出 PDF: {dialog.FileName}" : "导出 PDF 失败";
         }
         catch (Exception ex)
         {
             StatusText = $"导出 PDF 失败: {ex.Message}";
         }
+    }
+
+    private IDisposable? TryEnterOutputOperation()
+    {
+        try { return _dataService.EnterOperation(); }
+        catch (InvalidOperationException ex) { StatusText = $"无法开始输出: {ex.Message}"; return null; }
     }
 }
