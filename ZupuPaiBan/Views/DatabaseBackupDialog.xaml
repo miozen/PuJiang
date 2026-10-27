@@ -1,0 +1,17 @@
+<Window x:Class="ZupuPaiBan.Views.DatabaseBackupDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="数据库备份与校验" Width="560" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner">
+    <StackPanel Margin="18">
+        <TextBlock FontWeight="Bold" Text="数据库专用备份" FontSize="16"/>
+        <TextBlock Margin="0,8,0,12" TextWrapping="Wrap"
+                   Text="备份包含当前数据库的所有族谱。照片、附件和配置不包含在内；目前不能从此备份恢复。"/>
+        <WrapPanel>
+            <Button Content="创建数据库备份…" Click="CreateBackup_Click" Padding="10,5" Margin="0,0,8,8"/>
+            <Button Content="校验数据库备份…" Click="ValidateBackup_Click" Padding="10,5" Margin="0,0,0,8"/>
+        </WrapPanel>
+        <TextBlock x:Name="ResultText" TextWrapping="Wrap" Margin="0,4,0,12" Text="请选择操作。"/>
+        <Button Content="关闭" IsCancel="True" HorizontalAlignment="Right" Padding="14,4"/>
+    </StackPanel>
+</Window>

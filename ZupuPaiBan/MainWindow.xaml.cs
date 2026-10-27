@@ -56,6 +56,11 @@ public partial class MainWindow : Window
         }
     }
 
+    private void DatabaseBackup_Click(object sender, RoutedEventArgs e)
+    {
+        new DatabaseBackupDialog(AppDataPaths.DatabasePath, AppDataPaths.BackupsDirectory) { Owner = this }.ShowDialog();
+    }
+
     private async void CreateGenealogy_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;

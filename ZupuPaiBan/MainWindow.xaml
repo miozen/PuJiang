@@ -31,6 +31,8 @@
         <!-- 菜单栏 -->
         <Menu Grid.Row="0" Background="#F5F0E8">
             <MenuItem Header="文件(_F)">
+                <MenuItem Header="数据库备份与校验…" Click="DatabaseBackup_Click"/>
+                <Separator/>
                 <MenuItem Header="导入 Excel 数据" Command="{Binding ImportFromExcelCommand}"/>
                 <MenuItem Header="导入 GEDCOM 数据" Command="{Binding ImportFromGedcomCommand}"/>
                 <Separator/>

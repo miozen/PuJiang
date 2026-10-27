@@ -30,24 +30,7 @@ public sealed class DatabaseMigrationService
             cancellationToken.ThrowIfCancellationRequested();
             Directory.CreateDirectory(_backupDirectory);
             backupPath = Path.Combine(_backupDirectory, $"pre-migration-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.db");
-            var sourceOptions = new SqliteConnectionStringBuilder { DataSource = sourcePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false };
-            var targetOptions = new SqliteConnectionStringBuilder { DataSource = backupPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false };
-            await using (var source = new SqliteConnection(sourceOptions.ToString()))
-            await using (var target = new SqliteConnection(targetOptions.ToString()))
-            {
-                await source.OpenAsync(cancellationToken);
-                await target.OpenAsync(cancellationToken);
-                source.BackupDatabase(target);
-            }
-
-            var verifyOptions = new SqliteConnectionStringBuilder { DataSource = backupPath, Mode = SqliteOpenMode.ReadOnly, Pooling = false };
-            await using var verification = new SqliteConnection(verifyOptions.ToString());
-            await verification.OpenAsync(cancellationToken);
-            await using var check = verification.CreateCommand();
-            check.CommandText = "PRAGMA integrity_check";
-            var result = await check.ExecuteScalarAsync(cancellationToken);
-            if (!string.Equals(result as string, "ok", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"迁移前备份完整性检查失败：{result}。备份路径：{backupPath}");
+            await DatabaseSnapshotService.CreateAsync(sourcePath, backupPath, cancellationToken);
         }
 
         try
