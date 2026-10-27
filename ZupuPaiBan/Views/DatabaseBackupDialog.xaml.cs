@@ -61,4 +61,34 @@ public partial class DatabaseBackupDialog : Window
         catch (Exception ex) { ResultText.Text = $"校验失败：\n{ex.Message}"; }
         finally { IsEnabled = true; }
     }
+
+    private async void PreflightBackup_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择要预检的数据库备份包",
+            Filter = "数据库备份包 (*.zip)|*.zip|所有文件 (*.*)|*.*",
+            InitialDirectory = Directory.Exists(_backupDirectory) ? _backupDirectory : null,
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        IsEnabled = false;
+        ResultText.Text = "正在隔离检查数据库备份，不会替换当前数据库…";
+        try
+        {
+            var report = await new BackupRestorePreflightService(_backupDirectory).CheckAsync(dialog.FileName);
+            ResultText.Text = FormatPreflightReport(report);
+        }
+        catch (AggregateException ex)
+        {
+            ResultText.Text = $"预检未完成：\n{ex.Message}\n{string.Join("\n", ex.Flatten().InnerExceptions.Select(error => error.Message))}";
+        }
+        catch (Exception ex) { ResultText.Text = $"预检失败：\n{ex.Message}"; }
+        finally { IsEnabled = true; }
+    }
+
+    internal static string FormatPreflightReport(BackupRestorePreflightReport report) =>
+        $"预检通过：备份格式版本 {report.FormatVersion}，数据库结构和迁移版本符合当前程序。\n" +
+        $"数据库：{(report.IncludesDatabase ? "包含" : "不包含")}；照片和附件：{(report.IncludesAttachments ? "包含" : "不包含")}；配置：{(report.IncludesConfiguration ? "包含" : "不包含")}。\n" +
+        "仅完成预检，未恢复或替换数据库；不证明数据内容正确或备份来源真实性。";
 }

@@ -11,6 +11,19 @@ namespace PuJiang.Tests;
 public class BackupRestorePreflightTests
 {
     [Fact]
+    [Trait("Category", "Unit")]
+    public void Preflight_display_reports_coverage_and_does_not_claim_restoration()
+    {
+        var report = new BackupRestorePreflightReport(1, new[] { "migration" }, true, false, false);
+        var message = ZupuPaiBan.Views.DatabaseBackupDialog.FormatPreflightReport(report);
+        Assert.Contains("数据库：包含", message);
+        Assert.Contains("照片和附件：不包含", message);
+        Assert.Contains("配置：不包含", message);
+        Assert.Contains("未恢复或替换数据库", message);
+        Assert.Contains("不证明数据内容正确或备份来源真实性", message);
+    }
+
+    [Fact]
     [Trait("Category", "Integration")]
     public async Task Valid_package_reports_scope_and_leaves_source_and_package_untouched()
     {

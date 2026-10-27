@@ -10,6 +10,7 @@
         <WrapPanel>
             <Button Content="创建数据库备份…" Click="CreateBackup_Click" Padding="10,5" Margin="0,0,8,8"/>
             <Button Content="校验数据库备份…" Click="ValidateBackup_Click" Padding="10,5" Margin="0,0,0,8"/>
+            <Button Content="恢复前预检…" Click="PreflightBackup_Click" Padding="10,5" Margin="8,0,0,8"/>
         </WrapPanel>
         <TextBlock x:Name="ResultText" TextWrapping="Wrap" Margin="0,4,0,12" Text="请选择操作。"/>
         <Button Content="关闭" IsCancel="True" HorizontalAlignment="Right" Padding="14,4"/>
