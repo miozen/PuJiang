@@ -23,6 +23,8 @@ internal sealed class IsolatedRestorePrototype
         var root = Path.GetDirectoryName(_target.DatabasePath)!;
         using var lease = DataDirectoryLease.Acquire(root);
         Directory.CreateDirectory(_target.BackupDirectory);
+        if (RestoreJournalPrototype.Inspect(_target).Status != "none")
+            throw new InvalidOperationException("发现未处理的恢复记录或残留，请人工检查。");
         var id = Guid.NewGuid().ToString("N");
         var fixedPackage = Path.Combine(root, $"package-{id}.zip");
         var snapshot = Path.Combine(_target.BackupDirectory, $"before-{id}.db");
@@ -45,9 +47,19 @@ internal sealed class IsolatedRestorePrototype
         await using (var source = package.GetEntry("database/pujiang.db")!.Open())
         await using (var target = new FileStream(staged, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             await source.CopyToAsync(target);
+        RestoreJournalPrototype.Write(_target, new(1, id, "prepared"), () => _fault("prepared-flushed"));
+        _fault("prepared-written");
+        RestoreJournalPrototype.Write(_target, new(1, id, "replace_pending"), () => _fault("pending-flushed"));
+        _fault("pending-written");
         _fault("before-replace");
         File.Replace(staged, _target.DatabasePath, rollback);
-        try { _fault("after-replace"); }
+        try
+        {
+            _fault("replace-completed");
+            RestoreJournalPrototype.Write(_target, new(1, id, "replaced"), () => _fault("replaced-flushed"));
+            _fault("replaced-written");
+            _fault("after-replace");
+        }
         catch (Exception failure)
         {
             try

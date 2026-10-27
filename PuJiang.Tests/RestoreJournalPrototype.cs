@@ -11,7 +11,7 @@ internal static class RestoreJournalPrototype
     public const string JournalName = "restore-journal.json";
     private static readonly string[] Phases = ["prepared", "replace_pending", "replaced"];
 
-    public static void Write(TestDatabase target, RestoreJournalRecord record)
+    public static void Write(TestDatabase target, RestoreJournalRecord record, Action? afterFlush = null)
     {
         Validate(record);
         var root = Path.GetDirectoryName(target.DatabasePath)!;
@@ -22,6 +22,7 @@ internal static class RestoreJournalPrototype
             JsonSerializer.Serialize(file, record);
             file.Flush(flushToDisk: true);
         }
+        afterFlush?.Invoke();
         // 同目录替换仅用于实验；目录元数据落盘和断电可靠性尚未验证。
         File.Move(temporary, destination, overwrite: true);
     }
@@ -30,12 +31,16 @@ internal static class RestoreJournalPrototype
     {
         var root = Path.GetDirectoryName(target.DatabasePath)!;
         var journal = Path.Combine(root, JournalName);
+        var pendingWrites = Directory.GetFiles(root, "journal-*.tmp");
         if (!File.Exists(journal))
         {
-            var residue = Directory.GetFiles(root, "staged-*.db").Concat(Directory.GetFiles(root, "rollback-*.db")).ToArray();
+            var residue = Directory.GetFiles(root, "staged-*.db").Concat(Directory.GetFiles(root, "rollback-*.db"))
+                .Concat(Directory.GetFiles(root, "journal-*.tmp")).ToArray();
             return residue.Length == 0 ? new("none", "未发现恢复记录。", residue) :
                 new("unknown", "缺少恢复记录但存在残留文件；停止并人工检查。", residue);
         }
+        if (pendingWrites.Length != 0)
+            return new("unknown", "恢复记录存在未完成的写入；保留全部文件并人工检查。", [journal, .. pendingWrites]);
         RestoreJournalRecord? record;
         try
         {
