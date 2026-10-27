@@ -33,7 +33,7 @@ public partial class MainWindow : Window
                 Pooling = false
             }.ToString()).Options;
         _targetContexts = new TargetContextCoordinator(targetOptions);
-        _genealogyViewModel = new GenealogySelectionViewModel(_targetContexts.CreateContext);
+        _genealogyViewModel = new GenealogySelectionViewModel(_targetContexts.CreateContext, _targetContexts);
         genealogyPanel.DataContext = _genealogyViewModel;
         _genealogyViewModel.PropertyChanged += GenealogyViewModel_PropertyChanged;
         genealogyPanel.IsEnabled = false;

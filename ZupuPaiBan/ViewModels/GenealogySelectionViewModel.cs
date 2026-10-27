@@ -10,6 +10,7 @@ namespace ZupuPaiBan.ViewModels;
 public partial class GenealogySelectionViewModel : ObservableObject
 {
     private readonly Func<ZupuDbContext> _createContext;
+    private readonly TargetContextCoordinator? _operationCoordinator;
     private int _selectionVersion;
     private int _personSelectionVersion;
 
@@ -42,6 +43,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task SelectTreePersonAsync(TargetMemberTreeNode node)
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         // 忽略切谱或刷新后仍在 UI 事件队列中的旧节点。
         if (SelectedGenealogy is null || !TargetTree.Any(item => ReferenceEquals(item, node))) return;
         var person = People.SingleOrDefault(p => p.Id == node.PersonId && p.GenealogyId == SelectedGenealogy.Id);
@@ -72,6 +74,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
     public async Task SaveTreePersonProfileAsync(TargetMemberTreeNode node, string? name, PersonSex sex,
         string? birthDate, string? deathDate, string? biography)
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var person = GetTreePerson(node);
         var genealogy = SelectedGenealogy!;
         var version = _selectionVersion;
@@ -86,10 +89,15 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
     }
 
-    public GenealogySelectionViewModel(Func<ZupuDbContext> createContext) => _createContext = createContext;
+    public GenealogySelectionViewModel(Func<ZupuDbContext> createContext, TargetContextCoordinator? operationCoordinator = null)
+    {
+        _createContext = createContext;
+        _operationCoordinator = operationCoordinator;
+    }
 
     public async Task LoadAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         await using var context = _createContext();
         var items = await new GenealogyDataService(context).GetGenealogiesAsync();
         Genealogies = new ObservableCollection<Genealogy>(items);
@@ -97,6 +105,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task CreateAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var name = NewName.Trim();
         if (name.Length == 0 || name.Length > 200)
             throw new InvalidOperationException("族谱名称须为 1 至 200 个字符。");
@@ -115,6 +124,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task SelectAsync(Genealogy? genealogy)
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var version = ++_selectionVersion;
         ++_personSelectionVersion;
         SelectedGenealogy = genealogy;
@@ -151,6 +161,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task AddPersonAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var selected = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var version = _selectionVersion;
         await using var context = _createContext();
@@ -180,6 +191,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task LoadSelectedBiologicalChildrenAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var version = ++_personSelectionVersion;
         var genealogy = SelectedGenealogy;
         var parent = SelectedPerson;
@@ -209,6 +221,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task RenamePersonAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var person = SelectedPerson ?? throw new InvalidOperationException("请先选择人物。");
         var version = _selectionVersion;
@@ -220,6 +233,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task SavePersonProfileAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var person = SelectedPerson ?? throw new InvalidOperationException("请先选择人物。");
         var version = _selectionVersion;
@@ -232,6 +246,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task DeleteUnrelatedPersonAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var person = SelectedPerson ?? throw new InvalidOperationException("请先选择人物。");
         var version = _selectionVersion;
@@ -243,6 +258,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task AddBiologicalChildAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var parent = SelectedPerson ?? throw new InvalidOperationException("请先选择父母人物。");
         var version = _selectionVersion;
@@ -255,6 +271,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task AddBiologicalChildForTreeNodeAsync(TargetMemberTreeNode node, string? name)
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         if (!TargetTree.Any(item => ReferenceEquals(item, node)) ||
             !People.Any(p => p.Id == node.PersonId && p.GenealogyId == genealogy.Id))
@@ -274,6 +291,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task RemoveBiologicalParentRelationshipAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var parent = SelectedPerson ?? throw new InvalidOperationException("请先选择父母人物。");
         var child = SelectedBiologicalChild ?? throw new InvalidOperationException("请先选择生物子女。");
@@ -289,6 +307,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public async Task AddExistingBiologicalChildAsync()
     {
+        using var operation = _operationCoordinator?.EnterOperation();
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
         var parent = SelectedPerson ?? throw new InvalidOperationException("请先选择父母人物。");
         var child = SelectedExistingChild ?? throw new InvalidOperationException("请先选择已有子女人物。");
