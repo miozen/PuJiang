@@ -7,11 +7,11 @@
 - **Goal：** 建立可重复构建、隔离验证、持续集成与本地数据安全的 Windows 开发基线。
 - **Scope：** 解决方案入口、SDK 固定、xUnit/SQLite 测试隔离、固定虚构样本、测试分类、Windows CI、数据目录与日志基础、发布与人工验收规范。
 - **Completed：** 已建立 `PuJiang.slnx`、`global.json`、`PuJiang.Tests` 和 `.github/workflows/ci.yml`；SQLite 测试每例使用独立临时文件且禁用连接池，当前 6 项测试通过；固定三代和 1,000 人虚构样本已加入；已配置 Unit/Integration/Layout/Performance 分类；已实现 `%LOCALAPPDATA%\\PuJiang` 数据目录抽象、基础轮转日志与未处理异常记录；已补充 `.gitignore`、操作规范和发布目标。
-- **Remaining：** GitHub Actions 需在远端首次触发并确认；UI 人工验收及独立性能指标尚未执行；安装包、签名、备份恢复与 Migration 设计时工具链属于后续工作。
+- **Remaining：** 此段记录 P0-0 当时的基线；当前 GitHub Actions 状态需实际核实，后续 UI、性能、备份恢复及工具链进展见下方 P0 和接力状态。
 - **Acceptance Criteria：** Windows .NET 10 构建成功；统一解决方案和可重复的隔离 SQLite 测试存在；日常 CI 使用 Windows runner；数据、Migration、备份与发布边界有明确规范；不触碰真实用户数据库。
 - **Validation：** `dotnet build PuJiang.slnx --no-restore --configuration Release` 成功（0 error，16 个既有 ImageSharp 安全警告）；日常测试（排除 Performance）为 5/5 通过，Performance 样本测试为 1/1 通过；`dotnet publish ZupuPaiBan/ZupuPaiBan.csproj -c Release -r win-x64 --self-contained true` 成功并仅输出到已忽略的 `artifacts/publish-smoke`；未启动 WPF 应用，未创建正式用户数据库；远端 CI 未触发。
 - **Blockers：** 无本轮实施阻塞。ImageSharp 1.0.4 的高/中危告警需在依赖升级专项处理，不能在此基础设施轮次静默升级。
-- **Next Action：** 用户确认后进入 P0-1，先补全 Migration 设计时工具链和目标模型的事务/完整性测试，再开始把 UI 用例迁移至目标模型。
+- **Next Action：** P0-1 已开展，当前唯一下一步见 [接力状态](HANDOFF.md)。
 
 ## P0-1 — Migration 与关系完整性基线
 

@@ -4,11 +4,13 @@
 
 ## 功能特性
 
+以下包含旧版原型能力；目标多族谱界面仍在渐进开发，旧版成员树、导入与输出独立于目标族谱选择。实际能力和验收状态以[架构契约](docs/ARCHITECTURE.md)及[当前计划](docs/CURRENT_PLAN.md)为准。
+
 - **成员管理**：录入姓名、性别、生卒日期、配偶、生平简介、照片，通过父子关系自动构建家族树
 - **自动排版**：经典族谱树形布局算法，自动计算各代位置、配偶并排、连线生成
 - **可调版式**：节点尺寸、间距、字号、标题、纸张（A2/A3/A4）、横竖版均可调节，改动实时预览
 - **打印预览**：所见即所得预览窗口，缩放浏览，直接打印或导出 XPS
-- **本地存储**：SQLite 单文件数据库（`zupu.db`），数据完全留在本机，无任何网络上传
+- **本地存储**：SQLite 数据库默认位于 `%LOCALAPPDATA%\PuJiang\pujiang.db`，族谱数据保存在本机
 
 ## 技术栈
 
@@ -39,12 +41,19 @@ ZupuPaiBan/
 
 ## 构建与运行
 
-```bash
-cd ZupuPaiBan
-dotnet run
+在仓库根目录的 Windows PowerShell 中构建和测试。首次使用需要还原依赖；SDK 版本及回退策略见 `global.json`。
+
+```powershell
+dotnet restore PuJiang.slnx
+dotnet build PuJiang.slnx --no-restore --configuration Release
+dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance"
 ```
 
-首次运行会在应用程序目录创建 `zupu.db` 数据库文件。
+开发或人工验收启动时必须使用独立测试数据目录，操作步骤见 [开发、数据安全与发布规范](docs/OPERATIONS.md#数据与日志目录)。程序正常启动默认使用用户本地数据目录，而不是程序安装目录。
+
+## 开发与跨电脑接力
+
+当前实现和约束以 [架构契约](docs/ARCHITECTURE.md) 及 [决策契约](docs/DECISIONS.md) 为准；开发阶段和下一步分别见 [当前计划](docs/CURRENT_PLAN.md) 与 [接力状态](docs/HANDOFF.md)。新电脑获取代码、验证和恢复接力的具体步骤见 [跨电脑接力](docs/OPERATIONS.md#跨电脑接力)。
 
 ## 使用简介
 
