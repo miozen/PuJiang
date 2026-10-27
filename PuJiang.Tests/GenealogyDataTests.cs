@@ -218,4 +218,92 @@ public class GenealogyDataTests
         Assert.Empty(await verification.People.Where(person => person.GenealogyId == target.Id).ToListAsync());
         Assert.Empty(await verification.PersonRelationships.Where(relationship => relationship.GenealogyId == target.Id).ToListAsync());
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Batch_cycle_is_rejected_and_context_can_be_reused_without_resurrecting_rolled_back_entities()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "批次循环谱" });
+        var a = new Person { GenealogyId = genealogy.Id, Name = "虚构甲" };
+        var b = new Person { GenealogyId = genealogy.Id, Name = "虚构乙" };
+        var c = new Person { GenealogyId = genealogy.Id, Name = "虚构丙" };
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddPeopleAndRelationshipsAsync(genealogy.Id, [a, b, c],
+        [
+            new() { GenealogyId = genealogy.Id, PersonId = a.Id, RelatedPersonId = b.Id, Kind = PersonRelationshipKind.BiologicalParent },
+            new() { GenealogyId = genealogy.Id, PersonId = b.Id, RelatedPersonId = c.Id, Kind = PersonRelationshipKind.AdoptiveParent },
+            new() { GenealogyId = genealogy.Id, PersonId = c.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.HeirParent }
+        ]));
+        Assert.Contains("循环", error.Message);
+        await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "正常人物" });
+        await using var verification = database.CreateContext();
+        Assert.Equal("正常人物", (await verification.People.SingleAsync()).Name);
+        Assert.Empty(await verification.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Duplicate_lost_ancestry_is_rejected_in_single_and_batch_writes()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "失考去重谱" });
+        var existing = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "已有" });
+        PersonRelationship Lost(Guid id) => new() { GenealogyId = genealogy.Id, PersonId = id, Kind = PersonRelationshipKind.LostAncestry };
+        await service.AddRelationshipAsync(Lost(existing.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddRelationshipAsync(Lost(existing.Id)));
+        var staged = new Person { GenealogyId = genealogy.Id, Name = "暂存" };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddPeopleAndRelationshipsAsync(genealogy.Id, [staged], [Lost(staged.Id), Lost(staged.Id)]));
+        await using var verification = database.CreateContext();
+        Assert.Single(await verification.People.ToListAsync());
+        Assert.Single(await verification.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Batch_rejects_cycle_spanning_existing_and_new_relationships()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "混合循环谱" });
+        var a = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "甲" });
+        var b = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "乙" });
+        await service.AddRelationshipAsync(new() { GenealogyId = genealogy.Id, PersonId = a.Id, RelatedPersonId = b.Id, Kind = PersonRelationshipKind.BiologicalParent });
+        var c = new Person { GenealogyId = genealogy.Id, Name = "丙" };
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddPeopleAndRelationshipsAsync(genealogy.Id, [c],
+        [
+            new() { GenealogyId = genealogy.Id, PersonId = b.Id, RelatedPersonId = c.Id, Kind = PersonRelationshipKind.BiologicalParent },
+            new() { GenealogyId = genealogy.Id, PersonId = c.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.BiologicalParent }
+        ]));
+        Assert.Contains("循环", error.Message);
+        await using var verification = database.CreateContext();
+        Assert.Equal(2, await verification.People.CountAsync());
+        Assert.Single(await verification.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Batch_rejects_duplicate_parent_relationship_and_rolls_back_all_staged_data()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "批次重复谱" });
+        var child = new Person { GenealogyId = genealogy.Id, Name = "子" };
+        var parent = new Person { GenealogyId = genealogy.Id, Name = "父" };
+        PersonRelationship Parent() => new() { GenealogyId = genealogy.Id, PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddPeopleAndRelationshipsAsync(genealogy.Id, [child, parent], [Parent(), Parent()]));
+        Assert.Contains("已经存在", error.Message);
+        await using var verification = database.CreateContext();
+        Assert.Empty(await verification.People.ToListAsync());
+        Assert.Empty(await verification.PersonRelationships.ToListAsync());
+    }
 }

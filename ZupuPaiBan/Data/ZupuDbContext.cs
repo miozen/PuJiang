@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
 using ZupuPaiBan.Infrastructure;
 using ZupuPaiBan.Models;
 
@@ -31,7 +32,7 @@ public class ZupuDbContext : DbContext
     {
         if (!optionsBuilder.IsConfigured)
         {
-            optionsBuilder.UseSqlite($"Data Source={_dbPath}");
+            optionsBuilder.UseSqlite(new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString());
         }
     }
 

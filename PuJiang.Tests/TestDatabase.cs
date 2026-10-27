@@ -6,7 +6,8 @@ namespace PuJiang.Tests;
 internal sealed class TestDatabase : IAsyncDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "PuJiang.Tests", Guid.NewGuid().ToString("N"));
-    private string DatabasePath => Path.Combine(_directory, "test.db");
+    public string DatabasePath => Path.Combine(_directory, "test.db");
+    public string BackupDirectory => Path.Combine(_directory, "backups");
 
     public ZupuDbContext CreateContext()
     {

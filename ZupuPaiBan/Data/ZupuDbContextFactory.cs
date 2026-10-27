@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.Data.Sqlite;
 using ZupuPaiBan.Infrastructure;
 
 namespace ZupuPaiBan.Data;
@@ -13,7 +14,7 @@ public sealed class ZupuDbContextFactory : IDesignTimeDbContextFactory<ZupuDbCon
     {
         var connectionString = Environment.GetEnvironmentVariable("PUJIANG_DESIGNTIME_CONNECTION");
         if (string.IsNullOrWhiteSpace(connectionString))
-            connectionString = $"Data Source={AppDataPaths.DatabasePath}";
+            connectionString = new SqliteConnectionStringBuilder { DataSource = AppDataPaths.DatabasePath }.ToString();
 
         var options = new DbContextOptionsBuilder<ZupuDbContext>()
             .UseSqlite(connectionString)

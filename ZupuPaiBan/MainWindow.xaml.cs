@@ -1,17 +1,21 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.EntityFrameworkCore;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
+using ZupuPaiBan.Infrastructure;
 using ZupuPaiBan.ViewModels;
 using ZupuPaiBan.Views;
+using ZupuPaiBan.Services;
 
 namespace ZupuPaiBan;
 
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
+    private GenealogySelectionViewModel? _genealogyViewModel;
 
     public MainWindow()
     {
@@ -21,6 +25,10 @@ public partial class MainWindow : Window
         var dataService = new DataService(context);
         _viewModel = new MainViewModel(dataService);
         DataContext = _viewModel;
+        _genealogyViewModel = new GenealogySelectionViewModel(() => new ZupuDbContext());
+        genealogyPanel.DataContext = _genealogyViewModel;
+        _genealogyViewModel.PropertyChanged += GenealogyViewModel_PropertyChanged;
+        genealogyPanel.IsEnabled = false;
 
         _viewModel.OnEditMemberRequested += OnEditMemberRequested;
         _viewModel.OnOpenPreviewRequested += OnOpenPreviewRequested;
@@ -30,9 +38,183 @@ public partial class MainWindow : Window
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        var context = new ZupuDbContext();
-        await context.Database.MigrateAsync();
-        await _viewModel.LoadDataAsync();
+        IsEnabled = false;
+        try
+        {
+            await using var context = new ZupuDbContext();
+            await new DatabaseMigrationService(context, AppDataPaths.BackupsDirectory).MigrateAsync();
+            await _viewModel.LoadDataAsync();
+            await _genealogyViewModel!.LoadAsync();
+            genealogyPanel.IsEnabled = true;
+            IsEnabled = true;
+        }
+        catch (Exception ex)
+        {
+            FileAppLogger.Write(AppLogLevel.Error, "Database initialization failed.", ex);
+            MessageBox.Show($"数据库初始化失败，应用将关闭。请保留数据及备份并检查日志。\n\n{ex.Message}", "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            Close();
+        }
+    }
+
+    private async void CreateGenealogy_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.CreateAsync(); }
+        catch (Exception ex) { MessageBox.Show($"创建族谱失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void GenealogySelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_genealogyViewModel == null) return;
+        try { await _genealogyViewModel.SelectAsync(genealogySelector.SelectedItem as Genealogy); }
+        catch (Exception ex) { _genealogyViewModel.Status = $"加载人物失败：{ex.Message}"; }
+    }
+
+    private async void AddPerson_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.AddPersonAsync(); }
+        catch (Exception ex) { MessageBox.Show($"添加人物失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void RenamePerson_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.RenamePersonAsync(); }
+        catch (Exception ex) { MessageBox.Show($"保存姓名失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void AddChild_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.AddBiologicalChildAsync(); }
+        catch (Exception ex) { MessageBox.Show($"添加子女失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void AddExistingChild_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.AddExistingBiologicalChildAsync(); }
+        catch (Exception ex) { MessageBox.Show($"关联子女失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void RemoveBiologicalParentRelationship_Click(object sender, RoutedEventArgs e)
+    {
+        var parent = _genealogyViewModel?.SelectedPerson;
+        var child = _genealogyViewModel?.SelectedBiologicalChild;
+        if (parent == null || child == null)
+        {
+            MessageBox.Show("请先选择父母人物和其生物子女。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (MessageBox.Show($"确定解除“{parent.Name}”与“{child.Name}”的生物父母关系吗？\n人物档案会保留，但该关系及其记录的备注和来源将被删除，无法撤销。",
+                "确认解除关系", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.RemoveBiologicalParentRelationshipAsync(); }
+        catch (Exception ex) { MessageBox.Show($"解除关系失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private void ClearSelectedPerson_Click(object sender, RoutedEventArgs e) =>
+        _genealogyViewModel!.ClearSelectedPerson();
+
+    private async void DeleteTargetPerson_Click(object sender, RoutedEventArgs e)
+    {
+        var person = _genealogyViewModel?.SelectedPerson;
+        if (person == null)
+        {
+            MessageBox.Show("请先选择人物。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (MessageBox.Show($"确定删除人物“{person.Name}”吗？此操作无法撤销；有关联关系的人物不能删除。",
+                "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.DeleteUnrelatedPersonAsync(); }
+        catch (Exception ex) { MessageBox.Show($"删除人物失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void SavePersonProfile_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.SavePersonProfileAsync(); }
+        catch (Exception ex) { MessageBox.Show($"保存档案失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void TargetPerson_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_genealogyViewModel == null) return;
+        _genealogyViewModel.SelectedPerson = (sender as ListBox)?.SelectedItem as Person;
+        await _genealogyViewModel.LoadSelectedBiologicalChildrenAsync();
+    }
+
+    private async void TargetTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is TargetMemberTreeNode node && _genealogyViewModel != null)
+            await _genealogyViewModel.SelectTreePersonAsync(node);
+    }
+
+    private async void TargetTree_AddChild_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: TargetMemberTreeNode node } || _genealogyViewModel is null) return;
+        var dialog = new TargetChildDialog(node.Label) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        genealogyPanel.IsEnabled = false;
+        targetTree.IsEnabled = false;
+        try { await _genealogyViewModel.AddBiologicalChildForTreeNodeAsync(node, dialog.ChildName); }
+        catch (Exception ex) { MessageBox.Show($"添加子女失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { targetTree.IsEnabled = true; genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void TargetTreePerson_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2 || sender is not TextBlock { DataContext: TargetMemberTreeNode node } || _genealogyViewModel is null) return;
+        e.Handled = true;
+        try
+        {
+            var person = _genealogyViewModel.GetTreePerson(node);
+            var dialog = new TargetPersonEditDialog(person) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            genealogyPanel.IsEnabled = false;
+            targetTree.IsEnabled = false;
+            try
+            {
+                await _genealogyViewModel.SaveTreePersonProfileAsync(node, dialog.PersonName, dialog.Sex,
+                    dialog.BirthDate, dialog.DeathDate, dialog.Biography);
+            }
+            finally { targetTree.IsEnabled = true; genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"保存档案失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
+    private void GenealogyViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(GenealogySelectionViewModel.SelectedPerson)) return;
+        if (targetTree.SelectedItem is TargetMemberTreeNode node &&
+            node.PersonId == _genealogyViewModel?.SelectedPerson?.Id) return;
+
+        ClearSelectedTreeItem(targetTree);
+    }
+
+    private static bool ClearSelectedTreeItem(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is TreeViewItem { IsSelected: true } item)
+            {
+                item.IsSelected = false;
+                return true;
+            }
+            if (ClearSelectedTreeItem(child)) return true;
+        }
+        return false;
     }
 
     private void TreeMembers_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)

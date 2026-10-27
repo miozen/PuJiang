@@ -8,13 +8,16 @@
 
 - `PuJiang.slnx` 统一入口包含一个 `net10.0-windows` WPF 项目和 `PuJiang.Tests` xUnit 项目；`global.json` 固定 SDK `10.0.402`。依赖 CommunityToolkit.Mvvm、EF Core SQLite、ClosedXML、PdfSharpCore。
 - 界面位于 `Views/` 与 `MainWindow.xaml`；ViewModel 位于 `ViewModels/`；数据访问位于 `Data/`；布局、打印与交换位于 `Services/`。
-- 旧 WPF 原型仍以 `FamilyMember`（可空 `FatherId`、字符串 `SpouseName`、代数、排行）为界面数据模型。P0 源码另有未接入 UI 的 `Genealogy`、`Person`、`PersonRelationship`、`FamilyUnion`、`FamilyBranch` 目标实体、首个 Migration 与 `ZupuDbContextModelSnapshot`；这不表示 P1 管理功能已完成。
-- 启动路径已使用 `MigrateAsync`；`Infrastructure/AppDataPaths.cs` 规定 `%LOCALAPPDATA%\\PuJiang` 数据根目录，`FileAppLogger` 提供本地轮转日志与未处理异常记录。备份恢复尚未实现。
+- 旧成员树及其操作仍以 `FamilyMember`（可空 `FatherId`、字符串 `SpouseName`、代数、排行）为界面数据模型。WPF 另提供目标模型族谱的创建、会话内选择、按谱人物列表、姓名及基础档案编辑、无关系人物的确认删除，以及生物子女事务新增、已有子女关联、列表和指定生物父母关系的确认解除。有关联关系或婚配记录的人物不可通过此入口删除；解除会删除该关系记录（含备注和来源），但保留人物及其他关系；重新关联建立新关系，不能恢复旧备注和来源。其他人物档案编辑、复杂删除和关系管理尚未切换；这不表示 P1 管理功能已完成。
+- 启动路径在现有 SQLite 库有待执行迁移时先使用 SQLite 在线备份生成并校验数据库快照，再调用 `MigrateAsync`；备份失败则终止启动。完整备份包与恢复尚未实现。`Infrastructure/AppDataPaths.cs` 默认使用 `%LOCALAPPDATA%\\PuJiang`，支持显式独立测试数据根目录，详见 [运行规范](OPERATIONS.md#数据与日志目录)。`FileAppLogger` 提供本地轮转日志与未处理异常记录。
+- 应用创建主窗口前独占数据目录内的锁文件，并持有至进程退出，阻止支持此协议的其他谱匠实例同时使用该目录；不阻止旧版程序或其他软件直接访问数据库。
+- `GenealogyDataService.GetGraphSnapshotAsync` 在读取事务中按单谱提取不可变人物、类型化关系、婚配与房支数据，保留原始记录与来源；它不选择展示主线，也尚未完成大规模性能验收。
+- 目标谱系已接入基于快照的关系清单：每个人物作为独立入口，展开显示已记录关系，多条父母关系明确标注未自动选择主线，未知上系不推断为始祖；选择人物节点按 ID 接入现有目标人物档案和生物子女选择，右键可新增生物子女，双击可编辑姓名和基础档案，后者通过按谱及人物 ID 限定的单条更新原子写入。关系详情只读；这不是世代层级树，尚不支持旧版工具栏操作。相关变更后会刷新清单。
 - `ZupuDbContextFactory` 提供不执行创建或迁移的 EF Core 设计时上下文；`dotnet-tools.json` 固定本地 `dotnet-ef` 10.0.12。
-- `PuJiang.Tests` 使用每测试独立临时 SQLite 文件（禁用连接池后清理）；当前覆盖迁移、跨谱隔离/拒绝、父系循环、失考、重复关系、批量关系写入的提交/回滚、布局确定性与虚构千人样本。测试分类为 Unit、Integration、Layout、Performance；尚无 UI 自动化。
+- `PuJiang.Tests` 使用每测试独立临时 SQLite 文件（禁用连接池后清理）；当前覆盖迁移、跨谱隔离/拒绝、父系循环、失考、重复关系、批量关系写入的提交/回滚（包含同批次及已有关系混合循环）、布局确定性与虚构千人样本。测试分类为 Unit、Integration、Layout、Performance；尚无 UI 自动化。
 - 有基础成员树、横向/左至右树布局、预览、打印、PDF/XPS 及 Excel/GEDCOM/JSON 入口。它们是原型能力，不代表正式数据交换、排版或大规模性能已验收。
 
-当前模型不支持多族谱隔离、母系、正式配偶关系、多次婚配、过继/嗣继、房支、失考或关系主线选择。详见 [D-002](DECISIONS.md#d-002--多族谱隔离) 至 [D-007](DECISIONS.md#d-007--重建范围与架构尺度)。
+旧成员树模型不支持多族谱隔离、母系、正式配偶关系、多次婚配、过继/嗣继、房支、失考或关系主线选择。详见 [D-002](DECISIONS.md#d-002--多族谱隔离) 至 [D-007](DECISIONS.md#d-007--重建范围与架构尺度)。
 
 ## Target：已确认目标架构
 
@@ -41,6 +44,7 @@
 ### Target：图、排版与输出边界
 
 - **交互式世系图**：面对查询投影，支持逐代展开/折叠、搜索定位、路径高亮和大规模按需渲染。
+- **人物管理入口**：按 [D-011](DECISIONS.md#d-011--成员树优先的操作体验) 逐步接入成员树的右键、双击和工具栏；现有目标模型列表为过渡验证界面。
 - **传统吊线图**：独立布局引擎、独立页面切分；其地域谱式和复杂关系图例仍为 Proposed，见 [D-008](DECISIONS.md#d-008--传统吊线图细则)。
 - **打印/PDF/图片**：共享“布局结果 → 页面模型”的中间层；各输出器只负责渲染，不能各自重新解释谱系关系。
 

@@ -30,6 +30,14 @@ public sealed class PersonRelationshipValidator
         if (subject.GenealogyId != relationship.GenealogyId)
             throw new InvalidOperationException("关系主体必须属于指定族谱。");
 
+        var isDuplicate = await _context.PersonRelationships.AnyAsync(r =>
+            r.GenealogyId == relationship.GenealogyId &&
+            r.PersonId == relationship.PersonId &&
+            r.RelatedPersonId == relationship.RelatedPersonId &&
+            r.Kind == relationship.Kind, cancellationToken);
+        if (isDuplicate)
+            throw new InvalidOperationException("相同关系已经存在。");
+
         if (relationship.Kind == PersonRelationshipKind.LostAncestry)
         {
             if (relationship.RelatedPersonId != null)
@@ -47,14 +55,6 @@ public sealed class PersonRelationshipValidator
             ?? throw new InvalidOperationException("关系对方不存在。");
         if (related.GenealogyId != relationship.GenealogyId)
             throw new InvalidOperationException("关系不能跨族谱。");
-
-        var isDuplicate = await _context.PersonRelationships.AnyAsync(r =>
-            r.GenealogyId == relationship.GenealogyId &&
-            r.PersonId == relationship.PersonId &&
-            r.RelatedPersonId == relationship.RelatedPersonId &&
-            r.Kind == relationship.Kind, cancellationToken);
-        if (isDuplicate)
-            throw new InvalidOperationException("相同关系已经存在。");
 
         if (ParentKinds.Contains(relationship.Kind) &&
             await HasAncestorAsync(relatedPersonId, relationship.PersonId, relationship.GenealogyId, cancellationToken))

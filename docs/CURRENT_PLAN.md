@@ -18,22 +18,22 @@
 - **Goal：** 让目标模型的结构演进可由 EF Core 工具重复验证，并确保批量人物/关系写入具备明确事务边界。
 - **Scope：** Migration model snapshot、设计时 DbContext、本地 EF 工具、模型一致性检查、事务提交/回滚和关键关系完整性测试；不切换 WPF UI。
 - **Completed：** 已新增 `ZupuDbContextFactory`、`ZupuDbContextModelSnapshot` 和固定版本的本地 `dotnet-ef` 工具；已新增同谱人物/关系批量写入事务，关系校验失败时回滚该批次暂存人物；已覆盖失考合法、重复关系拒绝、事务提交/回滚。
-- **Remaining：** 迁移升级前备份、导入事务、恢复事务和首个 WPF CRUD 用例仍属后续 P0 工作。
+- **Remaining：** 完整备份恢复、导入事务和后续 WPF CRUD 用例仍属 P0 工作；迁移前数据库快照及首个族谱用例进展见下方 P0。
 - **Acceptance Criteria：** EF 工具在不访问用户数据库的情况下可识别迁移并确认当前模型无待迁移差异；关键关系写入的成功与失败路径均有隔离 SQLite 测试；不改变现有 WPF UI。
 - **Validation：** Release build 成功（0 error）；日常测试 10/10 通过，Performance 样本 1/1 通过；`dotnet tool run dotnet-ef migrations has-pending-model-changes ... --configuration Release --no-build` 报告无模型差异。
 - **Blockers：** 无。ImageSharp 安全告警与 UI/备份/导入工作不在本任务范围。
-- **Next Action：** 等待用户确认后，限定首个 WPF CRUD 切换用例的范围和验收标准；不得在未经明确授权前修改 WPF 绑定或导航。
+- **Next Action：** 首个族谱创建及会话切换用例已进入 P0，后续状态见下方 P0。
 
 ## P0 — 开发基础与数据模型
 
 - **Goal：** 建立可安全演进、可测试的多族谱领域与本地持久化基础。
 - **Scope：** Windows 原生构建验证；开发规范与接力机制；新族谱数据模型；多族谱隔离；人物、亲属、婚姻、继嗣及房支模型；EF Core Migration；完整性校验；基础备份恢复；自动化测试基础。
-- **Completed：** 本仓库已具备 WPF/EF Core/SQLite 原型；已建立开发协议、决策、架构、计划与接力档案及 P0-0 工程基线。已新增 `Genealogy`、`Person`、`PersonRelationship`、`FamilyUnion`、`FamilyBranch` 目标模型，按 `GenealogyId` 复合外键隔离；已新增首个 EF Core Migration、关系校验服务和 xUnit 测试工程；启动路径改为 `MigrateAsync`。旧 `FamilyMember` 保留仅为现有 WPF 原型兼容。
-- **Remaining：** 将 WPF CRUD 切换到目标模型；加入迁移升级前备份、导入/恢复事务和更多完整性测试。
+- **Completed：** 本仓库已具备 WPF/EF Core/SQLite 原型；已建立开发协议、决策、架构、计划与接力档案及 P0-0 工程基线。已新增目标模型、复合外键隔离、首个 Migration、关系校验与测试；批量关系校验涵盖同批次和已有关系构成的循环及重复失考。新增按单谱读取人物、关系、婚配和房支的不可变原始数据快照及目标人物只读关系清单，不选择展示主线。WPF 已接入目标族谱创建、会话内切换、按谱人物列表、姓名及基础档案编辑、无关系人物确认删除，以及生物子女新增、已有子女关联、列表和生物父母关系确认解除；旧 `FamilyMember` 功能独立保留。已有数据库有待执行迁移时，先生成并校验 SQLite 数据库快照；新版本实例持有数据目录独占锁。
+- **Remaining：** 将 WPF CRUD 切换到目标模型；完整备份包、恢复、导入/恢复事务和更多完整性测试。
 - **Acceptance Criteria：** 两套族谱能在同一库安全隔离；关系模型可保留原始谱载与主线投影；非法跨谱/循环关系被拒绝；迁移、备份恢复和关键校验有自动化测试。
-- **Validation：** Windows restore 与 Release build 已成功；日常 10 项 xUnit 测试和 1 项 Performance 样本通过，包括隔离 SQLite Migration/关系/事务测试与布局样本测试；EF 快照无待迁移模型差异。远端 CI、UI 与真实性能基准未执行。
+- **Validation：** 2026-10-27 Windows SDK 10.0.403；隔离输出目录 Release 日常测试 57/57 通过，覆盖双击编辑使用的目标识别、同名、跨谱、无效输入和数据库失败时的原子性；用户确认双击编辑的同名目标识别、姓名与基础档案保存、空姓名提示、取消及切谱隔离人工验收通过。用户此前确认右键新增子女等功能人工验收通过。快照并发读取、性能、远端 CI 和启动失败提示未验证。依赖存在已知 ImageSharp 漏洞警告。
 - **Blockers：** 吊线图规则不阻塞 P0；目标实体的字段级方案可在 Accepted 决策范围内自主设计。
-- **Next Action：** 用户明确确认首个 WPF CRUD 切换用例后，以小范围方式将该用例接入目标模型，并补齐对应验收测试。
+- **Next Action：** 为目标关系清单提供明确标识的快捷编辑及新增生物子女入口，复用已验收的目标人物操作并覆盖未选择、重名及切谱隔离；保留旧版工具栏的独立语义。
 
 ## P1 — 完整族谱管理
 
