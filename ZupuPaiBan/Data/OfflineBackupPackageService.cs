@@ -62,7 +62,13 @@ public static class OfflineBackupPackageService
     public static async Task<OfflineBackupManifest> ValidateAsync(string packagePath, CancellationToken cancellationToken = default)
     {
         await using var stream = new FileStream(packagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+        return await ValidateStreamAsync(stream, cancellationToken);
+    }
+
+    internal static async Task<OfflineBackupManifest> ValidateStreamAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        stream.Position = 0;
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
         if (archive.Entries.Count != 2 || archive.Entries.Count(e => e.FullName == ManifestEntry) != 1 ||
             archive.Entries.Count(e => e.FullName == DatabaseEntry) != 1)
             throw new InvalidDataException("备份包内容不符合版本 1 格式。");
@@ -82,7 +88,18 @@ public static class OfflineBackupPackageService
             db.Length != manifest.DatabaseBytes || manifest.DatabaseSha256?.Length != 64)
             throw new InvalidDataException("备份清单的版本、范围或数据库元数据无效。");
         await using var dbStream = db.Open();
-        var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(dbStream, cancellationToken));
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        long readBytes = 0;
+        int read;
+        while ((read = await dbStream.ReadAsync(buffer, cancellationToken)) != 0)
+        {
+            readBytes += read;
+            if (readBytes > manifest.DatabaseBytes) throw new InvalidDataException("数据库快照超出清单大小。");
+            hash.AppendData(buffer, 0, read);
+        }
+        if (readBytes != manifest.DatabaseBytes) throw new InvalidDataException("数据库快照大小与清单不一致。");
+        var actualHash = Convert.ToHexString(hash.GetHashAndReset());
         if (!string.Equals(actualHash, manifest.DatabaseSha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("数据库快照校验和不匹配。");
         return manifest;
