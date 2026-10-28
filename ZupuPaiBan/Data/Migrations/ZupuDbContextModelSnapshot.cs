@@ -175,6 +175,43 @@ namespace ZupuPaiBan.Data.Migrations
                     b.ToTable("Genealogies", (string)null);
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.GenealogyImportRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("GenealogyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ImportedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceDocumentFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SourceFormatVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("SourceGenealogyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GenealogyId", "ImportedAt");
+
+                    b.HasIndex("SourceKind", "SourceFormatVersion", "SourceGenealogyId");
+
+                    b.ToTable("GenealogyImportRecords", (string)null);
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.Person", b =>
                 {
                     b.Property<Guid>("Id")
@@ -340,6 +377,17 @@ namespace ZupuPaiBan.Data.Migrations
                     b.Navigation("PartnerTwo");
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.GenealogyImportRecord", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.Genealogy", "Genealogy")
+                        .WithMany("ImportRecords")
+                        .HasForeignKey("GenealogyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Genealogy");
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.Person", b =>
                 {
                     b.HasOne("ZupuPaiBan.Models.Genealogy", "Genealogy")
@@ -400,6 +448,8 @@ namespace ZupuPaiBan.Data.Migrations
             modelBuilder.Entity("ZupuPaiBan.Models.Genealogy", b =>
                 {
                     b.Navigation("Branches");
+
+                    b.Navigation("ImportRecords");
 
                     b.Navigation("People");
                 });

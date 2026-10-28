@@ -14,6 +14,7 @@ public class ZupuDbContext : DbContext
     public DbSet<PersonRelationship> PersonRelationships => Set<PersonRelationship>();
     public DbSet<FamilyUnion> FamilyUnions => Set<FamilyUnion>();
     public DbSet<FamilyBranch> FamilyBranches => Set<FamilyBranch>();
+    public DbSet<GenealogyImportRecord> GenealogyImportRecords => Set<GenealogyImportRecord>();
 
     private readonly string _dbPath;
     private readonly Action<bool>? _onDispose;
@@ -106,6 +107,18 @@ public class ZupuDbContext : DbContext
                 .HasForeignKey(e => new { e.ParentBranchId, e.GenealogyId })
                 .HasPrincipalKey(b => new { b.Id, b.GenealogyId })
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<GenealogyImportRecord>(entity =>
+        {
+            entity.ToTable("GenealogyImportRecords");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SourceKind).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.SourceDocumentFingerprint).IsRequired().HasMaxLength(64);
+            entity.HasIndex(e => new { e.GenealogyId, e.ImportedAt });
+            entity.HasIndex(e => new { e.SourceKind, e.SourceFormatVersion, e.SourceGenealogyId });
+            entity.HasOne(e => e.Genealogy).WithMany(g => g.ImportRecords)
+                .HasForeignKey(e => e.GenealogyId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Person>(entity =>

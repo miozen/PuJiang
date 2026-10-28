@@ -1,4 +1,5 @@
 using System.IO;
+using System.Security.Cryptography;
 using System.Text.Json;
 using ZupuPaiBan.Models;
 
@@ -34,6 +35,13 @@ public static class GenealogyExchangeService
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return new(CurrentFormatVersion, snapshot.Genealogy, snapshot.People, snapshot.Relationships, snapshot.Unions, snapshot.Branches);
+    }
+
+    /// <summary>Returns a stable SHA-256 identity for the semantic v1 document, independent of its local file path.</summary>
+    public static string ComputeDocumentFingerprint(GenealogyExchangeDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions)));
     }
 
     public static async Task WriteAsync(GenealogyGraphSnapshot snapshot, string path, CancellationToken cancellationToken = default)

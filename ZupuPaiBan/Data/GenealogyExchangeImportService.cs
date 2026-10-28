@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using System.IO;
+using ZupuPaiBan.Models;
 
 namespace ZupuPaiBan.Data;
 
@@ -30,7 +31,8 @@ public sealed record GenealogyExchangeImportPreflightResult(
     GenealogyExchangeDocument? Document,
     GenealogyExchangeImportPreflightReport Report);
 
-public sealed record GenealogyExchangeImportResult(bool Imported, GenealogyExchangeImportPreflightReport Report);
+public sealed record GenealogyExchangeImportResult(bool Imported, GenealogyExchangeImportPreflightReport Report,
+    Guid? ImportRecordId);
 
 /// <summary>
 /// Insert-only persistence for the internal exchange format. Clone/remap import and conflict merging are deliberately unsupported.
@@ -104,12 +106,20 @@ public sealed class GenealogyExchangeImportService
         GenealogyExchangeImportPreflightResult preflight, CancellationToken cancellationToken)
     {
         if (!preflight.Report.CanImport || preflight.Document is null)
-            return new(false, preflight.Report);
+            return new(false, preflight.Report, null);
 
         var target = GenealogyExchangeService.MapToTarget(preflight.Document);
-        await _data.AddGenealogyAndGraphRecordsAsync(target.Genealogy, target.Branches, target.People,
+        var importRecord = new GenealogyImportRecord
+        {
+            GenealogyId = target.Genealogy.Id,
+            SourceKind = "PuJiang.InternalJson",
+            SourceFormatVersion = preflight.Document.FormatVersion,
+            SourceGenealogyId = preflight.Document.Genealogy.Id,
+            SourceDocumentFingerprint = GenealogyExchangeService.ComputeDocumentFingerprint(preflight.Document)
+        };
+        await _data.AddGenealogyAndGraphRecordsAsync(target.Genealogy, importRecord, target.Branches, target.People,
             target.Relationships, target.Unions, cancellationToken);
-        return new(true, preflight.Report);
+        return new(true, preflight.Report, importRecord.Id);
     }
 
     private static async Task AddExistingIdIssueAsync<TEntity>(

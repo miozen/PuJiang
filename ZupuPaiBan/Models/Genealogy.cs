@@ -11,4 +11,5 @@ public class Genealogy
 
     public List<Person> People { get; set; } = new();
     public List<FamilyBranch> Branches { get; set; } = new();
+    public List<GenealogyImportRecord> ImportRecords { get; set; } = new();
 }

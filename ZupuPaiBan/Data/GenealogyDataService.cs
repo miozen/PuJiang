@@ -14,6 +14,15 @@ public sealed class GenealogyDataService
     public Task<List<Genealogy>> GetGenealogiesAsync(CancellationToken cancellationToken = default) =>
         _context.Genealogies.AsNoTracking().OrderBy(g => g.Name).ToListAsync(cancellationToken);
 
+    /// <summary>Reads immutable import provenance for one genealogy without exposing other genealogies' history.</summary>
+    public async Task<List<GenealogyImportRecord>> GetImportRecordsAsync(Guid genealogyId, CancellationToken cancellationToken = default)
+    {
+        var records = await _context.GenealogyImportRecords.AsNoTracking()
+            .Where(record => record.GenealogyId == genealogyId).ToListAsync(cancellationToken);
+        // SQLite cannot translate DateTimeOffset ordering; preserve chronological API semantics after the scoped query.
+        return records.OrderBy(record => record.ImportedAt).ThenBy(record => record.Id).ToList();
+    }
+
     public async Task<GenealogyGraphSnapshot> GetGraphSnapshotAsync(Guid genealogyId, CancellationToken cancellationToken = default)
     {
         await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
@@ -230,6 +239,7 @@ public sealed class GenealogyDataService
     /// </summary>
     public async Task AddGenealogyAndGraphRecordsAsync(
         Genealogy genealogy,
+        GenealogyImportRecord importRecord,
         IReadOnlyCollection<FamilyBranch> branches,
         IReadOnlyCollection<Person> people,
         IReadOnlyCollection<PersonRelationship> relationships,
@@ -237,12 +247,14 @@ public sealed class GenealogyDataService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(genealogy);
+        ArgumentNullException.ThrowIfNull(importRecord);
         ArgumentNullException.ThrowIfNull(branches);
         ArgumentNullException.ThrowIfNull(people);
         ArgumentNullException.ThrowIfNull(relationships);
         ArgumentNullException.ThrowIfNull(unions);
 
         await ValidateNewGenealogyAsync(genealogy, cancellationToken);
+        ValidateImportRecord(genealogy.Id, importRecord);
         await ValidateGraphRecordShapeAsync(genealogy.Id, branches, people, relationships, unions, cancellationToken,
             requireExistingGenealogy: false);
 
@@ -250,6 +262,8 @@ public sealed class GenealogyDataService
         try
         {
             _context.Genealogies.Add(genealogy);
+            await _context.SaveChangesAsync(cancellationToken);
+            _context.GenealogyImportRecords.Add(importRecord);
             await _context.SaveChangesAsync(cancellationToken);
             await PersistGraphRecordsAsync(branches, people, relationships, unions, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -259,6 +273,8 @@ public sealed class GenealogyDataService
             await transaction.RollbackAsync(CancellationToken.None);
             if (_context.Entry(genealogy).State != EntityState.Detached)
                 _context.Entry(genealogy).State = EntityState.Detached;
+            if (_context.Entry(importRecord).State != EntityState.Detached)
+                _context.Entry(importRecord).State = EntityState.Detached;
             DetachGraphEntries(branches, people, relationships, unions);
             throw;
         }
@@ -333,6 +349,16 @@ public sealed class GenealogyDataService
         if (await _context.Genealogies.AnyAsync(item => item.Id == genealogy.Id, cancellationToken))
             throw new InvalidOperationException("族谱 ID 已存在，拒绝覆盖已有族谱。");
         genealogy.Name = normalizedName;
+    }
+
+    private static void ValidateImportRecord(Guid genealogyId, GenealogyImportRecord importRecord)
+    {
+        if (importRecord.Id == Guid.Empty || importRecord.GenealogyId != genealogyId ||
+            string.IsNullOrWhiteSpace(importRecord.SourceKind) || importRecord.SourceKind.Length > 64 ||
+            importRecord.SourceFormatVersion <= 0 || importRecord.SourceGenealogyId == Guid.Empty ||
+            importRecord.SourceDocumentFingerprint.Length != 64 ||
+            !importRecord.SourceDocumentFingerprint.All(Uri.IsHexDigit))
+            throw new InvalidOperationException("导入来源记录无效。");
     }
 
     private async Task PersistGraphRecordsAsync(

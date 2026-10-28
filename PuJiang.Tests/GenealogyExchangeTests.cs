@@ -86,6 +86,7 @@ public class GenealogyExchangeTests
 
         Assert.True(result.Imported);
         Assert.True(result.Report.CanImport);
+        Assert.NotNull(result.ImportRecordId);
         Assert.Contains("预检通过", result.Report.ToDisplayText());
         await using var verify = database.CreateContext();
         Assert.Equal(document.Genealogy.Id, (await verify.Genealogies.SingleAsync()).Id);
@@ -93,6 +94,13 @@ public class GenealogyExchangeTests
         Assert.Equal(document.Relationships.Count, await verify.PersonRelationships.CountAsync());
         Assert.Equal(document.Unions.Count, await verify.FamilyUnions.CountAsync());
         Assert.Equal(document.Branches.Count, await verify.FamilyBranches.CountAsync());
+        var provenance = Assert.Single(await new GenealogyDataService(verify).GetImportRecordsAsync(document.Genealogy.Id));
+        Assert.Equal(result.ImportRecordId, provenance.Id);
+        Assert.Equal(document.Genealogy.Id, provenance.GenealogyId);
+        Assert.Equal("PuJiang.InternalJson", provenance.SourceKind);
+        Assert.Equal(document.FormatVersion, provenance.SourceFormatVersion);
+        Assert.Equal(document.Genealogy.Id, provenance.SourceGenealogyId);
+        Assert.Equal(GenealogyExchangeService.ComputeDocumentFingerprint(document), provenance.SourceDocumentFingerprint);
     }
 
     [Fact]
@@ -120,6 +128,7 @@ public class GenealogyExchangeTests
         await using var verify = database.CreateContext();
         Assert.Single(await verify.Genealogies.ToListAsync());
         Assert.Empty(await verify.People.ToListAsync());
+        Assert.Empty(await verify.GenealogyImportRecords.ToListAsync());
     }
 
     [Fact]
@@ -139,6 +148,7 @@ public class GenealogyExchangeTests
         await using var verify = database.CreateContext();
         Assert.Equal(2, await verify.Genealogies.CountAsync(item => item.Name == document.Genealogy.Name));
         Assert.Equal(document.People.Count, await verify.People.CountAsync());
+        Assert.Single(await verify.GenealogyImportRecords.ToListAsync());
     }
 
     [Fact]
@@ -161,6 +171,7 @@ public class GenealogyExchangeTests
         Assert.Contains("预检拒绝：未写入任何数据", result.Report.ToDisplayText());
         await using var verify = database.CreateContext();
         Assert.Empty(await verify.Genealogies.ToListAsync());
+        Assert.Empty(await verify.GenealogyImportRecords.ToListAsync());
     }
 
     [Fact]
@@ -185,6 +196,7 @@ public class GenealogyExchangeTests
         Assert.Empty(await verify.People.ToListAsync());
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
         Assert.Empty(await verify.FamilyUnions.ToListAsync());
+        Assert.Empty(await verify.GenealogyImportRecords.ToListAsync());
     }
 
     private static GenealogyExchangeDocument CreateValidDocument()
