@@ -19,6 +19,8 @@ public partial class PreviewViewModel : ObservableObject
     private readonly PrintService _printService;
     internal Func<Microsoft.Win32.SaveFileDialog>? PdfSaveDialogFactory { get; set; }
     internal Func<LayoutResult, LayoutSettings, string, bool>? PdfExportOverride { get; set; }
+    internal Func<Microsoft.Win32.SaveFileDialog>? XpsSaveDialogFactory { get; set; }
+    internal Func<List<FixedPage>, string, bool>? XpsExportOverride { get; set; }
     private readonly SettingsService _settingsService = new();
     private List<FixedPage> _pages = new();
     private LayoutResult _lastLayoutResult = new();
@@ -228,7 +230,7 @@ public partial class PreviewViewModel : ObservableObject
         if (operation is null) return;
         if (_pages.Count == 0) return;
 
-        var dialog = new Microsoft.Win32.SaveFileDialog
+        var dialog = XpsSaveDialogFactory?.Invoke() ?? new Microsoft.Win32.SaveFileDialog
         {
             Title = "导出为 XPS",
             Filter = "XPS 文件|*.xps",
@@ -237,7 +239,7 @@ public partial class PreviewViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true)
         {
-            var result = _printService.ExportToXps(_pages, dialog.FileName);
+            var result = (XpsExportOverride ?? _printService.ExportToXps)(_pages, dialog.FileName);
             StatusText = result ? $"已导出到: {dialog.FileName}" : "导出失败";
         }
     }

@@ -5,6 +5,7 @@ using System.Windows.Documents;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Xps.Packaging;
 using ZupuPaiBan.Models;
 
 namespace ZupuPaiBan.Services;
@@ -32,15 +33,18 @@ public class PrintService
 
     public bool ExportToXps(List<FixedPage> pages, string filePath)
     {
+        string? temporaryPath = null;
         try
         {
-            var localPrintServer = new LocalPrintServer();
-            var queue = localPrintServer.GetPrintQueue("Microsoft XPS Document Writer");
-            if (queue == null)
-            {
-                queue = LocalPrintServer.GetDefaultPrintQueue();
-            }
-            var writer = PrintQueue.CreateXpsDocumentWriter(queue);
+            if (string.IsNullOrWhiteSpace(filePath)) return false;
+
+            var targetPath = System.IO.Path.GetFullPath(filePath);
+            var directory = System.IO.Path.GetDirectoryName(targetPath);
+            if (string.IsNullOrWhiteSpace(directory) || !System.IO.Directory.Exists(directory)) return false;
+
+            temporaryPath = System.IO.Path.Combine(
+                directory,
+                $".{System.IO.Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
             var doc = new FixedDocument();
             foreach (var page in pages)
             {
@@ -48,12 +52,25 @@ public class PrintService
                 ((IAddChild)pageContent).AddChild(page);
                 doc.Pages.Add(pageContent);
             }
-            writer.Write(doc);
+
+            using (var xpsDocument = new XpsDocument(temporaryPath, System.IO.FileAccess.Write))
+            {
+                var writer = XpsDocument.CreateXpsDocumentWriter(xpsDocument);
+                writer.Write(doc);
+            }
+
+            System.IO.File.Move(temporaryPath, targetPath, overwrite: true);
+            temporaryPath = null;
             return true;
         }
         catch
         {
             return false;
+        }
+        finally
+        {
+            if (temporaryPath is not null && System.IO.File.Exists(temporaryPath))
+                System.IO.File.Delete(temporaryPath);
         }
     }
 
@@ -134,7 +151,7 @@ public class PrintService
         double availableHeight = settings.PageHeight - 100; // 留出页脚空间
         double contentWidth = nodes.Count > 0 ? nodes.Max(n => n.X + n.Width + (n.SpouseNode?.Width ?? 0) + 20) : settings.PageWidth;
         double contentHeight = nodes.Count > 0 ? nodes.Max(n => n.Y + n.Height) : settings.PageHeight;
-        
+
         double scaleX = availableWidth / Math.Max(contentWidth, 1);
         double scaleY = availableHeight / Math.Max(contentHeight - 60, 1);
         double scale = Math.Min(Math.Min(scaleX, scaleY), 1.0);

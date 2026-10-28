@@ -42,6 +42,8 @@ public class WpfLifecycleTests
     [InlineData("preview-pdf-cancel")]
     [InlineData("preview-pdf-save")]
     [InlineData("preview-xps-cancel")]
+    [InlineData("preview-xps-save")]
+    [InlineData("preview-xps-error")]
     [InlineData("backup-validate")]
     [InlineData("backup-preflight")]
     [InlineData("cancel")]
