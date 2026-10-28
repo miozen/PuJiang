@@ -6,13 +6,13 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 2026-10-28 已将打印取消检查点 `6aec96e41a131bbe37d43a02c63af59429d5cbda` 推送至 `origin/dev` 并实测远端包含该提交；后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较，不能依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** 打印对话框取消与退出协调验证，已完成并推送检查点。
-- **Last Completed：** 打印隔离测试改用中文/英文标题及标准 Windows 对话框类识别真实打印框；在其打开时请求正常退出，验证排空等待、锁保持与新操作拒绝后仅发送关闭消息取消。未点击打印确认、未创建或提交打印任务。生产恢复未接入。
-- **Uncommitted Work：** 打印取消检查点包含 `PuJiang.Tests/WpfAppExitWorker.cs`、`PuJiang.Tests/WpfLifecycleTests.cs` 及相应计划、架构和接力文档；提交后应为空，以 `git status --short` 为准。
-- **Validation Performed：** Windows 原生 .NET 测试使用独立 `artifacts/print-dialog-*` 输出目录。打印取消退出专项 1/1 通过；日常测试 `Category!=Performance&Category!=UI` 为 114/114 通过。未访问正式用户数据库或提交打印任务。存在既有 ImageSharp 1.0.4 高、中危告警。
+- **Current Task：** PDF 导出失败与退出协调验证，已完成，待提交同步检查点。
+- **Last Completed：** PDF 隔离测试在真实保存框确认后注入失败结果，验证未生成输出文件、失败状态更新，以及保存框期间正常退出的排空、锁保持与新操作拒绝。生产恢复未接入。
+- **Uncommitted Work：** `PuJiang.Tests/WpfAppExitWorker.cs`、`PuJiang.Tests/WpfLifecycleTests.cs` 及相应架构和接力文档；以 `git status --short` 为准。
+- **Validation Performed：** Windows 原生 .NET 测试使用独立 `artifacts/pdf-failure-*` 输出目录。PDF 失败退出专项 1/1 通过；日常测试 `Category!=Performance&Category!=UI` 为 114/114 通过。未访问正式用户数据库。存在既有 ImageSharp 1.0.4 高、中危告警。
 - **Validation Pending：** 实际打印任务、真实文件系统中途失败、PDF 故障中途、导入文件实际解析/提交和历史 UI 间歇超时；`Application.Shutdown`、系统关机、强制终止、外部写入、真实 WAL 收敛和崩溃边界；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
 - **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；旧导入缺少预检和事务。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 核对远端 `dev` 已包含当前检查点和工作区干净后，等待用户指定下一项 P0 工作；继续保持生产恢复关闭。
+- **Exact Next Action：** 核对最终 diff、测试输出与远端 `dev` 后，提交并推送 PDF 失败协调检查点；继续保持生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力

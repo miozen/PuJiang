@@ -41,6 +41,7 @@ public class WpfLifecycleTests
     [InlineData("complete-collaboration-error")]
     [InlineData("preview-pdf-cancel")]
     [InlineData("preview-pdf-save")]
+    [InlineData("preview-pdf-error")]
     [InlineData("preview-xps-cancel")]
     [InlineData("preview-xps-save")]
     [InlineData("preview-xps-error")]

@@ -23,6 +23,7 @@ internal static class WpfAppExitWorker
     private static bool _exportMessageObserved;
     private static bool _exportStatusObserved;
     private static bool _xpsFailureStatusObserved;
+    private static bool _pdfFailureStatusObserved;
     private static bool _modalExitObserved;
     private static Exception? _modalExitFailure;
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
@@ -77,7 +78,7 @@ internal static class WpfAppExitWorker
                     if (_nativeExportFailure is not null) throw _nativeExportFailure;
                     if (!_nativeExportObserved) throw new InvalidOperationException("未验证原生导出对话框竞争。");
                 }
-        if (scenario is "preview-pdf-cancel" or "preview-pdf-save" or "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" or "preview-print-cancel")
+        if (scenario is "preview-pdf-cancel" or "preview-pdf-save" or "preview-pdf-error" or "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" or "preview-print-cancel")
                 {
                     if (_nativeExportFailure is not null) throw _nativeExportFailure;
                     if (!_nativeExportObserved) throw new InvalidOperationException("未观察到预览输出对话框退出竞争。");
@@ -86,6 +87,12 @@ internal static class WpfAppExitWorker
                         var output = Path.Combine(root, "preview.pdf");
                         if (!File.Exists(output) || !File.ReadAllBytes(output).AsSpan().StartsWith("%PDF"u8))
                             throw new InvalidOperationException("未成功写入测试 PDF。");
+                    }
+                    if (scenario == "preview-pdf-error")
+                    {
+                        var output = Path.Combine(root, "preview.pdf");
+                        if (File.Exists(output) || !_pdfFailureStatusObserved)
+                            throw new InvalidOperationException("PDF 写入失败时未保留失败状态或意外生成文件。");
                     }
                     if (scenario == "preview-xps-save")
                     {
@@ -259,7 +266,7 @@ internal static class WpfAppExitWorker
             return;
         }
 
-                if (scenario is "preview-pdf-cancel" or "preview-pdf-save" or "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" or "preview-print-cancel")
+        if (scenario is "preview-pdf-cancel" or "preview-pdf-save" or "preview-pdf-error" or "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" or "preview-print-cancel")
         {
             var data = new DataService(coordinator);
             await data.AddMemberAsync(new FamilyMember { Name = "虚构人物" });
@@ -270,6 +277,14 @@ internal static class WpfAppExitWorker
             main.Closed += (_, _) => { if (!childClosed) throw new InvalidOperationException("主窗口关闭时预览仍未关闭。"); };
             preview.Show();
             var viewModel = (PreviewViewModel)preview.DataContext;
+            if (scenario == "preview-pdf-error")
+            {
+                viewModel.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(PreviewViewModel.StatusText) && viewModel.StatusText == "导出 PDF 失败")
+                        _pdfFailureStatusObserved = true;
+                };
+            }
             if (scenario == "preview-xps-error")
             {
                 viewModel.PropertyChanged += (_, e) =>
@@ -278,7 +293,7 @@ internal static class WpfAppExitWorker
                         _xpsFailureStatusObserved = true;
                 };
             }
-            if (scenario == "preview-pdf-save")
+            if (scenario is "preview-pdf-save" or "preview-pdf-error")
             {
                 var path = Path.Combine(root, "preview.pdf");
                 viewModel.PdfSaveDialogFactory = () => new Microsoft.Win32.SaveFileDialog
@@ -287,7 +302,7 @@ internal static class WpfAppExitWorker
                 {
                     if (!string.Equals(Path.GetFullPath(output), path, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("PDF 目标不是指定的隔离测试路径。");
-                    return new PdfExportService().ExportToPdf(layout, settings, output);
+                    return scenario != "preview-pdf-error" && new PdfExportService().ExportToPdf(layout, settings, output);
                 };
             }
             if (scenario is "preview-xps-save" or "preview-xps-error")
@@ -314,7 +329,7 @@ internal static class WpfAppExitWorker
             {
                 var dialog = scenario switch
                 {
-                    "preview-pdf-cancel" or "preview-pdf-save" => FindOwnDialog("导出为 PDF"),
+                    "preview-pdf-cancel" or "preview-pdf-save" or "preview-pdf-error" => FindOwnDialog("导出为 PDF"),
                     "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" => FindOwnDialog("导出为 XPS"),
                     _ => FindOwnPrintDialog()
                 };
@@ -335,7 +350,7 @@ internal static class WpfAppExitWorker
                 }
                 if (lastPost.Elapsed >= TimeSpan.FromMilliseconds(500))
                 {
-                    var accept = scenario is "preview-pdf-save" or "preview-xps-save" or "preview-xps-error";
+                    var accept = scenario is "preview-pdf-save" or "preview-pdf-error" or "preview-xps-save" or "preview-xps-error";
                     var message = accept ? 0x0111u : 0x0010u;
                     if (!PostMessage(dialog, message, accept ? (IntPtr)1 : IntPtr.Zero, IntPtr.Zero))
                         _nativeExportFailure ??= new InvalidOperationException("无法取消测试输出对话框。");
@@ -348,7 +363,7 @@ internal static class WpfAppExitWorker
                 try
                 {
                     Console.WriteLine($"Opening preview output: {scenario}");
-                    if (scenario is "preview-pdf-cancel" or "preview-pdf-save") await viewModel.ExportPdfCommand.ExecuteAsync(null);
+                    if (scenario is "preview-pdf-cancel" or "preview-pdf-save" or "preview-pdf-error") await viewModel.ExportPdfCommand.ExecuteAsync(null);
                     else if (scenario is "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error") viewModel.ExportXpsCommand.Execute(null);
                     else viewModel.PrintCommand.Execute(null);
                 }
