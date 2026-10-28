@@ -4,9 +4,9 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；当前检查点为 `fix(p0): export XPS to selected file`。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 推送前实测远端 `dev` 为 `fbba03c761e08baaa24616115b98262667639c25`；推送后必须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 再次比较，不能依赖旧跟踪引用。
+- **Remote Sync：** 2026-10-28 已将 XPS 检查点 `ad750f080929eacf3ec60a1e542307102beb325e` 推送至 `origin/dev` 并实测远端包含该提交；后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较，不能依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** XPS 文件输出安全修复与退出协调验证，已完成并待同步检查点。
+- **Current Task：** XPS 文件输出安全修复与退出协调验证，已完成并推送检查点。
 - **Last Completed：** `ExportToXps` 改为用 `XpsDocument` 写入所选目录的临时文件，成功关闭后才替换目标文件；不再查询或调用打印队列。隔离进程验证 XPS 原生保存对话框取消、确认真实写入、模拟失败，以及三者与正常退出的竞争；生产恢复未接入。
 - **Uncommitted Work：** 本检查点包含 `ZupuPaiBan/Services/PrintService.cs`、`ZupuPaiBan/ViewModels/PreviewViewModel.cs`、`PuJiang.Tests/WpfAppExitWorker.cs`、`PuJiang.Tests/WpfLifecycleTests.cs` 及相应计划、架构和接力文档；提交后应为空，以 `git status --short` 为准。
 - **Validation Performed：** Windows 原生 .NET 测试使用独立 `artifacts/xps-verification` 输出目录。XPS 专项 3/3 通过（取消、确认真实 `.xps` 写入、模拟失败，均覆盖正常退出竞争）；日常测试 `Category!=Performance&Category!=UI` 为 114/114 通过。未访问正式用户数据库。存在既有 ImageSharp 1.0.4 高、中危告警。
