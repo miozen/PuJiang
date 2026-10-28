@@ -59,7 +59,7 @@ public class WpfLifecycleTests
     public async Task Application_exit_retains_lock_until_safe_or_fails_closed(string scenario)
         => await RunWorkerAsync("--wpf-app-exit", scenario);
 
-    [Fact(Skip = "本机隔离进程的打印对话框未能识别，需在可交互 Windows 打印环境专项验证；不得提交打印任务。")]
+    [Fact]
     [Trait("Category", "UI")]
     public async Task Print_dialog_cancel_and_exit_race_requires_interactive_print_environment()
         => await RunWorkerAsync("--wpf-app-exit", "preview-print-cancel");

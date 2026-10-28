@@ -30,6 +30,8 @@ internal static class WpfAppExitWorker
     private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int length);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr window, System.Text.StringBuilder className, int maxCount);
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")]
@@ -314,7 +316,7 @@ internal static class WpfAppExitWorker
                 {
                     "preview-pdf-cancel" or "preview-pdf-save" => FindOwnDialog("导出为 PDF"),
                     "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" => FindOwnDialog("导出为 XPS"),
-                    _ => FindOwnDialog("打印") is var native && native != IntPtr.Zero ? native : FindOwnDialog("Print")
+                    _ => FindOwnPrintDialog()
                 };
                 if (dialog == IntPtr.Zero) return;
                 if (!_nativeExportObserved && _nativeExportFailure is null)
@@ -802,6 +804,26 @@ internal static class WpfAppExitWorker
             var text = new System.Text.StringBuilder(512);
             GetWindowText(window, text, text.Capacity);
             if (text.ToString() != title) return true;
+            found = window;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static IntPtr FindOwnPrintDialog()
+    {
+        var titled = FindOwnDialog("打印");
+        if (titled != IntPtr.Zero) return titled;
+        titled = FindOwnDialog("Print");
+        if (titled != IntPtr.Zero) return titled;
+
+        var found = IntPtr.Zero;
+        EnumWindows((window, _) =>
+        {
+            GetWindowThreadProcessId(window, out var pid);
+            if (pid != (uint)Environment.ProcessId) return true;
+            var className = new System.Text.StringBuilder(256);
+            if (GetClassName(window, className, className.Capacity) == 0 || className.ToString() != "#32770") return true;
             found = window;
             return false;
         }, IntPtr.Zero);
