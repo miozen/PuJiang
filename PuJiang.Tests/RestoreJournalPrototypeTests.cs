@@ -6,6 +6,7 @@ using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
+[Collection("ProcessWorkerExclusive")]
 public class RestoreJournalPrototypeTests
 {
     [Theory]

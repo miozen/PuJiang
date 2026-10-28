@@ -8,10 +8,7 @@ using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
-[CollectionDefinition("RestoreProcessExclusive", DisableParallelization = true)]
-public sealed class RestoreProcessExclusiveCollection;
-
-[Collection("RestoreProcessExclusive")]
+[Collection("ProcessWorkerExclusive")]
 public class IntegratedRestoreInterruptionTests
 {
     [Theory]

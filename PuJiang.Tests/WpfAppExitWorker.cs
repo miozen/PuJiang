@@ -91,7 +91,7 @@ internal static class WpfAppExitWorker
                     if (scenario == "preview-pdf-error")
                     {
                         var output = Path.Combine(root, "preview.pdf");
-                        if (File.Exists(output) || !_pdfFailureStatusObserved)
+                        if (File.Exists(output) || Directory.EnumerateFiles(root, ".preview.pdf.*.tmp").Any() || !_pdfFailureStatusObserved)
                             throw new InvalidOperationException("PDF 写入失败时未保留失败状态或意外生成文件。");
                     }
                     if (scenario == "preview-xps-save")
@@ -103,7 +103,7 @@ internal static class WpfAppExitWorker
                     if (scenario == "preview-xps-error")
                     {
                         var output = Path.Combine(root, "preview.xps");
-                        if (File.Exists(output) || !_xpsFailureStatusObserved)
+                        if (File.Exists(output) || Directory.EnumerateFiles(root, ".preview.xps.*.tmp").Any() || !_xpsFailureStatusObserved)
                             throw new InvalidOperationException("XPS 写入失败时未保留失败状态或意外生成文件。");
                     }
                 }
@@ -270,7 +270,9 @@ internal static class WpfAppExitWorker
         {
             var data = new DataService(coordinator);
             await data.AddMemberAsync(new FamilyMember { Name = "虚构人物" });
-            var preview = new PrintPreviewWindow(data, new PrintService())
+            var printService = new PrintService();
+            if (scenario == "preview-xps-error") printService.BeforePublish = _ => throw new IOException("模拟发布失败");
+            var preview = new PrintPreviewWindow(data, printService)
             { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
             var childClosed = false;
             preview.Closed += (_, _) => childClosed = true;
@@ -312,15 +314,6 @@ internal static class WpfAppExitWorker
                 var path = Path.Combine(root, "preview.xps");
                 viewModel.XpsSaveDialogFactory = () => new Microsoft.Win32.SaveFileDialog
                 { Title = "导出为 XPS", FileName = path, Filter = "XPS 文件|*.xps", OverwritePrompt = false };
-                if (scenario == "preview-xps-error")
-                {
-                    viewModel.XpsExportOverride = (pages, output) =>
-                    {
-                        if (!string.Equals(Path.GetFullPath(output), path, StringComparison.OrdinalIgnoreCase))
-                            throw new InvalidOperationException("XPS 目标不是指定的隔离测试路径。");
-                        return false;
-                    };
-                }
             }
             await viewModel.InitializeAsync();
             Console.WriteLine($"Preview initialized: {scenario}");

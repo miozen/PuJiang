@@ -5,6 +5,7 @@ using ZupuPaiBan.Infrastructure;
 
 namespace PuJiang.Tests;
 
+[Collection("ProcessWorkerExclusive")]
 public class DataDirectoryLeaseTests
 {
     [Fact]

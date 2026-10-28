@@ -3,6 +3,7 @@ using Xunit;
 
 namespace PuJiang.Tests;
 
+[Collection("ProcessWorkerExclusive")]
 public class WpfLifecycleTests
 {
     [Fact]

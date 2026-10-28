@@ -12,6 +12,8 @@ namespace ZupuPaiBan.Services;
 
 public class PrintService
 {
+    internal Action<string>? BeforePublish { get; set; }
+
     public bool Print(List<FixedPage> pages, string description)
     {
         var dialog = new PrintDialog();
@@ -59,6 +61,7 @@ public class PrintService
                 writer.Write(doc);
             }
 
+            BeforePublish?.Invoke(temporaryPath);
             System.IO.File.Move(temporaryPath, targetPath, overwrite: true);
             temporaryPath = null;
             return true;

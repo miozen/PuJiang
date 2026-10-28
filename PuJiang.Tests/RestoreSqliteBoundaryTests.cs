@@ -8,6 +8,7 @@ using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
+[Collection("ProcessWorkerExclusive")]
 public class RestoreSqliteBoundaryTests
 {
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)
