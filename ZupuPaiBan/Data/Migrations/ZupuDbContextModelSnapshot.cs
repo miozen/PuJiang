@@ -170,8 +170,7 @@ namespace ZupuPaiBan.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Name")
-                        .IsUnique();
+                    b.HasIndex("Name");
 
                     b.ToTable("Genealogies", (string)null);
                 });

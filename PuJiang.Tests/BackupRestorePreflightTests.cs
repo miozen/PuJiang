@@ -39,7 +39,8 @@ public class BackupRestorePreflightTests
         Assert.False(result.IncludesAttachments);
         Assert.False(result.IncludesConfiguration);
         Assert.Equal(1, result.FormatVersion);
-        Assert.Equal("20261025000100_InitialPuJiang", Assert.Single(result.Migrations));
+        await using (var expected = database.CreateContext())
+            Assert.Equal(await expected.Database.GetAppliedMigrationsAsync(), result.Migrations);
         Assert.Equal(originalDb, await File.ReadAllBytesAsync(database.DatabasePath));
         Assert.Equal(originalPackage, await File.ReadAllBytesAsync(package));
         Assert.Single(Directory.GetFiles(database.BackupDirectory));

@@ -213,44 +213,53 @@ public sealed class GenealogyDataService
         await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            _context.FamilyBranches.AddRange(branches);
-            await _context.SaveChangesAsync(cancellationToken);
-            _context.People.AddRange(people);
-            await _context.SaveChangesAsync(cancellationToken);
-
-            var validator = new PersonRelationshipValidator(_context);
-            foreach (var relationship in relationships)
-            {
-                await validator.ValidateForCreateAsync(relationship, cancellationToken);
-                _context.PersonRelationships.Add(relationship);
-                await _context.SaveChangesAsync(cancellationToken);
-            }
-
-            var unionValidator = new FamilyUnionValidator(_context);
-            foreach (var union in unions)
-            {
-                await unionValidator.ValidateForCreateAsync(union, cancellationToken);
-                _context.FamilyUnions.Add(union);
-                await _context.SaveChangesAsync(cancellationToken);
-            }
-
+            await PersistGraphRecordsAsync(branches, people, relationships, unions, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         catch
         {
             await transaction.RollbackAsync(CancellationToken.None);
-            foreach (var relationship in relationships)
-                if (_context.Entry(relationship).State != EntityState.Detached)
-                    _context.Entry(relationship).State = EntityState.Detached;
-            foreach (var person in people)
-                if (_context.Entry(person).State != EntityState.Detached)
-                    _context.Entry(person).State = EntityState.Detached;
-            foreach (var branch in branches)
-                if (_context.Entry(branch).State != EntityState.Detached)
-                    _context.Entry(branch).State = EntityState.Detached;
-            foreach (var union in unions)
-                if (_context.Entry(union).State != EntityState.Detached)
-                    _context.Entry(union).State = EntityState.Detached;
+            DetachGraphEntries(branches, people, relationships, unions);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Atomically creates a previously absent genealogy and all of its graph records.
+    /// It is intentionally an insert-only primitive: callers must preflight and reject any existing source IDs.
+    /// </summary>
+    public async Task AddGenealogyAndGraphRecordsAsync(
+        Genealogy genealogy,
+        IReadOnlyCollection<FamilyBranch> branches,
+        IReadOnlyCollection<Person> people,
+        IReadOnlyCollection<PersonRelationship> relationships,
+        IReadOnlyCollection<FamilyUnion> unions,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(genealogy);
+        ArgumentNullException.ThrowIfNull(branches);
+        ArgumentNullException.ThrowIfNull(people);
+        ArgumentNullException.ThrowIfNull(relationships);
+        ArgumentNullException.ThrowIfNull(unions);
+
+        await ValidateNewGenealogyAsync(genealogy, cancellationToken);
+        await ValidateGraphRecordShapeAsync(genealogy.Id, branches, people, relationships, unions, cancellationToken,
+            requireExistingGenealogy: false);
+
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            _context.Genealogies.Add(genealogy);
+            await _context.SaveChangesAsync(cancellationToken);
+            await PersistGraphRecordsAsync(branches, people, relationships, unions, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            if (_context.Entry(genealogy).State != EntityState.Detached)
+                _context.Entry(genealogy).State = EntityState.Detached;
+            DetachGraphEntries(branches, people, relationships, unions);
             throw;
         }
     }
@@ -261,9 +270,11 @@ public sealed class GenealogyDataService
         IReadOnlyCollection<Person> people,
         IReadOnlyCollection<PersonRelationship> relationships,
         IReadOnlyCollection<FamilyUnion> unions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireExistingGenealogy = true)
     {
-        if (genealogyId == Guid.Empty || !await _context.Genealogies.AnyAsync(genealogy => genealogy.Id == genealogyId, cancellationToken))
+        if (genealogyId == Guid.Empty || (requireExistingGenealogy &&
+            !await _context.Genealogies.AnyAsync(genealogy => genealogy.Id == genealogyId, cancellationToken)))
             throw new InvalidOperationException("目标族谱不存在。");
         if (branches.Any(branch => branch.Id == Guid.Empty || branch.GenealogyId != genealogyId) ||
             people.Any(person => person.Id == Guid.Empty || person.GenealogyId != genealogyId) ||
@@ -311,6 +322,66 @@ public sealed class GenealogyDataService
                 .Select(branch => branch.Id).ToListAsync(cancellationToken);
             if (existing.Count != externalBranchIds.Count) throw new InvalidOperationException("人物房支必须属于指定族谱。");
         }
+    }
+
+    private async Task ValidateNewGenealogyAsync(Genealogy genealogy, CancellationToken cancellationToken)
+    {
+        var normalizedName = genealogy.Name?.Trim();
+        if (genealogy.Id == Guid.Empty || string.IsNullOrEmpty(normalizedName) || normalizedName.Length > 200 ||
+            genealogy.Surname?.Length > 100 || genealogy.Description?.Length > 2000)
+            throw new InvalidOperationException("族谱资料无效。");
+        if (await _context.Genealogies.AnyAsync(item => item.Id == genealogy.Id, cancellationToken))
+            throw new InvalidOperationException("族谱 ID 已存在，拒绝覆盖已有族谱。");
+        genealogy.Name = normalizedName;
+    }
+
+    private async Task PersistGraphRecordsAsync(
+        IReadOnlyCollection<FamilyBranch> branches,
+        IReadOnlyCollection<Person> people,
+        IReadOnlyCollection<PersonRelationship> relationships,
+        IReadOnlyCollection<FamilyUnion> unions,
+        CancellationToken cancellationToken)
+    {
+        _context.FamilyBranches.AddRange(branches);
+        await _context.SaveChangesAsync(cancellationToken);
+        _context.People.AddRange(people);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        var validator = new PersonRelationshipValidator(_context);
+        foreach (var relationship in relationships)
+        {
+            await validator.ValidateForCreateAsync(relationship, cancellationToken);
+            _context.PersonRelationships.Add(relationship);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+
+        var unionValidator = new FamilyUnionValidator(_context);
+        foreach (var union in unions)
+        {
+            await unionValidator.ValidateForCreateAsync(union, cancellationToken);
+            _context.FamilyUnions.Add(union);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private void DetachGraphEntries(
+        IEnumerable<FamilyBranch> branches,
+        IEnumerable<Person> people,
+        IEnumerable<PersonRelationship> relationships,
+        IEnumerable<FamilyUnion> unions)
+    {
+        foreach (var relationship in relationships)
+            if (_context.Entry(relationship).State != EntityState.Detached)
+                _context.Entry(relationship).State = EntityState.Detached;
+        foreach (var person in people)
+            if (_context.Entry(person).State != EntityState.Detached)
+                _context.Entry(person).State = EntityState.Detached;
+        foreach (var branch in branches)
+            if (_context.Entry(branch).State != EntityState.Detached)
+                _context.Entry(branch).State = EntityState.Detached;
+        foreach (var union in unions)
+            if (_context.Entry(union).State != EntityState.Detached)
+                _context.Entry(union).State = EntityState.Detached;
     }
 
     private static void EnsureDistinctIds(IEnumerable<Guid> ids, string label)

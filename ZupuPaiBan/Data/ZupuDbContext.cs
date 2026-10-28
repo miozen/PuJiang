@@ -89,7 +89,7 @@ public class ZupuDbContext : DbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Surname).HasMaxLength(100);
             entity.Property(e => e.Description).HasMaxLength(2000);
-            entity.HasIndex(e => e.Name).IsUnique();
+            entity.HasIndex(e => e.Name);
         });
 
         modelBuilder.Entity<FamilyBranch>(entity =>
