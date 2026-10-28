@@ -16,6 +16,7 @@ public partial class CollaborationImportDialog : Window
     private string? _selectedFilePath;
     private int? _targetParentId;
     private CollaborationPackage? _package;
+    internal Func<Microsoft.Win32.OpenFileDialog>? OpenFileDialogFactory { get; set; }
 
     public CollaborationImportDialog(List<FamilyMember> allMembers, DataService dataService)
     {
@@ -49,7 +50,11 @@ public partial class CollaborationImportDialog : Window
 
     private void BtnSelectFile_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog
+        IDisposable operation;
+        try { operation = _dataService.EnterOperation(); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "无法选择文件", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        using var operationLease = operation;
+        var dialog = OpenFileDialogFactory?.Invoke() ?? new Microsoft.Win32.OpenFileDialog
         {
             Title = "选择协作文件",
             Filter = "协作 JSON 文件|*.json"
@@ -109,6 +114,11 @@ public partial class CollaborationImportDialog : Window
     private async void BtnImport_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedFilePath == null || _targetParentId == null) return;
+
+        IDisposable operation;
+        try { operation = _dataService.EnterOperation(); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "无法导入", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        using var operationLease = operation;
 
         var targetMember = _allMembers.FirstOrDefault(m => m.Id == _targetParentId);
         var result = MessageBox.Show(

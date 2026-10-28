@@ -361,7 +361,10 @@ public partial class MainWindow : Window
 
     private async Task ShowEditDialog(FamilyMember member)
     {
-        var editVm = new MemberEditViewModel(member);
+        var editVm = new MemberEditViewModel(member)
+        {
+            ModalOperationFactory = _targetContexts.EnterOperation
+        };
         var dialog = new MemberEditDialog(editVm)
         {
             Owner = this

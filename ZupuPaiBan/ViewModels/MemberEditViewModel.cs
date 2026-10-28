@@ -7,6 +7,8 @@ namespace ZupuPaiBan.ViewModels;
 
 public partial class MemberEditViewModel : ObservableObject
 {
+    internal Func<OpenFileDialog>? PhotoDialogFactory { get; set; }
+    internal Func<IDisposable>? ModalOperationFactory { get; set; }
     [ObservableProperty] private int _id;
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private Gender _gender = Gender.Male;
@@ -75,7 +77,11 @@ public partial class MemberEditViewModel : ObservableObject
     [RelayCommand]
     private void BrowsePhoto()
     {
-        var dialog = new OpenFileDialog
+        IDisposable? operation;
+        try { operation = ModalOperationFactory?.Invoke(); }
+        catch (InvalidOperationException) { return; }
+        using var operationLease = operation;
+        var dialog = PhotoDialogFactory?.Invoke() ?? new OpenFileDialog
         {
             Title = "选择照片",
             Filter = "图片文件|*.jpg;*.jpeg;*.png;*.bmp;*.gif|所有文件|*.*"

@@ -20,6 +20,8 @@ public partial class MemberTreeNode : ObservableObject
 public partial class MainViewModel : ObservableObject
 {
     private readonly DataService _dataService;
+    internal Func<OpenFileDialog>? ExcelImportDialogFactory { get; set; }
+    internal Func<OpenFileDialog>? GedcomImportDialogFactory { get; set; }
     internal Func<SaveFileDialog>? GedcomSaveDialogFactory { get; set; }
     internal Func<List<FamilyMember>, string, Task>? GedcomExportOverride { get; set; }
 
@@ -172,7 +174,8 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task ImportFromExcelAsync()
     {
-        var dialog = new OpenFileDialog
+        using var dialogOperation = _dataService.EnterOperation();
+        var dialog = ExcelImportDialogFactory?.Invoke() ?? new OpenFileDialog
         {
             Title = "导入 Excel 数据",
             Filter = "Excel 文件|*.xlsx;*.xls"
@@ -254,7 +257,8 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task ImportFromGedcomAsync()
     {
-        var dialog = new OpenFileDialog
+        using var dialogOperation = _dataService.EnterOperation();
+        var dialog = GedcomImportDialogFactory?.Invoke() ?? new OpenFileDialog
         {
             Title = "导入 GEDCOM 数据",
             Filter = "GEDCOM 文件|*.ged;*.gedcom"

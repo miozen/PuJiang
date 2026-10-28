@@ -23,6 +23,8 @@ internal static class WpfAppExitWorker
     private static bool _exportMessageObserved;
     private static bool _exportStatusObserved;
     private static bool _xpsFailureStatusObserved;
+    private static bool _modalExitObserved;
+    private static Exception? _modalExitFailure;
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
@@ -96,6 +98,11 @@ internal static class WpfAppExitWorker
                             throw new InvalidOperationException("XPS 写入失败时未保留失败状态或意外生成文件。");
                     }
                 }
+                if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel")
+                {
+                    if (_modalExitFailure is not null) throw _modalExitFailure;
+                    if (!_modalExitObserved) throw new InvalidOperationException("未观察到模态入口的正常退出竞争。");
+                }
                 if (scenario.StartsWith("complete-", StringComparison.Ordinal))
                 {
                     if (_nativeExportFailure is not null) throw _nativeExportFailure;
@@ -147,6 +154,109 @@ internal static class WpfAppExitWorker
     private static async Task VerifyScenarioAsync(App app, MainWindow main, TargetContextCoordinator coordinator,
         string root, string scenario)
     {
+        if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel")
+        {
+            const string photoTitle = "选择照片";
+            const string excelTitle = "导入 Excel 数据";
+            const string gedcomTitle = "导入 GEDCOM 数据";
+            const string collaborationTitle = "选择协作文件";
+            const string confirmTitle = "确认导入";
+            Window? child = null;
+            string title;
+            Action open;
+            if (scenario == "modal-photo-cancel")
+            {
+                var editor = new MemberEditViewModel(new FamilyMember { Name = "虚构人物" });
+                editor.PhotoDialogFactory = () => new Microsoft.Win32.OpenFileDialog { Title = photoTitle };
+                editor.ModalOperationFactory = coordinator.EnterOperation;
+                child = new MemberEditDialog(editor) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                child.Show();
+                title = photoTitle;
+                open = () => editor.BrowsePhotoCommand.Execute(null);
+            }
+            else if (scenario is "modal-excel-import-cancel" or "modal-gedcom-import-cancel")
+            {
+                var viewModel = (MainViewModel)main.DataContext;
+                if (scenario == "modal-excel-import-cancel")
+                {
+                    viewModel.ExcelImportDialogFactory = () => new Microsoft.Win32.OpenFileDialog { Title = excelTitle };
+                    title = excelTitle;
+                    open = () => _ = viewModel.ImportFromExcelCommand.ExecuteAsync(null);
+                }
+                else
+                {
+                    viewModel.GedcomImportDialogFactory = () => new Microsoft.Win32.OpenFileDialog { Title = gedcomTitle };
+                    title = gedcomTitle;
+                    open = () => _ = viewModel.ImportFromGedcomCommand.ExecuteAsync(null);
+                }
+            }
+            else
+            {
+                var data = new DataService(coordinator);
+                var parent = await data.AddMemberAsync(new FamilyMember { Name = "虚构父" });
+                var import = new CollaborationImportDialog([parent], data)
+                { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                child = import;
+                child.Show();
+                if (scenario == "modal-collaboration-import-cancel")
+                {
+                    import.OpenFileDialogFactory = () => new Microsoft.Win32.OpenFileDialog { Title = collaborationTitle };
+                    title = collaborationTitle;
+                    open = () => typeof(CollaborationImportDialog).GetMethod("BtnSelectFile_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(import, [import, new RoutedEventArgs()]);
+                }
+                else
+                {
+                    typeof(CollaborationImportDialog).GetField("_selectedFilePath", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(import, Path.Combine(root, "fictional.json"));
+                    typeof(CollaborationImportDialog).GetField("_targetParentId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(import, parent.Id);
+                    title = confirmTitle;
+                    open = () => typeof(CollaborationImportDialog).GetMethod("BtnImport_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(import, [import, new RoutedEventArgs()]);
+                }
+            }
+
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            var lastPost = Stopwatch.StartNew();
+            timer.Tick += (_, _) =>
+            {
+                var dialog = FindOwnDialog(title);
+                if (dialog == IntPtr.Zero) return;
+                try
+                {
+                    if (!_modalExitObserved)
+                    {
+                        main.Close();
+                        if (!main.IsVisible || main.IsEnabled)
+                            throw new InvalidOperationException("模态文件选择或确认期间未等待正常退出。");
+                        AssertLeaseHeld(root);
+                        AssertNewOperationRejected(coordinator);
+                        _modalExitObserved = true;
+                        lastPost.Restart();
+                    }
+                    if (lastPost.Elapsed >= TimeSpan.FromMilliseconds(500))
+                    {
+                        var cancelMessage = scenario == "modal-collaboration-confirm-cancel" ? 0x0111u : 0x0010u;
+                        var cancelCommand = scenario == "modal-collaboration-confirm-cancel" ? (IntPtr)7 : IntPtr.Zero;
+                        if (!PostMessage(dialog, cancelMessage, cancelCommand, IntPtr.Zero))
+                            throw new InvalidOperationException("无法取消测试模态对话框。");
+                        lastPost.Restart();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _modalExitFailure = ex;
+                    app.Shutdown(-1);
+                }
+            };
+            timer.Start();
+            _ = main.Dispatcher.BeginInvoke(() =>
+            {
+                try { open(); }
+                catch (Exception ex) { _modalExitFailure = ex; app.Shutdown(-1); }
+            }, DispatcherPriority.Background);
+            return;
+        }
+
                 if (scenario is "preview-pdf-cancel" or "preview-pdf-save" or "preview-xps-cancel" or "preview-xps-save" or "preview-xps-error" or "preview-print-cancel")
         {
             var data = new DataService(coordinator);
