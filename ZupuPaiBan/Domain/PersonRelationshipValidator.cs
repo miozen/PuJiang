@@ -20,8 +20,12 @@ public sealed class PersonRelationshipValidator
 
     public async Task ValidateForCreateAsync(PersonRelationship relationship, CancellationToken cancellationToken = default)
     {
-        if (relationship.PersonId == Guid.Empty)
+        ArgumentNullException.ThrowIfNull(relationship);
+        if (relationship.Id == Guid.Empty || relationship.PersonId == Guid.Empty)
             throw new InvalidOperationException("关系主体不能为空。");
+        if (!Enum.IsDefined(relationship.Kind)) throw new InvalidOperationException("关系类型无效。");
+        if (relationship.Note?.Length > 2000 || relationship.SourceCitation?.Length > 1000)
+            throw new InvalidOperationException("关系资料超过允许长度。");
 
         var subject = await _context.People
             .SingleOrDefaultAsync(p => p.Id == relationship.PersonId, cancellationToken)

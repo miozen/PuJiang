@@ -163,6 +163,14 @@ public sealed class GenealogyDataService
         return relationship;
     }
 
+    public async Task<FamilyUnion> AddFamilyUnionAsync(FamilyUnion union, CancellationToken cancellationToken = default)
+    {
+        await new FamilyUnionValidator(_context).ValidateForCreateAsync(union, cancellationToken);
+        _context.FamilyUnions.Add(union);
+        await _context.SaveChangesAsync(cancellationToken);
+        return union;
+    }
+
     public Task<PersonRelationship> AddExistingBiologicalChildAsync(Guid genealogyId, Guid parentId, Guid childId, CancellationToken cancellationToken = default) =>
         AddRelationshipAsync(new PersonRelationship
         {
@@ -181,20 +189,32 @@ public sealed class GenealogyDataService
         IReadOnlyCollection<Person> people,
         IReadOnlyCollection<PersonRelationship> relationships,
         CancellationToken cancellationToken = default)
+        => await AddGraphRecordsAsync(genealogyId, [], people, relationships, [], cancellationToken);
+
+    /// <summary>
+    /// Atomically persists same-genealogy branches, people, relationships and unions.
+    /// It is deliberately a graph-record primitive only; it never replaces or merges an existing genealogy.
+    /// </summary>
+    public async Task AddGraphRecordsAsync(
+        Guid genealogyId,
+        IReadOnlyCollection<FamilyBranch> branches,
+        IReadOnlyCollection<Person> people,
+        IReadOnlyCollection<PersonRelationship> relationships,
+        IReadOnlyCollection<FamilyUnion> unions,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(branches);
         ArgumentNullException.ThrowIfNull(people);
         ArgumentNullException.ThrowIfNull(relationships);
+        ArgumentNullException.ThrowIfNull(unions);
 
-        if (!await _context.Genealogies.AnyAsync(g => g.Id == genealogyId, cancellationToken))
-            throw new InvalidOperationException("目标族谱不存在。");
-        if (people.Any(person => person.GenealogyId != genealogyId))
-            throw new InvalidOperationException("人物必须属于指定族谱。");
-        if (relationships.Any(relationship => relationship.GenealogyId != genealogyId))
-            throw new InvalidOperationException("关系必须属于指定族谱。");
+        await ValidateGraphRecordShapeAsync(genealogyId, branches, people, relationships, unions, cancellationToken);
 
         await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
         try
         {
+            _context.FamilyBranches.AddRange(branches);
+            await _context.SaveChangesAsync(cancellationToken);
             _context.People.AddRange(people);
             await _context.SaveChangesAsync(cancellationToken);
 
@@ -203,6 +223,14 @@ public sealed class GenealogyDataService
             {
                 await validator.ValidateForCreateAsync(relationship, cancellationToken);
                 _context.PersonRelationships.Add(relationship);
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+
+            var unionValidator = new FamilyUnionValidator(_context);
+            foreach (var union in unions)
+            {
+                await unionValidator.ValidateForCreateAsync(union, cancellationToken);
+                _context.FamilyUnions.Add(union);
                 await _context.SaveChangesAsync(cancellationToken);
             }
 
@@ -217,7 +245,91 @@ public sealed class GenealogyDataService
             foreach (var person in people)
                 if (_context.Entry(person).State != EntityState.Detached)
                     _context.Entry(person).State = EntityState.Detached;
+            foreach (var branch in branches)
+                if (_context.Entry(branch).State != EntityState.Detached)
+                    _context.Entry(branch).State = EntityState.Detached;
+            foreach (var union in unions)
+                if (_context.Entry(union).State != EntityState.Detached)
+                    _context.Entry(union).State = EntityState.Detached;
             throw;
+        }
+    }
+
+    private async Task ValidateGraphRecordShapeAsync(
+        Guid genealogyId,
+        IReadOnlyCollection<FamilyBranch> branches,
+        IReadOnlyCollection<Person> people,
+        IReadOnlyCollection<PersonRelationship> relationships,
+        IReadOnlyCollection<FamilyUnion> unions,
+        CancellationToken cancellationToken)
+    {
+        if (genealogyId == Guid.Empty || !await _context.Genealogies.AnyAsync(genealogy => genealogy.Id == genealogyId, cancellationToken))
+            throw new InvalidOperationException("目标族谱不存在。");
+        if (branches.Any(branch => branch.Id == Guid.Empty || branch.GenealogyId != genealogyId) ||
+            people.Any(person => person.Id == Guid.Empty || person.GenealogyId != genealogyId) ||
+            relationships.Any(relationship => relationship.Id == Guid.Empty || relationship.GenealogyId != genealogyId) ||
+            unions.Any(union => union.Id == Guid.Empty || union.GenealogyId != genealogyId))
+            throw new InvalidOperationException("图数据必须属于指定族谱且具有有效 ID。");
+        EnsureDistinctIds(branches.Select(branch => branch.Id), "房支");
+        EnsureDistinctIds(people.Select(person => person.Id), "人物");
+        EnsureDistinctIds(relationships.Select(relationship => relationship.Id), "人物关系");
+        EnsureDistinctIds(unions.Select(union => union.Id), "婚配关系");
+        if (await _context.FamilyBranches.AnyAsync(branch => branches.Select(item => item.Id).Contains(branch.Id), cancellationToken) ||
+            await _context.People.AnyAsync(person => people.Select(item => item.Id).Contains(person.Id), cancellationToken) ||
+            await _context.PersonRelationships.AnyAsync(relationship => relationships.Select(item => item.Id).Contains(relationship.Id), cancellationToken) ||
+            await _context.FamilyUnions.AnyAsync(union => unions.Select(item => item.Id).Contains(union.Id), cancellationToken))
+            throw new InvalidOperationException("图数据 ID 已存在，拒绝覆盖已有记录。");
+
+        var branchById = branches.ToDictionary(branch => branch.Id);
+        if (branches.Any(branch => string.IsNullOrWhiteSpace(branch.Name) || branch.Name.Trim().Length > 200 ||
+                                   branch.ParentBranchId == branch.Id))
+            throw new InvalidOperationException("房支资料或父级引用无效。");
+        foreach (var branch in branches) branch.Name = branch.Name.Trim();
+        if (branches.GroupBy(branch => (branch.ParentBranchId, branch.Name)).Any(group => group.Count() > 1))
+            throw new InvalidOperationException("同一父级下不能包含重复房支名称。");
+        EnsureBranchBatchAcyclic(branchById);
+
+        var externalParentIds = branches.Where(branch => branch.ParentBranchId is Guid parent && !branchById.ContainsKey(parent))
+            .Select(branch => branch.ParentBranchId!.Value).Distinct().ToList();
+        if (externalParentIds.Count > 0)
+        {
+            var existing = await _context.FamilyBranches.Where(branch => branch.GenealogyId == genealogyId && externalParentIds.Contains(branch.Id))
+                .Select(branch => branch.Id).ToListAsync(cancellationToken);
+            if (existing.Count != externalParentIds.Count) throw new InvalidOperationException("房支父级必须属于指定族谱。");
+        }
+
+        if (people.Any(person => string.IsNullOrWhiteSpace(person.Name) || person.Name.Trim().Length > 200 || !Enum.IsDefined(person.Sex) ||
+                                 person.BirthDateText?.Length > 100 || person.DeathDateText?.Length > 100 || person.Biography?.Length > 4000 ||
+                                 person.PhotoPath?.Length > 500 || person.RecordedGeneration?.Length > 100 || person.RecordedBirthOrder?.Length > 100))
+            throw new InvalidOperationException("人物资料无效。");
+        foreach (var person in people) person.Name = person.Name.Trim();
+        var externalBranchIds = people.Where(person => person.BranchId is Guid branch && !branchById.ContainsKey(branch))
+            .Select(person => person.BranchId!.Value).Distinct().ToList();
+        if (externalBranchIds.Count > 0)
+        {
+            var existing = await _context.FamilyBranches.Where(branch => branch.GenealogyId == genealogyId && externalBranchIds.Contains(branch.Id))
+                .Select(branch => branch.Id).ToListAsync(cancellationToken);
+            if (existing.Count != externalBranchIds.Count) throw new InvalidOperationException("人物房支必须属于指定族谱。");
+        }
+    }
+
+    private static void EnsureDistinctIds(IEnumerable<Guid> ids, string label)
+    {
+        var values = ids.ToList();
+        if (values.Count != values.Distinct().Count()) throw new InvalidOperationException($"{label} ID 不能重复。");
+    }
+
+    private static void EnsureBranchBatchAcyclic(IReadOnlyDictionary<Guid, FamilyBranch> branches)
+    {
+        foreach (var branch in branches.Values)
+        {
+            var visited = new HashSet<Guid>();
+            var current = branch;
+            while (current.ParentBranchId is Guid parent && branches.TryGetValue(parent, out var next))
+            {
+                if (!visited.Add(current.Id)) throw new InvalidOperationException("房支不能形成循环引用。");
+                current = next;
+            }
         }
     }
 }

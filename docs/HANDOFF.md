@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 2026-10-28 已实测 `5f2c5f179443156670cc633e01e6a68c9c91d49e` 与 `origin/dev` 一致，GitHub Actions run `40651103473` 成功；当前内部 JSON 预检检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较，不能依赖旧跟踪引用。
+- **Remote Sync：** 2026-10-28 已实测 `3e72ff3dea1eb1fb00cc89046c900e13960e118c` 与 `origin/dev` 一致，GitHub Actions run `40652036300` 成功；本轮关系约束与事务检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较，不能依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** 内部版本化 JSON 预检和目标模型映射，已完成本机验证，待提交同步检查点。
-- **Last Completed：** 新增内部 JSON v1 文档、绝对路径/大小/JSON/版本预检，以及人物、关系、婚配、房支和引用完整性校验。通过预检的文档仅映射为内存目标实体，保留照片路径文字；未写入数据库、未接入 UI、未替换任何族谱，也未接入生产恢复。
-- **Uncommitted Work：** `GenealogyExchangeService`、隔离交换预检测试及本轮权威文档；以 `git status --short` 为准。
-- **Validation Performed：** Windows 原生 .NET 使用每例独立临时目录。内部交换专项 3/3 通过；`Category!=Performance&Category!=UI` 为 122/122 通过；本轮构建成功（0 error）。未访问正式用户数据库。存在既有 ImageSharp 1.0.4 高、中危告警。
-- **Validation Pending：** GitHub Actions 尚未运行本内部 JSON 预检修复；持久化导入、冲突/损失报告、完整 Excel/GEDCOM 解析与外部格式预检；`Application.Shutdown`、系统关机、强制终止、外部写入、真实 WAL 收敛和崩溃边界；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
-- **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；内部 JSON 预检尚无持久化导入或冲突策略，外部格式仍未映射到目标模型。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 核对最终 diff、测试输出与远端 `dev` 后，提交并推送本内部 JSON 预检检查点；继续保持生产恢复关闭。
+- **Current Task：** 已固化内部 JSON 默认失败关闭与后续副本导入的业务契约；图数据批处理写入约束及隔离事务测试已完成，待提交同步检查点。
+- **Last Completed：** 新增 D-012：内部 JSON 在冲突或不兼容时预检拒绝，不覆盖、删除或自动合并现有族谱；未来副本导入必须生成新族谱 ID 并重映射全部内部引用。新增目标模型图数据批处理入口，先校验同谱 ID、房支树、人物字段、关系和婚配，后在一个事务内写入；跨谱婚配、房支循环和真实数据库写入失败均不会留下部分数据。内部 JSON 仍只做内存映射，未接入 UI、持久化导入或生产恢复。
+- **Uncommitted Work：** D-012、图数据事务写入/验证器及四项独立 SQLite 测试；以 `git status --short` 为准。
+- **Validation Performed：** Windows 原生 .NET 使用每例独立临时目录。图数据事务专项 4/4 通过；`Category!=Performance&Category!=UI` 为 126/126 通过；本轮 Release build 成功（0 error）。未访问正式用户数据库，未启动生产恢复。存在既有 ImageSharp 1.0.4 高、中危告警。
+- **Validation Pending：** 本轮 GitHub Actions；内部 JSON 持久化导入的冲突报告、默认拒绝写入和后续副本 ID 重映射；完整 Excel/GEDCOM 解析与外部格式预检；`Application.Shutdown`、系统关机、强制终止、外部写入、真实 WAL 收敛和崩溃边界；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
+- **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；内部 JSON 尚无持久化导入或冲突报告，外部格式仍未映射到目标模型。ImageSharp 1.0.4 存在已知高、中危告警。
+- **Exact Next Action：** 核对最终 diff、测试输出与远端 `dev` 后，提交并推送本图数据事务检查点；随后在 P0 实现内部 JSON 持久化导入的默认冲突拒绝报告，继续保持生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
