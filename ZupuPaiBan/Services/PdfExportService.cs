@@ -7,10 +7,18 @@ namespace ZupuPaiBan.Services;
 
 public class PdfExportService
 {
+    internal Action<string>? BeforePublish { get; set; }
+
     public bool ExportToPdf(LayoutResult layoutResult, LayoutSettings settings, string filePath)
     {
+        string? temporaryPath = null;
         try
         {
+            if (string.IsNullOrWhiteSpace(filePath)) return false;
+            var targetPath = System.IO.Path.GetFullPath(filePath);
+            var directory = System.IO.Path.GetDirectoryName(targetPath);
+            if (string.IsNullOrWhiteSpace(directory) || !System.IO.Directory.Exists(directory)) return false;
+            temporaryPath = System.IO.Path.Combine(directory, $".{System.IO.Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
             var document = new PdfDocument();
             document.Info.Title = settings.Title;
             document.Info.Creator = "谱匠 PuJiang";
@@ -128,12 +136,19 @@ public class PdfExportService
                     XStringFormats.Default);
             }
 
-            document.Save(filePath);
+            document.Save(temporaryPath);
+            BeforePublish?.Invoke(temporaryPath);
+            System.IO.File.Move(temporaryPath, targetPath, overwrite: true);
+            temporaryPath = null;
             return true;
         }
         catch
         {
             return false;
+        }
+        finally
+        {
+            if (temporaryPath is not null && System.IO.File.Exists(temporaryPath)) System.IO.File.Delete(temporaryPath);
         }
     }
 

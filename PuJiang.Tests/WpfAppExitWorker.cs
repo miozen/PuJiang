@@ -302,7 +302,9 @@ internal static class WpfAppExitWorker
                 {
                     if (!string.Equals(Path.GetFullPath(output), path, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("PDF 目标不是指定的隔离测试路径。");
-                    return scenario != "preview-pdf-error" && new PdfExportService().ExportToPdf(layout, settings, output);
+                    var exporter = new PdfExportService();
+                    if (scenario == "preview-pdf-error") exporter.BeforePublish = _ => throw new IOException("模拟发布失败");
+                    return exporter.ExportToPdf(layout, settings, output);
                 };
             }
             if (scenario is "preview-xps-save" or "preview-xps-error")
