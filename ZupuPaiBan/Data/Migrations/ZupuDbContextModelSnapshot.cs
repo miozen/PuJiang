@@ -184,6 +184,11 @@ namespace ZupuPaiBan.Data.Migrations
                     b.Property<Guid>("GenealogyId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ImportMode")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset>("ImportedAt")
                         .HasColumnType("TEXT");
 

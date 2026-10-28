@@ -355,6 +355,7 @@ public sealed class GenealogyDataService
     {
         if (importRecord.Id == Guid.Empty || importRecord.GenealogyId != genealogyId ||
             string.IsNullOrWhiteSpace(importRecord.SourceKind) || importRecord.SourceKind.Length > 64 ||
+            (importRecord.ImportMode != "Default" && importRecord.ImportMode != "Copy") ||
             importRecord.SourceFormatVersion <= 0 || importRecord.SourceGenealogyId == Guid.Empty ||
             importRecord.SourceDocumentFingerprint.Length != 64 ||
             !importRecord.SourceDocumentFingerprint.All(Uri.IsHexDigit))

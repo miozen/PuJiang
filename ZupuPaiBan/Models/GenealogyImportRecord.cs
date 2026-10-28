@@ -8,6 +8,7 @@ public class GenealogyImportRecord
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid GenealogyId { get; set; }
     public string SourceKind { get; set; } = string.Empty;
+    public string ImportMode { get; set; } = string.Empty;
     public int SourceFormatVersion { get; set; }
     public Guid SourceGenealogyId { get; set; }
     public string SourceDocumentFingerprint { get; set; } = string.Empty;

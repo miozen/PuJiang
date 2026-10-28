@@ -153,6 +153,53 @@ public class GenealogyExchangeTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Explicit_copy_import_remaps_every_graph_id_and_retains_original_provenance()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var document = CreateValidDocument();
+        await using var context = database.CreateContext();
+        var importer = new GenealogyExchangeImportService(context);
+        var original = await importer.ImportAsync(document);
+        var copy = await importer.ImportCopyAsync(document);
+
+        Assert.True(original.Imported);
+        Assert.True(copy.Imported);
+        Assert.True(copy.Report.IsCopyImport);
+        Assert.Contains("全新内部 ID", copy.Report.ToDisplayText());
+        await using var verify = database.CreateContext();
+        var genealogies = await verify.Genealogies.OrderBy(item => item.Id).ToListAsync();
+        Assert.Equal(2, genealogies.Count);
+        var copiedGenealogy = genealogies.Single(item => item.Id != document.Genealogy.Id);
+        var originalPeople = await verify.People.Where(item => item.GenealogyId == document.Genealogy.Id).ToListAsync();
+        var copiedPeople = await verify.People.Where(item => item.GenealogyId == copiedGenealogy.Id).ToListAsync();
+        var copiedIds = copiedPeople.Select(item => item.Id).ToHashSet();
+        Assert.Empty(originalPeople.Select(item => item.Id).Intersect(copiedIds));
+        Assert.All(copiedPeople, item => Assert.NotEqual(document.Genealogy.Id, item.GenealogyId));
+        var copiedBranches = await verify.FamilyBranches.Where(item => item.GenealogyId == copiedGenealogy.Id).ToListAsync();
+        var copiedBranchIds = copiedBranches.Select(item => item.Id).ToHashSet();
+        Assert.All(copiedBranches, item =>
+        {
+            Assert.DoesNotContain(item.Id, document.Branches.Select(source => source.Id));
+            Assert.True(item.ParentBranchId is null || copiedBranchIds.Contains(item.ParentBranchId.Value));
+        });
+        Assert.All(await verify.PersonRelationships.Where(item => item.GenealogyId == copiedGenealogy.Id).ToListAsync(), item =>
+        {
+            Assert.Contains(item.PersonId, copiedIds);
+            Assert.True(item.RelatedPersonId is null || copiedIds.Contains(item.RelatedPersonId.Value));
+        });
+        Assert.All(await verify.FamilyUnions.Where(item => item.GenealogyId == copiedGenealogy.Id).ToListAsync(), item =>
+        {
+            Assert.Contains(item.PartnerOneId, copiedIds);
+            Assert.True(item.PartnerTwoId is null || copiedIds.Contains(item.PartnerTwoId.Value));
+        });
+        var record = Assert.Single(await new GenealogyDataService(verify).GetImportRecordsAsync(copiedGenealogy.Id));
+        Assert.Equal("Copy", record.ImportMode);
+        Assert.Equal(document.Genealogy.Id, record.SourceGenealogyId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Persistent_import_returns_readable_invalid_document_report_without_writing()
     {
         await using var database = new TestDatabase();
@@ -202,17 +249,18 @@ public class GenealogyExchangeTests
     private static GenealogyExchangeDocument CreateValidDocument()
     {
         var genealogyId = Guid.NewGuid();
-        var branchId = Guid.NewGuid();
+        var rootBranchId = Guid.NewGuid();
+        var childBranchId = Guid.NewGuid();
         var parentId = Guid.NewGuid();
         var childId = Guid.NewGuid();
         return new(1, new(genealogyId, "导入谱-" + genealogyId.ToString("N"), "陈", "隔离导入", DateTimeOffset.UtcNow),
             [
-                new(parentId, "祖", PersonSex.Male, null, null, null, null, true, "一世", 1, null, null, branchId),
-                new(childId, "孙", PersonSex.Female, null, null, null, null, false, "二世", 2, null, null, branchId)
+                new(parentId, "祖", PersonSex.Male, null, null, null, null, true, "一世", 1, null, null, rootBranchId),
+                new(childId, "孙", PersonSex.Female, null, null, null, null, false, "二世", 2, null, null, childBranchId)
             ],
             [new(Guid.NewGuid(), childId, parentId, PersonRelationshipKind.BiologicalParent, true, "谱载", "卷一")],
             [new(Guid.NewGuid(), parentId, childId, FamilyUnionKind.Unknown, null, null, "测试婚配")],
-            [new(branchId, null, "长房", 1)]);
+            [new(rootBranchId, null, "长房", 1), new(childBranchId, rootBranchId, "长房次支", 2)]);
     }
 
     private sealed class FailFamilyUnionInsertInterceptor : DbCommandInterceptor

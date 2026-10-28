@@ -114,6 +114,7 @@ public class ZupuDbContext : DbContext
             entity.ToTable("GenealogyImportRecords");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.SourceKind).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.ImportMode).IsRequired().HasMaxLength(32);
             entity.Property(e => e.SourceDocumentFingerprint).IsRequired().HasMaxLength(64);
             entity.HasIndex(e => new { e.GenealogyId, e.ImportedAt });
             entity.HasIndex(e => new { e.SourceKind, e.SourceFormatVersion, e.SourceGenealogyId });
