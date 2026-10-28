@@ -7,7 +7,7 @@ using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
-[Collection("RestoreProcessExclusive")]
+[Collection("ProcessWorkerExclusive")]
 public class DatabaseQuiescencePrototypeTests
 {
     [Fact]

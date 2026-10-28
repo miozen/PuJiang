@@ -189,21 +189,7 @@ public partial class MainViewModel : ObservableObject
             var excelService = new ExcelService();
             var members = await excelService.ImportFromExcelAsync(dialog.FileName);
 
-            // 清空现有数据并导入
-            var dataService = _dataService;
-
-            // 删除所有现有成员
-            var existing = await dataService.GetAllMembersAsync();
-            foreach (var m in existing)
-            {
-                await dataService.DeleteMemberAsync(m.Id);
-            }
-
-            // 添加新成员
-            foreach (var member in members)
-            {
-                await dataService.AddMemberAsync(member);
-            }
+            await _dataService.ReplaceMembersAsync(members);
 
             await LoadDataAsync();
             StatusText = $"已导入 {members.Count} 位成员";
@@ -272,18 +258,7 @@ public partial class MainViewModel : ObservableObject
             var gedcomService = new GedcomService();
             var members = await gedcomService.ImportFromGedcomAsync(dialog.FileName);
 
-            var dataService = _dataService;
-
-            var existing = await dataService.GetAllMembersAsync();
-            foreach (var m in existing)
-            {
-                await dataService.DeleteMemberAsync(m.Id);
-            }
-
-            foreach (var member in members)
-            {
-                await dataService.AddMemberAsync(member);
-            }
+            await _dataService.ReplaceMembersAsync(members);
 
             await LoadDataAsync();
             StatusText = $"已导入 {members.Count} 位成员";

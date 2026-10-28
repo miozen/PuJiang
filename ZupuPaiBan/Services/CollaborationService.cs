@@ -115,8 +115,9 @@ public class CollaborationService
         int maxId = allMembers.Count > 0 ? allMembers.Max(m => m.Id) : 0;
 
         // 获取目标父成员的代数
-        var targetParent = allMembers.FirstOrDefault(m => m.Id == targetParentId);
-        int baseGeneration = targetParent?.Generation ?? 0;
+        var targetParent = allMembers.FirstOrDefault(m => m.Id == targetParentId)
+            ?? throw new InvalidDataException("找不到协作导入的目标父成员。");
+        int baseGeneration = targetParent.Generation;
         int rootOrigGen = pkg.Members.Where(m => m.FatherTempId == null).Select(m => m.Generation).FirstOrDefault();
         if (rootOrigGen == 0) rootOrigGen = 1;
 
@@ -129,15 +130,18 @@ public class CollaborationService
         }
 
         int importedCount = 0;
+        var membersToAppend = new List<FamilyMember>();
 
         foreach (var cm in pkg.Members)
         {
             int? fatherDbId = null;
-            if (cm.FatherTempId != null && idMap.ContainsKey(cm.FatherTempId.Value))
+            if (cm.FatherTempId is int fatherTempId)
             {
-                fatherDbId = idMap[cm.FatherTempId.Value];
+                if (!idMap.TryGetValue(fatherTempId, out var mappedFatherId))
+                    throw new InvalidDataException("协作包引用了不存在的父成员。");
+                fatherDbId = mappedFatherId;
             }
-            else if (cm.FatherTempId == null)
+            else
             {
                 // 根成员挂在目标父成员下
                 fatherDbId = targetParentId;
@@ -159,10 +163,11 @@ public class CollaborationService
                 BirthOrder = cm.BirthOrder
             };
 
-            await dataService.AddMemberAsync(member);
+            membersToAppend.Add(member);
             importedCount++;
         }
 
+        await dataService.AppendMembersAsync(membersToAppend);
         return importedCount;
     }
 }
