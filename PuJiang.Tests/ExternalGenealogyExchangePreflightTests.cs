@@ -1,5 +1,7 @@
 using ClosedXML.Excel;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
@@ -8,6 +10,30 @@ namespace PuJiang.Tests;
 
 public class ExternalGenealogyExchangePreflightTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Gedcom_write_failure_rolls_back_graph_and_provenance_record()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var path = Path.Combine(Path.GetDirectoryName(database.DatabasePath)!, "write-failure.ged");
+        await File.WriteAllTextAsync(path, "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME 父 /氏/\n1 SEX M\n0 @I2@ INDI\n1 NAME 母 /氏/\n1 SEX F\n0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n0 TRLR\n");
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False")
+            .AddInterceptors(new FailFamilyUnionInsertInterceptor()).Options;
+        await using (var failing = new ZupuDbContext(options))
+        {
+            var importer = new ExternalGenealogyExchangeImportService(failing);
+            await Assert.ThrowsAsync<DbUpdateException>(() => importer.ImportGedcomAsync(path, "失败谱", acceptLosses: true));
+        }
+        await using var verify = database.CreateContext();
+        Assert.Empty(await verify.Genealogies.ToListAsync());
+        Assert.Empty(await verify.People.ToListAsync());
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        Assert.Empty(await verify.FamilyUnions.ToListAsync());
+        Assert.Empty(await verify.GenealogyImportRecords.ToListAsync());
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Lossy_gedcom_requires_explicit_acceptance_before_atomic_new_genealogy_import()
@@ -30,6 +56,17 @@ public class ExternalGenealogyExchangePreflightTests
         var record = Assert.Single(await new GenealogyDataService(context).GetImportRecordsAsync(accepted.GenealogyId!.Value));
         Assert.Equal("PuJiang.GEDCOM-5.5.x", record.SourceKind);
         Assert.Equal(64, record.SourceDocumentFingerprint.Length);
+    }
+
+    private sealed class FailFamilyUnionInsertInterceptor : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("INSERT INTO \"FamilyUnions\"", StringComparison.Ordinal))
+                throw new IOException("模拟外部导入婚配写入失败。");
+            return ValueTask.FromResult(result);
+        }
     }
 
     [Fact]
