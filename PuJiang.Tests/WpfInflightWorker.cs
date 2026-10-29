@@ -9,6 +9,7 @@ using ZupuPaiBan.Data;
 using ZupuPaiBan.Infrastructure;
 using ZupuPaiBan.Models;
 using ZupuPaiBan.Services;
+using ZupuPaiBan.ViewModels;
 using ZupuPaiBan.Views;
 
 namespace PuJiang.Tests;
@@ -16,6 +17,27 @@ namespace PuJiang.Tests;
 // This worker is invoked only with an existing GUID-named test root.
 internal static class WpfInflightWorker
 {
+    public static async Task<int> RunTargetLinkEditingAsync(string directory)
+    {
+        var database = new TestDatabase(directory);
+        Environment.SetEnvironmentVariable(AppDataPaths.TestRootEnvironmentVariable, directory);
+        var result = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            dispatcher.BeginInvoke(async () =>
+            {
+                try { await VerifyTargetLinkEditingAsync(database, directory); result.TrySetResult(0); }
+                catch (Exception ex) { Console.Error.WriteLine(ex); result.TrySetResult(1); }
+                finally { dispatcher.BeginInvokeShutdown(DispatcherPriority.Background); }
+            });
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA); thread.IsBackground = true; thread.Start();
+        return await result.Task;
+    }
+
     public static async Task<int> RunExternalAsync(string directory)
     {
         var database = new TestDatabase(directory);
@@ -151,6 +173,81 @@ internal static class WpfInflightWorker
         Stage("verified");
     }
 
+    private static async Task VerifyTargetLinkEditingAsync(TestDatabase database, string root)
+    {
+        Directory.CreateDirectory(database.BackupDirectory);
+        using var lease = DataDirectoryLease.Acquire(root);
+        await VerifyTargetLinkExitBoundaryAsync(database, root, TargetLinkExitAction.AddUnion);
+        await VerifyTargetLinkExitBoundaryAsync(database, root, TargetLinkExitAction.RemoveRelationship);
+    }
+
+    private static async Task VerifyTargetLinkExitBoundaryAsync(TestDatabase database, string root, TargetLinkExitAction action)
+    {
+        var sqlFragment = action == TargetLinkExitAction.AddUnion
+            ? "INSERT INTO \"FamilyUnions\""
+            : "DELETE FROM \"PersonRelationships\"";
+        var pause = new PauseTargetLinkCommandInterceptor(sqlFragment);
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").AddInterceptors(pause).Options;
+        var coordinator = new TargetContextCoordinator(options);
+        var main = new MainWindow(coordinator, database.BackupDirectory, coordinateExit: true, exitTimeout: TimeSpan.FromSeconds(10))
+        { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        main.Show();
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        while (!main.IsEnabled && deadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (!main.IsEnabled) throw new TimeoutException("目标关系测试主窗口未完成初始化。");
+
+        var viewModel = new GenealogySelectionViewModel(coordinator.CreateContext, coordinator)
+        { NewName = action == TargetLinkExitAction.AddUnion ? "在途婚配谱" : "在途关系谱" };
+        await viewModel.CreateAsync();
+        var genealogy = viewModel.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            viewModel.NewPersonName = name;
+            await viewModel.AddPersonAsync();
+        }
+        var first = viewModel.People.Single(person => person.Name == "甲");
+        var second = viewModel.People.Single(person => person.Name == "乙");
+        viewModel.SelectedPerson = first;
+        if (action == TargetLinkExitAction.RemoveRelationship)
+        {
+            await viewModel.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        }
+
+        pause.Enabled = true;
+        Task edit = action == TargetLinkExitAction.AddUnion
+            ? viewModel.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, second.Id)
+            : viewModel.RemoveTargetLinkAsync((await viewModel.GetTargetLinkRemovalCandidatesAsync())
+                .Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship));
+        await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        main.Closed += (_, _) => closed.TrySetResult();
+        main.Close();
+        if (main.IsEnabled) throw new InvalidOperationException("正常退出未开始等待在途目标关系编辑。");
+        try { using var operation = coordinator.EnterOperation(); throw new InvalidOperationException("排空期间未拒绝新目标操作。"); }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("停用")) { }
+        try { using var secondLease = DataDirectoryLease.Acquire(root); throw new InvalidOperationException("目标关系编辑在途时未保持测试租约。"); }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("占用") || ex.Message.Contains("使用")) { }
+
+        pause.Continue.TrySetResult();
+        await edit;
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await using (var exclusive = new FileStream(database.DatabasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+        await using var verify = database.CreateContext();
+        if (action == TargetLinkExitAction.AddUnion)
+        {
+            if (await verify.FamilyUnions.CountAsync(union => union.GenealogyId == genealogy.Id) != 1 ||
+                await verify.PersonRelationships.CountAsync(relationship => relationship.GenealogyId == genealogy.Id) != 0)
+                throw new InvalidOperationException("关闭后的在途婚配新增未以单一完整结果提交。");
+        }
+        else if (await verify.PersonRelationships.CountAsync(relationship => relationship.GenealogyId == genealogy.Id) != 0 ||
+                 await verify.FamilyUnions.CountAsync(union => union.GenealogyId == genealogy.Id) != 0)
+        {
+            throw new InvalidOperationException("关闭后的在途人物关系解除未以单一完整结果提交。");
+        }
+    }
+
     private sealed class PauseInsertInterceptor : DbCommandInterceptor
     {
         public bool Enabled { get; set; }
@@ -191,5 +288,40 @@ internal static class WpfInflightWorker
             if (Enabled && command.CommandText.Contains("INSERT INTO \"Genealogies\"", StringComparison.Ordinal))
             { Enabled = false; Entered.TrySetResult(); await Continue.Task.WaitAsync(cancellationToken); }
         }
+    }
+
+    private sealed class PauseTargetLinkCommandInterceptor(string sqlFragment) : DbCommandInterceptor
+    {
+        public bool Enabled { get; set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            await PauseIfTargetLinkCommandAsync(command, cancellationToken);
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            await PauseIfTargetLinkCommandAsync(command, cancellationToken);
+            return result;
+        }
+
+        private async Task PauseIfTargetLinkCommandAsync(DbCommand command, CancellationToken cancellationToken)
+        {
+            if (!Enabled || !command.CommandText.Contains(sqlFragment, StringComparison.Ordinal)) return;
+            Enabled = false;
+            Entered.TrySetResult();
+            await Continue.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private enum TargetLinkExitAction
+    {
+        AddUnion,
+        RemoveRelationship
     }
 }

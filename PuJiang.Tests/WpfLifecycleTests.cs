@@ -31,6 +31,11 @@ public class WpfLifecycleTests
     public async Task External_exchange_confirmation_and_window_close_keep_atomic_import_registered()
         => await RunWorkerAsync("--wpf-external-inflight");
 
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Target_relationship_and_union_edits_remain_registered_during_normal_exit()
+        => await RunWorkerAsync("--wpf-target-link-inflight");
+
     [Theory]
     [InlineData("success")]
     [InlineData("native-dialog")]
