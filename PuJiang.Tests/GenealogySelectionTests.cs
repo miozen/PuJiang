@@ -1,5 +1,6 @@
 using System.Data.Common;
 using Xunit;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using ZupuPaiBan.Data;
@@ -125,6 +126,8 @@ public class GenealogySelectionTests
         Assert.Equal(PersonSex.Unknown, person.Sex);
         Assert.Null(person.BirthDateText);
         Assert.Null(person.Biography);
+        Assert.Equal("原姓名", Assert.Single(vm.People).Name);
+        Assert.Contains(vm.TargetTree, item => item.PersonId == person.Id && item.Label.Contains("原姓名"));
     }
 
     [Fact]
@@ -183,6 +186,9 @@ public class GenealogySelectionTests
         await using var verify = database.CreateContext();
         Assert.Single(await verify.People.ToListAsync());
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        Assert.Equal("父母", Assert.Single(vm.People).Name);
+        Assert.Single(vm.TargetTree);
+        Assert.DoesNotContain(vm.TargetTree, item => item.Label.Contains("子女"));
     }
 
     [Fact]
@@ -859,6 +865,99 @@ public class GenealogySelectionTests
         await Assert.ThrowsAsync<DbUpdateException>(() => service.AddExistingBiologicalChildAsync(genealogy.Id, parent.Id, child.Id));
         await using var verify = database.CreateContext();
         Assert.Equal(2, await verify.People.CountAsync());
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Existing_child_link_and_unlink_failures_keep_the_current_view_and_graph_intact()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "关联视图失败谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "父母", "子女" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+
+        var parent = vm.People.Single(person => person.Name == "父母");
+        var child = vm.People.Single(person => person.Name == "子女");
+        vm.SelectedPerson = parent;
+        vm.SelectedExistingChild = child;
+        await using (var failure = database.CreateContext())
+            await failure.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectViewLink BEFORE INSERT ON PersonRelationships BEGIN SELECT RAISE(ABORT, 'simulated link failure'); END;");
+        await Assert.ThrowsAsync<DbUpdateException>(() => vm.AddExistingBiologicalChildAsync());
+        Assert.Equal(child.Id, vm.SelectedExistingChild!.Id);
+        Assert.Empty(vm.BiologicalChildren);
+        Assert.DoesNotContain(vm.TargetTree.Single(item => item.PersonId == parent.Id).Details, detail => detail.Contains(child.Id.ToString()));
+
+        await using (var cleanup = database.CreateContext())
+            await cleanup.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectViewLink;");
+        await vm.AddExistingBiologicalChildAsync();
+        Assert.Equal(child.Id, Assert.Single(vm.BiologicalChildren).Id);
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single();
+        await using (var failure = database.CreateContext())
+            await failure.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectViewUnlink BEFORE DELETE ON PersonRelationships BEGIN SELECT RAISE(ABORT, 'simulated unlink failure'); END;");
+        await Assert.ThrowsAsync<SqliteException>(() => vm.RemoveBiologicalParentRelationshipAsync());
+        Assert.Equal(child.Id, vm.SelectedBiologicalChild!.Id);
+        Assert.Equal(child.Id, Assert.Single(vm.BiologicalChildren).Id);
+        Assert.Contains(vm.TargetTree.Single(item => item.PersonId == parent.Id).Details, detail => detail.Contains(child.Id.ToString()));
+
+        await using var verify = database.CreateContext();
+        Assert.Equal(2, await verify.People.CountAsync(item => item.GenealogyId == genealogy.Id));
+        Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Selection_busy_retry_exhaustion_keeps_a_consistent_target_state_and_can_reload()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False;Default Timeout=1").Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var first = vm.SelectedGenealogy!;
+        vm.NewPersonName = "甲人物";
+        await vm.AddPersonAsync();
+        vm.SelectedPerson = Assert.Single(vm.People);
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        var second = vm.SelectedGenealogy!;
+
+        await using var blocker = new SqliteConnection($"Data Source={database.DatabasePath};Pooling=False;Default Timeout=1");
+        await blocker.OpenAsync();
+        await using var command = blocker.CreateCommand();
+        command.CommandText = "BEGIN EXCLUSIVE;";
+        await command.ExecuteNonQueryAsync();
+        try
+        {
+            var failure = await Assert.ThrowsAsync<SqliteException>(() => vm.SelectAsync(first));
+            Assert.Equal(5, failure.SqliteErrorCode);
+            Assert.Equal(first.Id, vm.SelectedGenealogy!.Id);
+            Assert.Null(vm.SelectedPerson);
+            Assert.Empty(vm.BiologicalChildren);
+            Assert.Empty(vm.People);
+            Assert.Empty(vm.TargetTree);
+            Assert.StartsWith("加载目标谱系失败：", vm.Status);
+        }
+        finally
+        {
+            command.CommandText = "ROLLBACK;";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await vm.SelectAsync(first);
+        Assert.Equal(first.Id, vm.SelectedGenealogy!.Id);
+        Assert.Equal("甲人物", Assert.Single(vm.People).Name);
+        Assert.Single(vm.TargetTree);
+        await using var verify = new ZupuDbContext(options);
+        Assert.Equal(1, await verify.People.CountAsync(person => person.GenealogyId == first.Id));
+        Assert.Equal(0, await verify.People.CountAsync(person => person.GenealogyId == second.Id));
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
     }
 

@@ -151,7 +151,18 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
 
         Status = "正在加载人物…";
-        var snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
+        GenealogyGraphSnapshot snapshot;
+        try
+        {
+            snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
+        }
+        catch (Exception exception)
+        {
+            // The target selection is already cleared, so never expose a prior genealogy after a failed snapshot.
+            if (version == _selectionVersion)
+                Status = $"加载目标谱系失败：{exception.Message}";
+            throw;
+        }
         var tree = TargetMemberTreeProjection.Create(snapshot);
         var people = snapshot.People.OrderBy(p => p.Name, StringComparer.Ordinal).ThenBy(p => p.Id).Select(p => new Person
         {
