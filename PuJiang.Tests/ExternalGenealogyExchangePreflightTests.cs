@@ -12,6 +12,56 @@ public class ExternalGenealogyExchangePreflightTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Gedcom_replacement_after_preflight_is_rejected_without_graph_or_provenance_records()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var path = Path.Combine(Path.GetDirectoryName(database.DatabasePath)!, "changed-after-preflight.ged");
+        await File.WriteAllTextAsync(path, "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME 原始 /氏/\n1 SEX M\n0 TRLR\n");
+        await using var context = database.CreateContext();
+        var importer = new ExternalGenealogyExchangeImportService(context)
+        {
+            AfterPreflightForTestingAsync = token => File.WriteAllTextAsync(path,
+                "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME 替换 /氏/\n1 SEX M\n0 TRLR\n", token)
+        };
+
+        var result = await importer.ImportGedcomAsync(path, "不得导入", acceptLosses: true);
+
+        Assert.False(result.Imported);
+        Assert.Contains(result.Report.Errors, error => error.Code == "SourceChangedAfterPreflight");
+        await AssertNoExternalImportRecordsAsync(context);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Excel_tampering_after_preflight_is_rejected_without_graph_or_provenance_records()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var path = Path.Combine(Path.GetDirectoryName(database.DatabasePath)!, "changed-after-preflight.xlsx");
+        using (var workbook = new XLWorkbook())
+        {
+            var sheet = workbook.AddWorksheet("族谱成员");
+            var headers = new[] { "姓名", "性别", "出生日期", "逝世日期", "配偶姓名", "生平事迹", "辈分", "排行", "父亲ID" };
+            for (var i = 0; i < headers.Length; i++) sheet.Cell(1, i + 1).Value = headers[i];
+            sheet.Cell(2, 1).Value = "原始"; sheet.Cell(2, 2).Value = "男";
+            workbook.SaveAs(path);
+        }
+        await using var context = database.CreateContext();
+        var importer = new ExternalGenealogyExchangeImportService(context)
+        {
+            AfterPreflightForTestingAsync = token => File.WriteAllTextAsync(path, "篡改", token)
+        };
+
+        var result = await importer.ImportExcelAsync(path, "不得导入", acceptLosses: true);
+
+        Assert.False(result.Imported);
+        Assert.Contains(result.Report.Errors, error => error.Code == "SourceChangedAfterPreflight");
+        await AssertNoExternalImportRecordsAsync(context);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Gedcom_write_failure_rolls_back_graph_and_provenance_record()
     {
         await using var database = new TestDatabase();
@@ -67,6 +117,15 @@ public class ExternalGenealogyExchangePreflightTests
                 throw new IOException("模拟外部导入婚配写入失败。");
             return ValueTask.FromResult(result);
         }
+    }
+
+    private static async Task AssertNoExternalImportRecordsAsync(ZupuDbContext context)
+    {
+        Assert.Empty(await context.Genealogies.ToListAsync());
+        Assert.Empty(await context.People.ToListAsync());
+        Assert.Empty(await context.PersonRelationships.ToListAsync());
+        Assert.Empty(await context.FamilyUnions.ToListAsync());
+        Assert.Empty(await context.GenealogyImportRecords.ToListAsync());
     }
 
     [Fact]

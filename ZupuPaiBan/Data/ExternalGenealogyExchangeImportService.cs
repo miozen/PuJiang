@@ -13,6 +13,9 @@ public sealed class ExternalGenealogyExchangeImportService
     private readonly ZupuDbContext _context;
     public ExternalGenealogyExchangeImportService(ZupuDbContext context) => _context = context;
 
+    // Keeps the preflight-to-commit boundary deterministically testable without exposing a production callback.
+    internal Func<CancellationToken, Task>? AfterPreflightForTestingAsync { get; set; }
+
     public async Task<ExternalGenealogyExchangeImportResult> ImportExcelAsync(string path, string genealogyName,
         bool acceptLosses, CancellationToken cancellationToken = default) =>
         await ImportAsync(path, genealogyName, acceptLosses, ExternalGenealogyExchangePreflightService.PreflightExcelAsync, cancellationToken);
@@ -29,8 +32,14 @@ public sealed class ExternalGenealogyExchangeImportService
             return new(false, result.Report, null, null);
         var name = genealogyName?.Trim();
         if (string.IsNullOrEmpty(name) || name.Length > 200) throw new InvalidOperationException("族谱名称须为 1 至 200 个字符。");
-        var fingerprint = await FingerprintAsync(path, cancellationToken);
+        var fingerprint = await TryFingerprintAsync(path, cancellationToken);
+        if (fingerprint is null) return SourceChanged(result.Report);
+        if (AfterPreflightForTestingAsync is not null) await AfterPreflightForTestingAsync(cancellationToken);
+        var verifiedFingerprint = await TryFingerprintAsync(path, cancellationToken);
+        if (!string.Equals(fingerprint, verifiedFingerprint, StringComparison.Ordinal)) return SourceChanged(result.Report);
         var target = CloneWithNewIds(result.Target, name);
+        var commitFingerprint = await TryFingerprintAsync(path, cancellationToken);
+        if (!string.Equals(fingerprint, commitFingerprint, StringComparison.Ordinal)) return SourceChanged(result.Report);
         var record = new GenealogyImportRecord
         {
             GenealogyId = target.Genealogy.Id, SourceKind = $"PuJiang.{result.Report.FormatProfile}", ImportMode = "Copy",
@@ -41,11 +50,21 @@ public sealed class ExternalGenealogyExchangeImportService
         return new(true, result.Report, target.Genealogy.Id, record.Id);
     }
 
-    private static async Task<string> FingerprintAsync(string path, CancellationToken token)
+    private static async Task<string?> TryFingerprintAsync(string path, CancellationToken token)
     {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return Convert.ToHexString(await SHA256.HashDataAsync(stream, token));
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return Convert.ToHexString(await SHA256.HashDataAsync(stream, token));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
+    private static ExternalGenealogyExchangeImportResult SourceChanged(ExternalGenealogyExchangePreflightReport report) =>
+        new(false, report with { Errors = [.. report.Errors,
+            new("SourceChangedAfterPreflight", "预检完成后无法确认源文件未被替换、删除或篡改，已拒绝写入。") ] }, null, null);
     private static Guid SourceId(string hash)
     {
         var bytes = Convert.FromHexString(hash)[..16];
