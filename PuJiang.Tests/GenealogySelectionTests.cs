@@ -1,5 +1,7 @@
+using System.Data.Common;
 using Xunit;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 using ZupuPaiBan.ViewModels;
@@ -1016,6 +1018,88 @@ public class GenealogySelectionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Switching_genealogy_during_profile_relationship_and_union_edits_keeps_the_original_scoped_transaction()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var pause = new PauseCommandInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False")
+            .AddInterceptors(pause).Options;
+        var coordinator = new TargetContextCoordinator(options);
+        var vm = new GenealogySelectionViewModel(coordinator.CreateContext, coordinator) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var firstGenealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲人物", "乙人物" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var firstPerson = vm.People.Single(item => item.Name == "甲人物");
+        var firstPeer = vm.People.Single(item => item.Name == "乙人物");
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        var secondGenealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "外谱人物";
+        await vm.AddPersonAsync();
+
+        await vm.SelectAsync(firstGenealogy);
+        vm.SelectedPerson = vm.People.Single(item => item.Id == firstPerson.Id);
+        vm.EditedBiography = "甲谱档案";
+        pause.Arm("UPDATE \"People\"");
+        var profile = vm.SavePersonProfileAsync();
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await vm.SelectAsync(secondGenealogy);
+        Assert.Null(vm.SelectedPerson);
+        pause.Release();
+        await profile;
+        Assert.Equal(secondGenealogy.Id, vm.SelectedGenealogy!.Id);
+        Assert.All(vm.People, item => Assert.Equal(secondGenealogy.Id, item.GenealogyId));
+
+        await vm.SelectAsync(firstGenealogy);
+        vm.SelectedPerson = vm.People.Single(item => item.Id == firstPerson.Id);
+        pause.Arm("INSERT INTO \"PersonRelationships\"");
+        var relationship = vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, firstPeer.Id);
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await vm.SelectAsync(secondGenealogy);
+        pause.Release();
+        await relationship;
+        Assert.Equal(secondGenealogy.Id, vm.SelectedGenealogy!.Id);
+        Assert.All(vm.People, item => Assert.Equal(secondGenealogy.Id, item.GenealogyId));
+
+        await vm.SelectAsync(firstGenealogy);
+        vm.SelectedPerson = vm.People.Single(item => item.Id == firstPerson.Id);
+        pause.Arm("INSERT INTO \"FamilyUnions\"");
+        var union = vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, firstPeer.Id);
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await vm.SelectAsync(secondGenealogy);
+        pause.Release();
+        await union;
+        Assert.Equal(secondGenealogy.Id, vm.SelectedGenealogy!.Id);
+        Assert.All(vm.People, item => Assert.Equal(secondGenealogy.Id, item.GenealogyId));
+
+        await vm.SelectAsync(firstGenealogy);
+        vm.SelectedPerson = vm.People.Single(item => item.Id == firstPerson.Id);
+        var removableUnion = (await vm.GetTargetLinkRemovalCandidatesAsync())
+            .Single(item => item.Kind == TargetLinkRemovalKind.FamilyUnion);
+        pause.Arm("DELETE FROM \"FamilyUnions\"");
+        var removal = vm.RemoveTargetLinkAsync(removableUnion);
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await vm.SelectAsync(secondGenealogy);
+        pause.Release();
+        await removal;
+
+        await using var verify = database.CreateContext();
+        Assert.Equal("甲谱档案", (await verify.People.SingleAsync(item => item.Id == firstPerson.Id)).Biography);
+        Assert.Equal(1, await verify.PersonRelationships.CountAsync(item => item.GenealogyId == firstGenealogy.Id));
+        Assert.Equal(0, await verify.FamilyUnions.CountAsync(item => item.GenealogyId == firstGenealogy.Id));
+        Assert.Equal(0, await verify.PersonRelationships.CountAsync(item => item.GenealogyId == secondGenealogy.Id));
+        Assert.Equal(0, await verify.FamilyUnions.CountAsync(item => item.GenealogyId == secondGenealogy.Id));
+        Assert.All(vm.People, item => Assert.Equal(secondGenealogy.Id, item.GenealogyId));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Failed_target_link_removal_keeps_all_graph_records_intact()
     {
         await using var database = new TestDatabase();
@@ -1042,5 +1126,50 @@ public class GenealogySelectionTests
         Assert.Equal(2, await verify.People.CountAsync());
         Assert.Single(await verify.PersonRelationships.ToListAsync());
         Assert.Single(await verify.FamilyUnions.ToListAsync());
+    }
+
+    private sealed class PauseCommandInterceptor : DbCommandInterceptor
+    {
+        private string? _sqlFragment;
+        private int _armed;
+        private TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _continue = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+
+        public void Arm(string sqlFragment)
+        {
+            _sqlFragment = sqlFragment;
+            _entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _continue = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _armed, 1);
+        }
+
+        public void Release() => _continue.TrySetResult();
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            await PauseIfArmedAsync(command, cancellationToken);
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            await PauseIfArmedAsync(command, cancellationToken);
+            return result;
+        }
+
+        private async Task PauseIfArmedAsync(DbCommand command, CancellationToken cancellationToken)
+        {
+            var fragment = _sqlFragment;
+            if (fragment is null || !command.CommandText.Contains(fragment, StringComparison.Ordinal) ||
+                Interlocked.Exchange(ref _armed, 0) != 1) return;
+            var entered = _entered;
+            var continuation = _continue;
+            entered.TrySetResult();
+            await continuation.Task.WaitAsync(cancellationToken);
+        }
     }
 }
