@@ -215,4 +215,35 @@ public class ExternalGenealogyExchangePreflightTests
         Assert.Contains(result.Report.Losses, loss => loss.Code == "IgnoredGedcomTag");
         Assert.All(result.Target.Relationships, relationship => Assert.Equal(PersonRelationshipKind.BiologicalParent, relationship.Kind));
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Gedcom_profile_rejects_reversed_duplicate_family_unions_without_target_mapping()
+    {
+        await using var database = new TestDatabase();
+        var path = Path.Combine(Path.GetDirectoryName(database.DatabasePath)!, "duplicate-family.ged");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, """
+            0 HEAD
+            1 GEDC
+            2 VERS 5.5.1
+            0 @I1@ INDI
+            1 NAME 甲 /氏/
+            0 @I2@ INDI
+            1 NAME 乙 /氏/
+            0 @F1@ FAM
+            1 HUSB @I1@
+            1 WIFE @I2@
+            0 @F2@ FAM
+            1 HUSB @I2@
+            1 WIFE @I1@
+            0 TRLR
+            """);
+
+        var result = await ExternalGenealogyExchangePreflightService.PreflightGedcomAsync(path);
+
+        Assert.False(result.Report.CanMap);
+        Assert.Null(result.Target);
+        Assert.Contains(result.Report.Errors, error => error.Code == "InvalidGedcom");
+    }
 }

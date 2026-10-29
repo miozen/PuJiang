@@ -34,6 +34,7 @@ public sealed class FamilyUnionValidator
                 throw new InvalidOperationException("婚配关系不能跨族谱。");
         }
 
+        FamilyUnionIdentity.Normalize(union);
         var duplicate = await _context.FamilyUnions.AnyAsync(item =>
             item.GenealogyId == union.GenealogyId && item.PartnerOneId == union.PartnerOneId &&
             item.PartnerTwoId == union.PartnerTwoId && item.Kind == union.Kind, cancellationToken);

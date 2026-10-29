@@ -74,6 +74,26 @@ public class GenealogyExchangeTests
     }
 
     [Fact]
+    [Trait("Category", "Unit")]
+    public void Preflight_rejects_reversed_duplicate_unions_before_mapping()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var document = new GenealogyExchangeDocument(1,
+            new(Guid.NewGuid(), "虚构族谱", null, null, DateTimeOffset.UtcNow),
+            [
+                new(first, "甲", PersonSex.Unknown, null, null, null, null, false, null, null, null, null, null),
+                new(second, "乙", PersonSex.Unknown, null, null, null, null, false, null, null, null, null, null)
+            ], [],
+            [
+                new(Guid.NewGuid(), first, second, FamilyUnionKind.Marriage, null, null, null),
+                new(Guid.NewGuid(), second, first, FamilyUnionKind.Marriage, null, null, null)
+            ], []);
+
+        Assert.Throws<InvalidDataException>(() => GenealogyExchangeService.Preflight(document));
+    }
+
+    [Fact]
     [Trait("Category", "Integration")]
     public async Task Persistent_import_creates_a_new_genealogy_and_complete_graph_after_preflight()
     {

@@ -66,6 +66,30 @@ public class GenealogyGraphTransactionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Reversed_duplicate_unions_are_rejected_and_roll_back_the_whole_staged_graph()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "无向婚配去重谱" });
+        var one = new Person { GenealogyId = genealogy.Id, Name = "甲" };
+        var two = new Person { GenealogyId = genealogy.Id, Name = "乙" };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddGraphRecordsAsync(genealogy.Id, [], [one, two], [],
+        [
+            new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = one.Id, PartnerTwoId = two.Id, Kind = FamilyUnionKind.Marriage },
+            new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = two.Id, PartnerTwoId = one.Id, Kind = FamilyUnionKind.Marriage }
+        ]));
+
+        Assert.Contains("已经存在", error.Message);
+        await using var verify = database.CreateContext();
+        Assert.Empty(await verify.People.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        Assert.Empty(await verify.FamilyUnions.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Branch_cycle_is_rejected_before_a_graph_batch_writes_anything()
     {
         await using var database = new TestDatabase();

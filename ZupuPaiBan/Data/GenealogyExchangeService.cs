@@ -1,6 +1,7 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
+using ZupuPaiBan.Domain;
 using ZupuPaiBan.Models;
 
 namespace ZupuPaiBan.Data;
@@ -110,9 +111,10 @@ public static class GenealogyExchangeService
         var unionKeys = new HashSet<(Guid One, Guid? Two, FamilyUnionKind Kind)>();
         foreach (var union in document.Unions)
         {
+            var (partnerOneId, partnerTwoId) = FamilyUnionIdentity.Normalize(union.PartnerOneId, union.PartnerTwoId);
             if (union.Id == Guid.Empty || !unionIds.Add(union.Id) || !people.ContainsKey(union.PartnerOneId) || !Enum.IsDefined(union.Kind) ||
                 (union.PartnerTwoId is Guid two && (!people.ContainsKey(two) || two == union.PartnerOneId)) ||
-                !unionKeys.Add((union.PartnerOneId, union.PartnerTwoId, union.Kind)))
+                !unionKeys.Add((partnerOneId, partnerTwoId, union.Kind)))
                 throw new InvalidDataException("婚配关系无效、重复或跨出当前族谱。");
         }
 

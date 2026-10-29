@@ -7,7 +7,7 @@ public enum FamilyUnionKind
     Unknown = 3
 }
 
-/// <summary>完整配偶档案之间的婚配/伴侣关系；任一方资料可暂时不完整。</summary>
+/// <summary>完整配偶档案之间的无向婚配/伴侣关系；完整配对按稳定 ID 顺序持久化，任一方资料可暂时不完整。</summary>
 public class FamilyUnion
 {
     public Guid Id { get; set; } = Guid.NewGuid();

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using ClosedXML.Excel;
+using ZupuPaiBan.Domain;
 using ZupuPaiBan.Models;
 
 namespace ZupuPaiBan.Data;
@@ -139,12 +140,19 @@ public static class ExternalGenealogyExchangePreflightService
         var genealogy = NewGenealogy(suggestion);
         foreach (var person in people.Values) person.GenealogyId = genealogy.Id;
         var relationships = new List<PersonRelationship>(); var unions = new List<FamilyUnion>();
+        var unionKeys = new HashSet<(Guid One, Guid? Two, FamilyUnionKind Kind)>();
         foreach (var (id, record) in families)
         {
             if (record.Husband is not null && !people.TryGetValue(record.Husband, out var husband) || record.Wife is not null && !people.TryGetValue(record.Wife, out var wife))
                 throw new InvalidDataException($"GEDCOM 家庭 {id} 引用了不存在的人物。");
             people.TryGetValue(record.Husband ?? string.Empty, out var first); people.TryGetValue(record.Wife ?? string.Empty, out var second);
-            if (first is not null && second is not null) unions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = first.Id, PartnerTwoId = second.Id, Kind = FamilyUnionKind.Marriage, Note = $"GEDCOM {id}" });
+            if (first is not null && second is not null)
+            {
+                var (partnerOneId, partnerTwoId) = FamilyUnionIdentity.Normalize(first.Id, second.Id);
+                if (!unionKeys.Add((partnerOneId, partnerTwoId, FamilyUnionKind.Marriage)))
+                    throw new InvalidDataException("GEDCOM 包含重复婚配关系。");
+                unions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = partnerOneId, PartnerTwoId = partnerTwoId, Kind = FamilyUnionKind.Marriage, Note = $"GEDCOM {id}" });
+            }
             foreach (var childId in record.Children)
             {
                 if (!people.TryGetValue(childId, out var child)) throw new InvalidDataException($"GEDCOM 家庭 {id} 的子女引用不存在。");
