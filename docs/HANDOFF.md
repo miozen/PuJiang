@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 2026-10-29 已实测 `310f509a274927b6ec5ae88fac644fd7ffa3bf55` 与 `origin/dev` 一致；本轮外部格式预检检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
+- **Remote Sync：** 2026-10-29 已实测 `f4e761b225135b04686d628a8ac425a6bae4bafb` 与 `origin/dev` 一致，GitHub Actions run `40793486623` 成功；本轮外部格式导入设计文档尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** ExcelLegacyV1 与 GEDCOM-5.5.x 的只读预检和目标模型映射已完成，待提交同步检查点；保持失败关闭。
-- **Last Completed：** 新增 `ExternalGenealogyExchangePreflightService`：ExcelLegacyV1 要求九列固定表头、按数据行序号解析父亲引用并报告不能安全匹配的配偶姓名文本；GEDCOM-5.5.x 映射人物、家庭父母/子女及双亲婚配，未支持标签进入损失报告。两种 profile 对版本、结构、姓名、性别和引用失败关闭，只返回内存目标图，不写数据库、不替换旧成员、不按名称/世代/排行匹配，也不接入恢复。
-- **Uncommitted Work：** 外部格式预检服务、三个独立文件 profile 测试及本轮权威文档；以 `git status --short` 为准。
-- **Validation Performed：** Windows 原生 .NET 使用每例独立临时目录。Release build 成功（0 error）；外部 profile 专项 3/3 通过；`Category!=Performance&Category!=UI` 为 135/135 通过。未访问正式用户数据库，未启动生产恢复。存在既有 ImageSharp 1.0.4 高、中危告警。
-- **Validation Pending：** `310f509` 与本轮 GitHub Actions；外部 profile 的持久化导入/损失报告 UI；`Application.Shutdown`、系统关机、强制终止、外部写入、真实 WAL 收敛和崩溃边界；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
-- **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；外部 profile 尚无持久化导入或 UI，且仅覆盖明确列出的兼容子集。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 核对最终 diff、测试输出与远端 `dev` 后，提交并推送本外部 profile 预检检查点；随后在 P0 设计外部格式的显式、失败关闭持久化导入与损失报告 UI，继续保持自动合并和生产恢复关闭。
+- **Current Task：** 外部格式的显式失败关闭持久化导入与损失报告 UI 已形成 Proposed 设计，等待 D-013 的两项用户确认；保持失败关闭。
+- **Last Completed：** D-013 Proposed 固化：外部格式只导入为新族谱，预检错误零写入；损失报告按分类显示，拟要求用户独立确认后才提交。入口与旧成员整表替换分离，文件选择至提交受协调器许可保护，成功后刷新并选中新族谱。未实现数据库写入、损失确认 UI 或外部来源标识。
+- **Uncommitted Work：** D-013 Proposed、外部导入 UI/事务设计和本轮权威文档；以 `git status --short` 为准。
+- **Validation Performed：** 设计轮未改动可执行代码；沿用 `f4e761b` 已通过的 Windows 原生验证：Release build 0 error、外部 profile 3/3、日常测试 135/135。未访问正式用户数据库，未启动生产恢复。
+- **Validation Pending：** 用户确认 D-013 的“损失确认后是否允许导入”及外部来源稳定标识；确认后实施外部持久化导入、损失报告 UI、事务/退出竞争测试；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
+- **Known Issues / Blockers：** 外部 profile 仍仅为内存映射；不能在 D-013 确认前把有损映射写入数据库。独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
+- **Exact Next Action：** 等待用户确认 D-013 的两个待确认点；确认后实施外部格式持久化导入与损失报告 UI，继续保持自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
