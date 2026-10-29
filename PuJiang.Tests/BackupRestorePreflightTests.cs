@@ -5,6 +5,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 using ZupuPaiBan.Data;
+using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
@@ -58,7 +59,59 @@ public class BackupRestorePreflightTests
         Directory.CreateDirectory(database.BackupDirectory);
         var package = Path.Combine(database.BackupDirectory, "backup.zip");
         await OfflineBackupPackageService.CreateAsync(database.DatabasePath, package);
+        var activeBefore = await File.ReadAllBytesAsync(database.DatabasePath);
+        var packageBefore = await File.ReadAllBytesAsync(package);
         await Assert.ThrowsAsync<InvalidDataException>(() => new BackupRestorePreflightService(database.BackupDirectory).CheckAsync(package));
+        Assert.Equal(activeBefore, await File.ReadAllBytesAsync(database.DatabasePath));
+        Assert.Equal(packageBefore, await File.ReadAllBytesAsync(package));
+        Assert.Single(Directory.GetFiles(database.BackupDirectory));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Foreign_key_violation_is_rejected_without_replacing_active_database_or_package()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        Guid genealogyId, relatedPersonId;
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "外键损坏谱" });
+            genealogyId = genealogy.Id;
+            relatedPersonId = (await service.AddPersonAsync(new Person { GenealogyId = genealogyId, Name = "有效人物" })).Id;
+        }
+        await using (var connection = new SqliteConnection($"Data Source={database.DatabasePath};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            await using (var foreignKeys = connection.CreateCommand())
+            {
+                foreignKeys.CommandText = "PRAGMA foreign_keys = OFF";
+                await foreignKeys.ExecuteNonQueryAsync();
+            }
+            await using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO PersonRelationships (Id, GenealogyId, PersonId, RelatedPersonId, Kind, IsPreferredForLineage)
+                VALUES ($id, $genealogyId, $missingPersonId, $relatedPersonId, 1, 0)
+                """;
+            insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+            insert.Parameters.AddWithValue("$genealogyId", genealogyId.ToString());
+            insert.Parameters.AddWithValue("$missingPersonId", Guid.NewGuid().ToString());
+            insert.Parameters.AddWithValue("$relatedPersonId", relatedPersonId.ToString());
+            await insert.ExecuteNonQueryAsync();
+        }
+        Directory.CreateDirectory(database.BackupDirectory);
+        var package = Path.Combine(database.BackupDirectory, "foreign-key-invalid.zip");
+        await OfflineBackupPackageService.CreateAsync(database.DatabasePath, package);
+        var activeBefore = await File.ReadAllBytesAsync(database.DatabasePath);
+        var packageBefore = await File.ReadAllBytesAsync(package);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new BackupRestorePreflightService(database.BackupDirectory).CheckAsync(package));
+
+        Assert.Contains("外键", error.Message);
+        Assert.Equal(activeBefore, await File.ReadAllBytesAsync(database.DatabasePath));
+        Assert.Equal(packageBefore, await File.ReadAllBytesAsync(package));
         Assert.Single(Directory.GetFiles(database.BackupDirectory));
     }
 
