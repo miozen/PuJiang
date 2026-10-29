@@ -12,6 +12,87 @@ public class GenealogyGraphTransactionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Deletion_before_stale_relationship_commit_leaves_no_dangling_relationship()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var (genealogyId, childId, parentId) = await CreatePersonPairAsync(database, "关系删除竞争谱");
+        await using var stale = database.CreateContext();
+        var candidate = new PersonRelationship { GenealogyId = genealogyId, PersonId = childId, RelatedPersonId = parentId, Kind = PersonRelationshipKind.BiologicalParent };
+        await new PersonRelationshipValidator(stale).ValidateForCreateAsync(candidate);
+        await using (var deleting = database.CreateContext())
+            await new GenealogyDataService(deleting).DeleteUnrelatedPersonAsync(genealogyId, childId);
+        stale.PersonRelationships.Add(candidate);
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => stale.SaveChangesAsync());
+        await using var verify = database.CreateContext();
+        Assert.Null(await verify.People.FindAsync(childId));
+        Assert.Empty(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogyId).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Deletion_before_stale_union_commit_leaves_no_dangling_union()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var (genealogyId, oneId, twoId) = await CreatePersonPairAsync(database, "婚配删除竞争谱");
+        await using var stale = database.CreateContext();
+        var candidate = new FamilyUnion { GenealogyId = genealogyId, PartnerOneId = oneId, PartnerTwoId = twoId, Kind = FamilyUnionKind.Marriage };
+        await new FamilyUnionValidator(stale).ValidateForCreateAsync(candidate);
+        await using (var deleting = database.CreateContext())
+            await new GenealogyDataService(deleting).DeleteUnrelatedPersonAsync(genealogyId, oneId);
+        stale.FamilyUnions.Add(candidate);
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => stale.SaveChangesAsync());
+        await using var verify = database.CreateContext();
+        Assert.Null(await verify.People.FindAsync(oneId));
+        Assert.Empty(await verify.FamilyUnions.Where(item => item.GenealogyId == genealogyId).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Relationship_commit_before_deletion_keeps_the_person_and_relationship()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var (genealogyId, childId, parentId) = await CreatePersonPairAsync(database, "关系写入竞争谱");
+        await using (var creating = database.CreateContext())
+            await new GenealogyDataService(creating).AddExistingBiologicalChildAsync(genealogyId, parentId, childId);
+        await using var deleting = database.CreateContext();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new GenealogyDataService(deleting).DeleteUnrelatedPersonAsync(genealogyId, childId));
+
+        Assert.Contains("关联关系", error.Message);
+        await using var verify = database.CreateContext();
+        Assert.NotNull(await verify.People.FindAsync(childId));
+        Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogyId).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Union_commit_before_deletion_keeps_the_person_and_union()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var (genealogyId, oneId, twoId) = await CreatePersonPairAsync(database, "婚配写入竞争谱");
+        await using (var creating = database.CreateContext())
+            await new GenealogyDataService(creating).AddFamilyUnionAsync(new FamilyUnion
+            { GenealogyId = genealogyId, PartnerOneId = oneId, PartnerTwoId = twoId, Kind = FamilyUnionKind.Marriage });
+        await using var deleting = database.CreateContext();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new GenealogyDataService(deleting).DeleteUnrelatedPersonAsync(genealogyId, oneId));
+
+        Assert.Contains("关联关系", error.Message);
+        await using var verify = database.CreateContext();
+        Assert.NotNull(await verify.People.FindAsync(oneId));
+        Assert.Single(await verify.FamilyUnions.Where(item => item.GenealogyId == genealogyId).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Independent_contexts_with_stale_validation_cannot_commit_duplicate_relationships()
     {
         await using var database = new TestDatabase();
@@ -221,5 +302,16 @@ public class GenealogyGraphTransactionTests
                 throw new IOException("模拟婚配写入失败。");
             return ValueTask.FromResult(result);
         }
+    }
+
+    private static async Task<(Guid GenealogyId, Guid FirstPersonId, Guid SecondPersonId)> CreatePersonPairAsync(
+        TestDatabase database, string genealogyName)
+    {
+        await using var setup = database.CreateContext();
+        var service = new GenealogyDataService(setup);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = genealogyName });
+        var first = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "甲" });
+        var second = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "乙" });
+        return (genealogy.Id, first.Id, second.Id);
     }
 }
