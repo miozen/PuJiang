@@ -14,6 +14,29 @@ namespace PuJiang.Tests;
 // Dedicated process: process-wide data root and WPF dispatcher never touch the user's application.
 internal static class WpfLifecycleWorker
 {
+    public static async Task<int> RunTargetRelationshipEditingAsync(string directory)
+    {
+        var database = new TestDatabase(directory);
+        Environment.SetEnvironmentVariable(AppDataPaths.TestRootEnvironmentVariable, directory);
+        var result = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            dispatcher.BeginInvoke(async () =>
+            {
+                try { await VerifyTargetRelationshipEditingAsync(database); result.TrySetResult(0); }
+                catch (Exception exception) { Console.Error.WriteLine(exception); result.TrySetResult(1); }
+                finally { dispatcher.BeginInvokeShutdown(DispatcherPriority.Background); }
+            });
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        return await result.Task;
+    }
+
     public static async Task<int> RunAsync(string directory)
     {
         var database = new TestDatabase(directory); // Validates the existing GUID-named temporary root.
@@ -80,5 +103,61 @@ internal static class WpfLifecycleWorker
         importDialog.Close();
         backupDialog.Close();
         main.Close();
+    }
+
+    private static async Task VerifyTargetRelationshipEditingAsync(TestDatabase database)
+    {
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").Options;
+        var coordinator = new TargetContextCoordinator(options);
+        await using (var migration = coordinator.CreateContext()) await migration.Database.MigrateAsync();
+        var viewModel = new GenealogySelectionViewModel(coordinator.CreateContext, coordinator) { NewName = "甲谱" };
+        await viewModel.CreateAsync();
+        var firstGenealogy = viewModel.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            viewModel.NewPersonName = name;
+            await viewModel.AddPersonAsync();
+        }
+        var first = viewModel.People.Single(person => person.Name == "甲");
+        var second = viewModel.People.Single(person => person.Name == "乙");
+        viewModel.SelectedPerson = first;
+
+        var relationshipDialog = new TargetRelationshipDialog(viewModel.GetSelectedPersonForEditing(), viewModel.GetCurrentPeopleForEditing());
+        var relatedBox = (System.Windows.Controls.ComboBox)relationshipDialog.FindName("RelatedPersonBox");
+        if (relatedBox.Items.Count != 1 || relatedBox.Items[0] is not Person { Id: var relatedId } || relatedId != second.Id)
+            throw new InvalidOperationException("关系编辑框暴露了当前族谱以外或主体自身的人物。");
+        relatedBox.SelectedItem = relatedBox.Items[0];
+        await viewModel.AddTargetRelationshipAsync(relationshipDialog.Kind, relationshipDialog.RelatedPersonId);
+
+        var unionDialog = new TargetFamilyUnionDialog(viewModel.GetSelectedPersonForEditing(), viewModel.GetCurrentPeopleForEditing());
+        var partnerBox = (System.Windows.Controls.ComboBox)unionDialog.FindName("PartnerTwoBox");
+        if (partnerBox.Items.Count != 1 || partnerBox.Items[0] is not Person { Id: var partnerId } || partnerId != second.Id)
+            throw new InvalidOperationException("婚配编辑框暴露了当前族谱以外或主体自身的人物。");
+        partnerBox.SelectedItem = partnerBox.Items[0];
+        await viewModel.AddTargetFamilyUnionAsync(unionDialog.Kind, unionDialog.PartnerTwoId ?? Guid.Empty);
+
+        viewModel.NewName = "乙谱";
+        await viewModel.CreateAsync();
+        viewModel.NewPersonName = "外谱人物";
+        await viewModel.AddPersonAsync();
+        var foreign = viewModel.People.Single();
+        await viewModel.SelectAsync(firstGenealogy);
+        viewModel.SelectedPerson = viewModel.People.Single(person => person.Id == first.Id);
+        var scopedDialog = new TargetFamilyUnionDialog(viewModel.GetSelectedPersonForEditing(), viewModel.GetCurrentPeopleForEditing());
+        var scopedPartners = (System.Windows.Controls.ComboBox)scopedDialog.FindName("PartnerTwoBox");
+        if (scopedPartners.Items.OfType<Person>().Any(person => person.Id == foreign.Id))
+            throw new InvalidOperationException("切换后编辑框泄漏了另一族谱人物。");
+
+        await using var verify = database.CreateContext();
+        if (await verify.PersonRelationships.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 1 ||
+            await verify.FamilyUnions.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 1 ||
+            await verify.PersonRelationships.CountAsync(item => item.GenealogyId != firstGenealogy.Id) != 0 ||
+            await verify.FamilyUnions.CountAsync(item => item.GenealogyId != firstGenealogy.Id) != 0)
+            throw new InvalidOperationException("隔离 WPF 编辑写入了错误的族谱范围。");
+
+        relationshipDialog.Close();
+        unionDialog.Close();
+        scopedDialog.Close();
     }
 }

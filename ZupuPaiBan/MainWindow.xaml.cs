@@ -311,6 +311,34 @@ public partial class MainWindow : Window
         catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); }
     }
 
+    private async void TargetShortcut_AddRelationship_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var person = _genealogyViewModel!.GetSelectedPersonForEditing();
+            var dialog = new TargetRelationshipDialog(person, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.AddTargetRelationshipAsync(dialog.Kind, dialog.RelatedPersonId); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"新增人物关系失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
+    private async void TargetShortcut_AddFamilyUnion_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var person = _genealogyViewModel!.GetSelectedPersonForEditing();
+            var dialog = new TargetFamilyUnionDialog(person, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.PartnerTwoId is not Guid partnerTwoId) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.AddTargetFamilyUnionAsync(dialog.Kind, partnerTwoId); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"新增婚配失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async Task AddTreeChildAsync(TargetMemberTreeNode node)
     {
         var dialog = new TargetChildDialog(node.Label) { Owner = this };

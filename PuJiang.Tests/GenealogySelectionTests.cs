@@ -859,4 +859,77 @@ public class GenealogySelectionTests
         Assert.Equal(2, await verify.People.CountAsync());
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Target_relationship_and_union_editing_is_scoped_to_selected_genealogy()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var firstGenealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙", "丙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(person => person.Name == "甲");
+        var second = vm.People.Single(person => person.Name == "乙");
+        var third = vm.People.Single(person => person.Name == "丙");
+        vm.SelectedPerson = first;
+
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, third.Id);
+        Assert.Equal("已新增婚配关系。", vm.Status);
+
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        var secondGenealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "外谱人物";
+        await vm.AddPersonAsync();
+        var foreign = Assert.Single(vm.People);
+        await vm.SelectAsync(firstGenealogy);
+        vm.SelectedPerson = vm.People.Single(person => person.Id == first.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, foreign.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, foreign.Id));
+
+        await using var verify = database.CreateContext();
+        var relationship = await verify.PersonRelationships.SingleAsync();
+        Assert.Equal(firstGenealogy.Id, relationship.GenealogyId);
+        Assert.Equal(first.Id, relationship.PersonId);
+        Assert.Equal(second.Id, relationship.RelatedPersonId);
+        var union = await verify.FamilyUnions.SingleAsync();
+        Assert.Equal(firstGenealogy.Id, union.GenealogyId);
+        Assert.Contains(first.Id, new[] { union.PartnerOneId, union.PartnerTwoId!.Value });
+        Assert.Contains(third.Id, new[] { union.PartnerOneId, union.PartnerTwoId!.Value });
+        Assert.Equal(secondGenealogy.Id, foreign.GenealogyId);
+        Assert.Equal(0, await verify.PersonRelationships.CountAsync(item => item.GenealogyId == secondGenealogy.Id));
+        Assert.Equal(0, await verify.FamilyUnions.CountAsync(item => item.GenealogyId == secondGenealogy.Id));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Target_relationship_editing_rejects_stale_or_foreign_selected_person_without_writing()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        vm.NewPersonName = "甲人物";
+        await vm.AddPersonAsync();
+        var firstPerson = Assert.Single(vm.People);
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        vm.NewPersonName = "乙人物";
+        await vm.AddPersonAsync();
+        var secondPerson = Assert.Single(vm.People);
+        vm.SelectedPerson = firstPerson;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, secondPerson.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, secondPerson.Id));
+        await using var verify = database.CreateContext();
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        Assert.Empty(await verify.FamilyUnions.ToListAsync());
+    }
 }

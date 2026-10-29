@@ -201,7 +201,9 @@
                     <DockPanel>
                         <WrapPanel DockPanel.Dock="Top" Margin="3">
                             <Button Content="编辑目标人物" Click="TargetShortcut_Edit_Click" Margin="0,0,5,4" Padding="6,2"/>
-                            <Button Content="为目标人物新增子女" Click="TargetShortcut_AddChild_Click" Margin="0,0,0,4" Padding="6,2"/>
+                            <Button Content="为目标人物新增子女" Click="TargetShortcut_AddChild_Click" Margin="0,0,5,4" Padding="6,2"/>
+                            <Button Content="新增人物关系" Click="TargetShortcut_AddRelationship_Click" Margin="0,0,5,4" Padding="6,2"/>
+                            <Button Content="新增婚配" Click="TargetShortcut_AddFamilyUnion_Click" Margin="0,0,0,4" Padding="6,2"/>
                         </WrapPanel>
                     <TreeView x:Name="targetTree" ItemsSource="{Binding TargetTree}" SelectedItemChanged="TargetTree_SelectedItemChanged"
                               ToolTip="选择人物查看档案；双击编辑档案；右键添加生物子女。">

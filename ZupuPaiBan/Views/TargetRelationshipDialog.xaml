@@ -1,0 +1,37 @@
+<Window x:Class="ZupuPaiBan.Views.TargetRelationshipDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:ZupuPaiBan.Models"
+        Title="新增人物关系" SizeToContent="WidthAndHeight" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" MinWidth="440">
+    <StackPanel Margin="18">
+        <TextBlock Text="关系主体（锁定为当前所选人物）："/>
+        <TextBlock x:Name="SubjectLabel" Margin="0,4,0,10" TextWrapping="Wrap"/>
+        <TextBlock Text="关系类型："/>
+        <ComboBox x:Name="KindBox" SelectedValuePath="Tag" Margin="0,4,0,8" SelectionChanged="KindBox_SelectionChanged">
+            <ComboBoxItem Content="生物父母（主体 → 父母）" Tag="{x:Static models:PersonRelationshipKind.BiologicalParent}"/>
+            <ComboBoxItem Content="养父母（主体 → 父母）" Tag="{x:Static models:PersonRelationshipKind.AdoptiveParent}"/>
+            <ComboBoxItem Content="继嗣父母（主体 → 父母）" Tag="{x:Static models:PersonRelationshipKind.HeirParent}"/>
+            <ComboBoxItem Content="配偶（主体 → 配偶）" Tag="{x:Static models:PersonRelationshipKind.Spouse}"/>
+            <ComboBoxItem Content="上系失考（不指定对方）" Tag="{x:Static models:PersonRelationshipKind.LostAncestry}"/>
+        </ComboBox>
+        <TextBlock x:Name="RelatedLabel" Text="关系对方（仅当前族谱）："/>
+        <ComboBox x:Name="RelatedPersonBox" Margin="0,4,0,12">
+            <ComboBox.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Name}"/>
+                        <TextBlock Text="  ID: "/>
+                        <TextBlock Text="{Binding Id}"/>
+                    </StackPanel>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBlock Foreground="#805020" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Text="保存只新增这一条原始关系；不会自动合并人物、删除既有关系或推导婚配。"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>
+            <Button Content="新增关系" IsDefault="True" Padding="14,4" Click="Save_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

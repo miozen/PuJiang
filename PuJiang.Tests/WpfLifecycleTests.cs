@@ -12,6 +12,11 @@ public class WpfLifecycleTests
         => await RunWorkerAsync("--wpf-lifecycle");
 
     [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Target_relationship_and_union_editors_are_bounded_to_the_selected_genealogy()
+        => await RunWorkerAsync("--wpf-target-relationship");
+
+    [Fact]
     [Trait("Category", "UI")]
     public async Task Displayed_windows_file_dialog_and_dispatcher_reentry_remain_closed_after_quiescence()
         => await RunWorkerAsync("--wpf-displayed");

@@ -63,12 +63,20 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     public TargetMemberTreeNode GetSelectedTreePersonNode()
     {
-        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
-        var person = SelectedPerson ?? throw new InvalidOperationException("请先选择目标人物。");
-        if (person.GenealogyId != genealogy.Id || !People.Any(p => ReferenceEquals(p, person)))
-            throw new InvalidOperationException("所选人物不属于当前族谱，请重新选择。");
+        var (_, person) = GetCurrentSelectedPersonForEditing();
         return TargetTree.SingleOrDefault(node => node.PersonId == person.Id)
             ?? throw new InvalidOperationException("所选人物已变化，请重新选择。");
+    }
+
+    /// <summary>Returns the selected person only after proving it still belongs to the current target genealogy.</summary>
+    public Person GetSelectedPersonForEditing() => GetCurrentSelectedPersonForEditing().Person;
+
+    /// <summary>Supplies edit dialogs with a snapshot bounded to the current target genealogy.</summary>
+    public IReadOnlyList<Person> GetCurrentPeopleForEditing()
+    {
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        return People.Where(person => person.GenealogyId == genealogy.Id)
+            .OrderBy(person => person.Name, StringComparer.Ordinal).ThenBy(person => person.Id).ToList();
     }
 
     public async Task SaveTreePersonProfileAsync(TargetMemberTreeNode node, string? name, PersonSex sex,
@@ -320,6 +328,69 @@ public partial class GenealogySelectionViewModel : ObservableObject
             await LoadSelectedBiologicalChildrenAsync();
             await RefreshTargetTreeAsync(genealogy.Id, _selectionVersion);
         }
+    }
+
+    /// <summary>
+    /// Creates one explicit relationship for the selected target-model person. Both UI candidates and the
+    /// persistence validator are genealogy-scoped; this method never infers, merges, or replaces a relation.
+    /// </summary>
+    public async Task AddTargetRelationshipAsync(PersonRelationshipKind kind, Guid? relatedPersonId)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        if (kind == PersonRelationshipKind.LostAncestry)
+            relatedPersonId = null;
+        else if (relatedPersonId is not Guid relatedId || !GetCurrentPeopleForEditing().Any(candidate => candidate.Id == relatedId))
+            throw new InvalidOperationException("关系对方必须是当前族谱中的人物。");
+
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).AddRelationshipAsync(new PersonRelationship
+        {
+            GenealogyId = genealogy.Id,
+            PersonId = person.Id,
+            RelatedPersonId = relatedPersonId,
+            Kind = kind
+        });
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        if (kind == PersonRelationshipKind.BiologicalParent)
+            await LoadSelectedBiologicalChildrenAsync();
+        await RefreshTargetTreeAsync(genealogy.Id, version);
+        Status = "已新增人物关系。";
+    }
+
+    /// <summary>
+    /// Creates one explicit, direction-free family union for the selected person. The second partner must be
+    /// a currently listed member of the same genealogy; no relationship record or automatic merge is inferred.
+    /// </summary>
+    public async Task AddTargetFamilyUnionAsync(FamilyUnionKind kind, Guid partnerTwoId)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        if (!GetCurrentPeopleForEditing().Any(candidate => candidate.Id == partnerTwoId))
+            throw new InvalidOperationException("婚配对方必须是当前族谱中的人物。");
+
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).AddFamilyUnionAsync(new FamilyUnion
+        {
+            GenealogyId = genealogy.Id,
+            PartnerOneId = person.Id,
+            PartnerTwoId = partnerTwoId,
+            Kind = kind
+        });
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        await RefreshTargetTreeAsync(genealogy.Id, version);
+        Status = "已新增婚配关系。";
+    }
+
+    private (Genealogy Genealogy, Person Person) GetCurrentSelectedPersonForEditing()
+    {
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var selected = SelectedPerson ?? throw new InvalidOperationException("请先选择目标人物。");
+        var person = People.SingleOrDefault(candidate => candidate.Id == selected.Id && candidate.GenealogyId == genealogy.Id)
+            ?? throw new InvalidOperationException("所选人物不属于当前族谱，请重新选择。");
+        return (genealogy, person);
     }
 
     private async Task RefreshTargetTreeAsync(Guid genealogyId, int version)
