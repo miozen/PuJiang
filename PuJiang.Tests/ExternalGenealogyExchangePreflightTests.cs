@@ -1,4 +1,5 @@
 using ClosedXML.Excel;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
@@ -7,6 +8,30 @@ namespace PuJiang.Tests;
 
 public class ExternalGenealogyExchangePreflightTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Lossy_gedcom_requires_explicit_acceptance_before_atomic_new_genealogy_import()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var path = Path.Combine(Path.GetDirectoryName(database.DatabasePath)!, "lossy.ged");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME 甲 /氏/\n1 SEX M\n1 OCCU 农\n0 TRLR\n");
+        await using var context = database.CreateContext();
+        var importer = new ExternalGenealogyExchangeImportService(context);
+
+        var denied = await importer.ImportGedcomAsync(path, "拒绝谱", acceptLosses: false);
+        Assert.False(denied.Imported);
+        Assert.Empty(await context.Genealogies.ToListAsync());
+
+        var accepted = await importer.ImportGedcomAsync(path, "确认谱", acceptLosses: true);
+        Assert.True(accepted.Imported);
+        Assert.NotNull(accepted.GenealogyId);
+        var record = Assert.Single(await new GenealogyDataService(context).GetImportRecordsAsync(accepted.GenealogyId!.Value));
+        Assert.Equal("PuJiang.GEDCOM-5.5.x", record.SourceKind);
+        Assert.Equal(64, record.SourceDocumentFingerprint.Length);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Excel_profile_maps_people_and_parent_but_reports_unmappable_spouse_text()

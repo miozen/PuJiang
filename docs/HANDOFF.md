@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 2026-10-29 已实测 `f4e761b225135b04686d628a8ac425a6bae4bafb` 与 `origin/dev` 一致，GitHub Actions run `40793486623` 成功；本轮外部格式导入设计文档尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
+- **Remote Sync：** 本轮开始时 `202394ebdb6a31fd3bdad8b79084cfcdcce9093b` 与 `origin/dev` 一致；本轮外部导入服务、测试及文档尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** 外部格式的显式失败关闭持久化导入与损失报告 UI 已形成 Proposed 设计，等待 D-013 的两项用户确认；保持失败关闭。
-- **Last Completed：** D-013 Proposed 固化：外部格式只导入为新族谱，预检错误零写入；损失报告按分类显示，拟要求用户独立确认后才提交。入口与旧成员整表替换分离，文件选择至提交受协调器许可保护，成功后刷新并选中新族谱。未实现数据库写入、损失确认 UI 或外部来源标识。
-- **Uncommitted Work：** D-013 Proposed、外部导入 UI/事务设计和本轮权威文档；以 `git status --short` 为准。
-- **Validation Performed：** 设计轮未改动可执行代码；沿用 `f4e761b` 已通过的 Windows 原生验证：Release build 0 error、外部 profile 3/3、日常测试 135/135。未访问正式用户数据库，未启动生产恢复。
-- **Validation Pending：** 用户确认 D-013 的“损失确认后是否允许导入”及外部来源稳定标识；确认后实施外部持久化导入、损失报告 UI、事务/退出竞争测试；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
-- **Known Issues / Blockers：** 外部 profile 仍仅为内存映射；不能在 D-013 确认前把有损映射写入数据库。独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 等待用户确认 D-013 的两个待确认点；确认后实施外部格式持久化导入与损失报告 UI，继续保持自动合并和生产恢复关闭。
+- **Current Task：** 实现外部格式的显式失败关闭持久化导入与损失报告 UI；D-013 已确认，自动合并和生产恢复继续关闭。
+- **Last Completed：** 已实现 `ExternalGenealogyExchangeImportService`。Excel/GEDCOM 预检错误或缺少目标图零写入；有损映射必须显式 `acceptLosses`，否则零写入。成功导入始终创建新族谱并全量生成内部 ID，在同一事务保存图数据及 profile、版本、原始文件 SHA-256 指纹来源记录；不保存路径、不选择或修改既有族谱。D-013 已更新为 Accepted。
+- **Uncommitted Work：** 外部导入服务、其接受/拒绝损失的隔离 SQLite 测试及本轮权威文档；以 `git status --short` 为准。
+- **Validation Performed：** Windows 原生 Release build 成功（0 error，既有 ImageSharp 1.0.4 警告）；`ExternalGenealogyExchangePreflightTests` 3/3 通过，新增用例验证拒绝有损 GEDCOM 不写入、明确接受后原子创建新族谱及来源指纹；日常 `Category!=Performance&Category!=UI` 136/136 通过。未访问正式用户数据库，未启动生产恢复。
+- **Validation Pending：** 提交推送及远端 CI；外部格式损失报告 UI、文件框至提交的隔离退出竞争测试；生产恢复、完整备份包和真实性能仍未验证。
+- **Known Issues / Blockers：** 外部持久化服务已可用但尚无 WPF 入口；独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
+- **Exact Next Action：** 完成日常全量测试后提交并推送本检查点；随后实现独立的外部格式损失报告 UI 及隔离退出竞争测试，继续保持自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
