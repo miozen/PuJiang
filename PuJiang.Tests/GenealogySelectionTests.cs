@@ -1040,6 +1040,77 @@ public class GenealogySelectionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Committed_target_link_writes_report_refresh_failure_and_can_reload()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var refreshFailure = new FailRefreshAfterWriteInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False")
+            .AddInterceptors(refreshFailure).Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "关系刷新失败谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙", "丙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+
+        var firstId = vm.People.Single(person => person.Name == "甲").Id;
+        var secondId = vm.People.Single(person => person.Name == "乙").Id;
+        var thirdId = vm.People.Single(person => person.Name == "丙").Id;
+        vm.SelectedPerson = vm.People.Single(person => person.Id == firstId);
+
+        refreshFailure.Arm("INSERT INTO \"PersonRelationships\"");
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, secondId);
+        Assert.StartsWith("人物关系已新增，但目标谱系刷新失败：", vm.Status);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+        Assert.Equal(3, vm.TargetTree.Count);
+
+        vm.SelectedPerson = vm.People.Single(person => person.Id == firstId);
+        refreshFailure.Arm("INSERT INTO \"FamilyUnions\"");
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, thirdId);
+        Assert.StartsWith("婚配关系已新增，但目标谱系刷新失败：", vm.Status);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Single(await verify.FamilyUnions.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+
+        vm.SelectedPerson = vm.People.Single(person => person.Id == firstId);
+        var relationship = (await vm.GetTargetLinkRemovalCandidatesAsync())
+            .Single(item => item.Kind == TargetLinkRemovalKind.Relationship);
+        refreshFailure.Arm("DELETE FROM \"PersonRelationships\"");
+        await vm.RemoveTargetLinkAsync(relationship);
+        Assert.StartsWith("人物关系已解除，但目标谱系刷新失败：", vm.Status);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Empty(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+
+        vm.SelectedPerson = vm.People.Single(person => person.Id == firstId);
+        var union = (await vm.GetTargetLinkRemovalCandidatesAsync())
+            .Single(item => item.Kind == TargetLinkRemovalKind.FamilyUnion);
+        refreshFailure.Arm("DELETE FROM \"FamilyUnions\"");
+        await vm.RemoveTargetLinkAsync(union);
+        Assert.StartsWith("婚配关系已解除，但目标谱系刷新失败：", vm.Status);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Empty(await verify.FamilyUnions.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+        Assert.Equal(3, vm.People.Count);
+        Assert.Equal(3, vm.TargetTree.Count);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Target_relationship_and_union_editing_is_scoped_to_selected_genealogy()
     {
         await using var database = new TestDatabase();

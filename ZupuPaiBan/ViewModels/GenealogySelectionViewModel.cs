@@ -366,8 +366,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
         if (kind == PersonRelationshipKind.BiologicalParent)
             await LoadSelectedBiologicalChildrenAsync();
-        await RefreshTargetTreeAsync(genealogy.Id, version, "人物关系已新增");
-        Status = "已新增人物关系。";
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, "人物关系已新增"))
+            Status = "已新增人物关系。";
     }
 
     /// <summary>
@@ -391,8 +391,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
             Kind = kind
         });
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
-        await RefreshTargetTreeAsync(genealogy.Id, version, "婚配关系已新增");
-        Status = "已新增婚配关系。";
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, "婚配关系已新增"))
+            Status = "已新增婚配关系。";
     }
 
     /// <summary>Reads only the current selected person's removable links from the current genealogy snapshot.</summary>
@@ -452,9 +452,9 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
         if (candidate.Kind == TargetLinkRemovalKind.Relationship)
             await LoadSelectedBiologicalChildrenAsync();
-        await RefreshTargetTreeAsync(genealogy.Id, version,
-            candidate.Kind == TargetLinkRemovalKind.Relationship ? "人物关系已解除" : "婚配关系已解除");
-        Status = candidate.Kind == TargetLinkRemovalKind.Relationship ? "已解除人物关系。" : "已解除婚配关系。";
+        var completedOperation = candidate.Kind == TargetLinkRemovalKind.Relationship ? "人物关系已解除" : "婚配关系已解除";
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, completedOperation))
+            Status = candidate.Kind == TargetLinkRemovalKind.Relationship ? "已解除人物关系。" : "已解除婚配关系。";
     }
 
     private (Genealogy Genealogy, Person Person) GetCurrentSelectedPersonForEditing()
@@ -497,14 +497,17 @@ public partial class GenealogySelectionViewModel : ObservableObject
         _ => "未知类型"
     };
 
-    private async Task RefreshTargetTreeAsync(Guid genealogyId, int version, string completedOperation)
+    private async Task<bool> RefreshTargetTreeAsync(Guid genealogyId, int version, string completedOperation)
     {
         try
         {
             var snapshot = await GetGraphSnapshotForSelectionAsync(genealogyId);
             var tree = TargetMemberTreeProjection.Create(snapshot);
             if (version == _selectionVersion && SelectedGenealogy?.Id == genealogyId)
+            {
                 TargetTree = new ObservableCollection<TargetMemberTreeNode>(tree);
+                return true;
+            }
         }
         catch (Exception ex)
         {
@@ -514,5 +517,6 @@ public partial class GenealogySelectionViewModel : ObservableObject
                 Status = $"{completedOperation}，但目标谱系刷新失败：{ex.Message}";
             }
         }
+        return false;
     }
 }
