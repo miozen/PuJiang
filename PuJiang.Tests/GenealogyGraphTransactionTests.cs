@@ -3,12 +3,78 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 using ZupuPaiBan.Data;
+using ZupuPaiBan.Domain;
 using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
 public class GenealogyGraphTransactionTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Independent_contexts_with_stale_validation_cannot_commit_duplicate_relationships()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        Guid genealogyId, childId, parentId;
+        await using (var setup = database.CreateContext())
+        {
+            var service = new GenealogyDataService(setup);
+            var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "关系并发谱" });
+            genealogyId = genealogy.Id;
+            childId = (await service.AddPersonAsync(new Person { GenealogyId = genealogyId, Name = "子" })).Id;
+            parentId = (await service.AddPersonAsync(new Person { GenealogyId = genealogyId, Name = "父" })).Id;
+        }
+        await using var first = database.CreateContext();
+        await using var second = database.CreateContext();
+        var firstCandidate = new PersonRelationship { GenealogyId = genealogyId, PersonId = childId, RelatedPersonId = parentId, Kind = PersonRelationshipKind.BiologicalParent };
+        var secondCandidate = new PersonRelationship { GenealogyId = genealogyId, PersonId = childId, RelatedPersonId = parentId, Kind = PersonRelationshipKind.BiologicalParent };
+
+        await new PersonRelationshipValidator(first).ValidateForCreateAsync(firstCandidate);
+        await new PersonRelationshipValidator(second).ValidateForCreateAsync(secondCandidate);
+        first.PersonRelationships.Add(firstCandidate);
+        await first.SaveChangesAsync();
+        second.PersonRelationships.Add(secondCandidate);
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => second.SaveChangesAsync());
+        await using var verify = database.CreateContext();
+        Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogyId).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Independent_contexts_with_stale_validation_cannot_commit_reversed_duplicate_unions()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        Guid genealogyId, oneId, twoId;
+        await using (var setup = database.CreateContext())
+        {
+            var service = new GenealogyDataService(setup);
+            var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "婚配并发谱" });
+            genealogyId = genealogy.Id;
+            oneId = (await service.AddPersonAsync(new Person { GenealogyId = genealogyId, Name = "甲" })).Id;
+            twoId = (await service.AddPersonAsync(new Person { GenealogyId = genealogyId, Name = "乙" })).Id;
+        }
+        await using var first = database.CreateContext();
+        await using var second = database.CreateContext();
+        var firstCandidate = new FamilyUnion { GenealogyId = genealogyId, PartnerOneId = oneId, PartnerTwoId = twoId, Kind = FamilyUnionKind.Marriage };
+        var secondCandidate = new FamilyUnion { GenealogyId = genealogyId, PartnerOneId = twoId, PartnerTwoId = oneId, Kind = FamilyUnionKind.Marriage };
+
+        await new FamilyUnionValidator(first).ValidateForCreateAsync(firstCandidate);
+        await new FamilyUnionValidator(second).ValidateForCreateAsync(secondCandidate);
+        Assert.Equal(firstCandidate.PartnerOneId, secondCandidate.PartnerOneId);
+        Assert.Equal(firstCandidate.PartnerTwoId, secondCandidate.PartnerTwoId);
+        first.FamilyUnions.Add(firstCandidate);
+        await first.SaveChangesAsync();
+        second.FamilyUnions.Add(secondCandidate);
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => second.SaveChangesAsync());
+        await using var verify = database.CreateContext();
+        var union = Assert.Single(await verify.FamilyUnions.Where(item => item.GenealogyId == genealogyId).ToListAsync());
+        Assert.True(union.PartnerTwoId is Guid secondId && union.PartnerOneId.CompareTo(secondId) < 0);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Graph_batch_commits_same_genealogy_branches_people_relationships_and_unions()
