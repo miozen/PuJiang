@@ -932,4 +932,115 @@ public class GenealogySelectionTests
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
         Assert.Empty(await verify.FamilyUnions.ToListAsync());
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Target_link_removal_deletes_only_selected_scoped_record_and_keeps_people()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "解除谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙", "丙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(person => person.Name == "甲");
+        var second = vm.People.Single(person => person.Name == "乙");
+        var third = vm.People.Single(person => person.Name == "丙");
+        vm.SelectedPerson = first;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, third.Id);
+
+        var candidates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        var relationship = Assert.Single(candidates, item => item.Kind == TargetLinkRemovalKind.Relationship);
+        var union = Assert.Single(candidates, item => item.Kind == TargetLinkRemovalKind.FamilyUnion);
+        await vm.RemoveTargetLinkAsync(relationship);
+        Assert.Equal("已解除人物关系。", vm.Status);
+        await using (var afterRelationship = database.CreateContext())
+        {
+            Assert.Equal(3, await afterRelationship.People.CountAsync());
+            Assert.Empty(await afterRelationship.PersonRelationships.ToListAsync());
+            Assert.Single(await afterRelationship.FamilyUnions.ToListAsync());
+        }
+
+        await vm.RemoveTargetLinkAsync(union);
+        Assert.Equal("已解除婚配关系。", vm.Status);
+        await using var verify = database.CreateContext();
+        Assert.Equal(3, await verify.People.CountAsync());
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        Assert.Empty(await verify.FamilyUnions.ToListAsync());
+        Assert.Equal(genealogy.Id, first.GenealogyId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Target_link_removal_rejects_foreign_or_stale_record_without_deleting_anything()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var firstGenealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "甲谱" });
+        var secondGenealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+        var first = await service.AddPersonAsync(new Person { GenealogyId = firstGenealogy.Id, Name = "甲" });
+        var firstOther = await service.AddPersonAsync(new Person { GenealogyId = firstGenealogy.Id, Name = "乙" });
+        var foreign = await service.AddPersonAsync(new Person { GenealogyId = secondGenealogy.Id, Name = "外甲" });
+        var foreignOther = await service.AddPersonAsync(new Person { GenealogyId = secondGenealogy.Id, Name = "外乙" });
+        var ownRelationship = await service.AddRelationshipAsync(new PersonRelationship
+        {
+            GenealogyId = firstGenealogy.Id, PersonId = first.Id, RelatedPersonId = firstOther.Id, Kind = PersonRelationshipKind.Spouse
+        });
+        var foreignUnion = await service.AddFamilyUnionAsync(new FamilyUnion
+        {
+            GenealogyId = secondGenealogy.Id, PartnerOneId = foreign.Id, PartnerTwoId = foreignOther.Id
+        });
+
+        var vm = new GenealogySelectionViewModel(database.CreateContext);
+        await vm.LoadAsync();
+        await vm.SelectAsync(vm.Genealogies.Single(item => item.Id == firstGenealogy.Id));
+        vm.SelectedPerson = vm.People.Single(item => item.Id == first.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(
+            new TargetLinkRemovalCandidate(foreignUnion.Id, TargetLinkRemovalKind.FamilyUnion, "伪造跨谱婚配")));
+        await vm.RemoveTargetLinkAsync(new TargetLinkRemovalCandidate(ownRelationship.Id, TargetLinkRemovalKind.Relationship, "当前关系"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(
+            new TargetLinkRemovalCandidate(ownRelationship.Id, TargetLinkRemovalKind.Relationship, "已解除关系")));
+
+        await using var verify = database.CreateContext();
+        Assert.Empty(await verify.PersonRelationships.Where(item => item.GenealogyId == firstGenealogy.Id).ToListAsync());
+        Assert.Single(await verify.FamilyUnions.Where(item => item.GenealogyId == secondGenealogy.Id).ToListAsync());
+        Assert.Equal(4, await verify.People.CountAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Failed_target_link_removal_keeps_all_graph_records_intact()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "失败解除谱" });
+        var first = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "甲" });
+        var second = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "乙" });
+        var relationship = await service.AddRelationshipAsync(new PersonRelationship
+        {
+            GenealogyId = genealogy.Id, PersonId = first.Id, RelatedPersonId = second.Id, Kind = PersonRelationshipKind.Spouse
+        });
+        var union = await service.AddFamilyUnionAsync(new FamilyUnion
+        {
+            GenealogyId = genealogy.Id, PartnerOneId = first.Id, PartnerTwoId = second.Id
+        });
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectTargetRelationshipDelete BEFORE DELETE ON PersonRelationships BEGIN SELECT RAISE(ABORT, 'simulated relationship delete failure'); END;");
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectTargetUnionDelete BEFORE DELETE ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'simulated union delete failure'); END;");
+
+        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveRelationshipForParticipantAsync(genealogy.Id, relationship.Id, first.Id));
+        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, union.Id, first.Id));
+        await using var verify = database.CreateContext();
+        Assert.Equal(2, await verify.People.CountAsync());
+        Assert.Single(await verify.PersonRelationships.ToListAsync());
+        Assert.Single(await verify.FamilyUnions.ToListAsync());
+    }
 }

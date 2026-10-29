@@ -74,6 +74,36 @@ public sealed class GenealogyDataService
         if (count == 0) throw new InvalidOperationException("当前族谱中不存在指定的生物父母关系。");
     }
 
+    /// <summary>
+    /// Deletes exactly one relationship only when it still belongs to the specified genealogy and includes the
+    /// currently selected participant. This is one scoped SQL DELETE, so a failed/stale request changes nothing.
+    /// </summary>
+    public async Task RemoveRelationshipForParticipantAsync(Guid genealogyId, Guid relationshipId, Guid participantId,
+        CancellationToken cancellationToken = default)
+    {
+        var count = await _context.PersonRelationships
+            .Where(relationship => relationship.GenealogyId == genealogyId && relationship.Id == relationshipId &&
+                (relationship.PersonId == participantId || relationship.RelatedPersonId == participantId))
+            .ExecuteDeleteAsync(cancellationToken);
+        if (count == 0)
+            throw new InvalidOperationException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
+    }
+
+    /// <summary>
+    /// Deletes exactly one union only when it still belongs to the specified genealogy and includes the current
+    /// participant. It never deletes either person or a related relationship record.
+    /// </summary>
+    public async Task RemoveFamilyUnionForParticipantAsync(Guid genealogyId, Guid unionId, Guid participantId,
+        CancellationToken cancellationToken = default)
+    {
+        var count = await _context.FamilyUnions
+            .Where(union => union.GenealogyId == genealogyId && union.Id == unionId &&
+                (union.PartnerOneId == participantId || union.PartnerTwoId == participantId))
+            .ExecuteDeleteAsync(cancellationToken);
+        if (count == 0)
+            throw new InvalidOperationException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");
+    }
+
     public async Task<Person> AddPersonAsync(Person person, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(person);

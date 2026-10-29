@@ -1,0 +1,20 @@
+<Window x:Class="ZupuPaiBan.Views.TargetLinkRemovalDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="解除人物关系或婚配" SizeToContent="WidthAndHeight" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" MinWidth="560" MaxHeight="520">
+    <StackPanel Margin="18">
+        <TextBlock x:Name="SubjectLabel" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <TextBlock Text="请选择要解除的一条记录："/>
+        <ListBox x:Name="CandidateList" MinHeight="120" MaxHeight="220" Margin="0,4,0,10"
+                 SelectionChanged="CandidateList_SelectionChanged" DisplayMemberPath="Description"/>
+        <TextBlock Foreground="#A02020" TextWrapping="Wrap"
+                   Text="解除只删除所选的一条关系或婚配记录，不删除人物，也不删除其它关系；此操作无法撤销。"/>
+        <CheckBox x:Name="ConfirmationBox" Margin="0,10,0,12" Content="我已核对所选记录，并确认解除它。"
+                  Checked="ConfirmationChanged" Unchecked="ConfirmationChanged"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>
+            <Button x:Name="RemoveButton" Content="确认解除" IsDefault="True" Padding="14,4" IsEnabled="False" Click="Remove_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

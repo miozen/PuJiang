@@ -137,6 +137,21 @@ internal static class WpfLifecycleWorker
         partnerBox.SelectedItem = partnerBox.Items[0];
         await viewModel.AddTargetFamilyUnionAsync(unionDialog.Kind, unionDialog.PartnerTwoId ?? Guid.Empty);
 
+        var removalCandidates = await viewModel.GetTargetLinkRemovalCandidatesAsync();
+        if (removalCandidates.Count != 2 || removalCandidates.Any(candidate => !candidate.Description.Contains("甲") && !candidate.Description.Contains("乙")))
+            throw new InvalidOperationException("解除入口未仅显示当前人物参与的记录。");
+        var removalDialog = new TargetLinkRemovalDialog(viewModel.GetSelectedPersonForEditing(), removalCandidates);
+        var candidateList = (System.Windows.Controls.ListBox)removalDialog.FindName("CandidateList");
+        var confirmation = (System.Windows.Controls.CheckBox)removalDialog.FindName("ConfirmationBox");
+        var removeButton = (System.Windows.Controls.Button)removalDialog.FindName("RemoveButton");
+        if (removeButton.IsEnabled) throw new InvalidOperationException("解除入口未要求明确确认。");
+        candidateList.SelectedItem = removalCandidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship);
+        confirmation.IsChecked = true;
+        if (!removeButton.IsEnabled) throw new InvalidOperationException("解除入口未在选择并确认后启用。");
+        await viewModel.RemoveTargetLinkAsync(removalDialog.SelectedCandidate!);
+        if ((await viewModel.GetTargetLinkRemovalCandidatesAsync()).Single().Kind != TargetLinkRemovalKind.FamilyUnion)
+            throw new InvalidOperationException("解除关系错误删除了其它婚配记录。");
+
         viewModel.NewName = "乙谱";
         await viewModel.CreateAsync();
         viewModel.NewPersonName = "外谱人物";
@@ -150,7 +165,7 @@ internal static class WpfLifecycleWorker
             throw new InvalidOperationException("切换后编辑框泄漏了另一族谱人物。");
 
         await using var verify = database.CreateContext();
-        if (await verify.PersonRelationships.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 1 ||
+        if (await verify.PersonRelationships.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 0 ||
             await verify.FamilyUnions.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 1 ||
             await verify.PersonRelationships.CountAsync(item => item.GenealogyId != firstGenealogy.Id) != 0 ||
             await verify.FamilyUnions.CountAsync(item => item.GenealogyId != firstGenealogy.Id) != 0)
@@ -159,5 +174,6 @@ internal static class WpfLifecycleWorker
         relationshipDialog.Close();
         unionDialog.Close();
         scopedDialog.Close();
+        removalDialog.Close();
     }
 }

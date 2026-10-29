@@ -384,6 +384,67 @@ public partial class GenealogySelectionViewModel : ObservableObject
         Status = "已新增婚配关系。";
     }
 
+    /// <summary>Reads only the current selected person's removable links from the current genealogy snapshot.</summary>
+    public async Task<IReadOnlyList<TargetLinkRemovalCandidate>> GetTargetLinkRemovalCandidatesAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        await using var context = _createContext();
+        var snapshot = await new GenealogyDataService(context).GetGraphSnapshotAsync(genealogy.Id);
+        var names = snapshot.People.ToDictionary(item => item.Id, item => item.Name);
+        var candidates = new List<TargetLinkRemovalCandidate>();
+        foreach (var relationship in snapshot.Relationships.Where(item => item.PersonId == person.Id || item.RelatedPersonId == person.Id))
+        {
+            var subject = names.GetValueOrDefault(relationship.PersonId, "已不存在的人物");
+            var related = relationship.RelatedPersonId is Guid relatedId
+                ? names.GetValueOrDefault(relatedId, "已不存在的人物")
+                : "（无对方）";
+            candidates.Add(new TargetLinkRemovalCandidate(relationship.Id, TargetLinkRemovalKind.Relationship,
+                $"人物关系：{subject} → {related}（{GetRelationshipKindName(relationship.Kind)}）"));
+        }
+        foreach (var union in snapshot.Unions.Where(item => item.PartnerOneId == person.Id || item.PartnerTwoId == person.Id))
+        {
+            var first = names.GetValueOrDefault(union.PartnerOneId, "已不存在的人物");
+            var second = union.PartnerTwoId is Guid secondId
+                ? names.GetValueOrDefault(secondId, "已不存在的人物")
+                : "（未详）";
+            candidates.Add(new TargetLinkRemovalCandidate(union.Id, TargetLinkRemovalKind.FamilyUnion,
+                $"婚配：{first} — {second}（{GetFamilyUnionKindName(union.Kind)}）"));
+        }
+        return candidates.OrderBy(item => item.Kind).ThenBy(item => item.Description, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Explicitly unlinks one currently selected person's relationship or union. The persistence operation is one
+    /// participant- and genealogy-scoped DELETE; it never deletes people or another graph record.
+    /// </summary>
+    public async Task RemoveTargetLinkAsync(TargetLinkRemovalCandidate candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        using var operation = _operationCoordinator?.EnterOperation();
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        var service = new GenealogyDataService(context);
+        switch (candidate.Kind)
+        {
+            case TargetLinkRemovalKind.Relationship:
+                await service.RemoveRelationshipForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
+                break;
+            case TargetLinkRemovalKind.FamilyUnion:
+                await service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
+                break;
+            default:
+                throw new InvalidOperationException("解除类型无效。");
+        }
+
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        if (candidate.Kind == TargetLinkRemovalKind.Relationship)
+            await LoadSelectedBiologicalChildrenAsync();
+        await RefreshTargetTreeAsync(genealogy.Id, version);
+        Status = candidate.Kind == TargetLinkRemovalKind.Relationship ? "已解除人物关系。" : "已解除婚配关系。";
+    }
+
     private (Genealogy Genealogy, Person Person) GetCurrentSelectedPersonForEditing()
     {
         var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
@@ -392,6 +453,24 @@ public partial class GenealogySelectionViewModel : ObservableObject
             ?? throw new InvalidOperationException("所选人物不属于当前族谱，请重新选择。");
         return (genealogy, person);
     }
+
+    private static string GetRelationshipKindName(PersonRelationshipKind kind) => kind switch
+    {
+        PersonRelationshipKind.BiologicalParent => "生物父母",
+        PersonRelationshipKind.AdoptiveParent => "养父母",
+        PersonRelationshipKind.HeirParent => "继嗣父母",
+        PersonRelationshipKind.Spouse => "配偶",
+        PersonRelationshipKind.LostAncestry => "上系失考",
+        _ => "未知关系"
+    };
+
+    private static string GetFamilyUnionKindName(FamilyUnionKind kind) => kind switch
+    {
+        FamilyUnionKind.Marriage => "婚姻",
+        FamilyUnionKind.Partnership => "伴侣关系",
+        FamilyUnionKind.Unknown => "类型未详",
+        _ => "未知类型"
+    };
 
     private async Task RefreshTargetTreeAsync(Guid genealogyId, int version)
     {

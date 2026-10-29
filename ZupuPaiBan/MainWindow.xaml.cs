@@ -339,6 +339,30 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show($"新增婚配失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
+    private async void TargetShortcut_RemoveLink_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var person = _genealogyViewModel!.GetSelectedPersonForEditing();
+            genealogyPanel.IsEnabled = false;
+            IReadOnlyList<TargetLinkRemovalCandidate> candidates;
+            try { candidates = await _genealogyViewModel.GetTargetLinkRemovalCandidatesAsync(); }
+            finally { genealogyPanel.IsEnabled = true; }
+            if (candidates.Count == 0)
+            {
+                MessageBox.Show("当前人物没有可解除的关系或婚配记录。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new TargetLinkRemovalDialog(person, candidates) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.SelectedCandidate is not { } candidate) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.RemoveTargetLinkAsync(candidate); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"解除关系或婚配失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async Task AddTreeChildAsync(TargetMemberTreeNode node)
     {
         var dialog = new TargetChildDialog(node.Label) { Owner = this };
