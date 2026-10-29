@@ -963,6 +963,83 @@ public class GenealogySelectionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Committed_tree_and_biological_child_writes_report_refresh_failure_and_can_reload()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var refreshFailure = new FailRefreshAfterWriteInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False")
+            .AddInterceptors(refreshFailure).Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "刷新失败谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "父母", "已有子女" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+
+        var parentId = vm.People.Single(person => person.Name == "父母").Id;
+        var existingChildId = vm.People.Single(person => person.Name == "已有子女").Id;
+
+        refreshFailure.Arm("UPDATE \"People\"");
+        await vm.SaveTreePersonProfileAsync(vm.TargetTree.Single(item => item.PersonId == parentId), "已保存父母", PersonSex.Male, null, null, "已保存档案");
+        Assert.StartsWith("档案已保存，但目标谱系刷新失败：", vm.Status);
+        Assert.Empty(vm.People);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Equal("已保存档案", (await verify.People.SingleAsync(item => item.Id == parentId)).Biography);
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+        Assert.Contains(vm.People, item => item.Id == parentId && item.Name == "已保存父母");
+
+        refreshFailure.Arm("INSERT INTO \"PersonRelationships\"");
+        await vm.AddBiologicalChildForTreeNodeAsync(vm.TargetTree.Single(item => item.PersonId == parentId), "新子女");
+        Assert.StartsWith("子女已保存，但目标谱系刷新失败：", vm.Status);
+        Assert.Empty(vm.People);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+        {
+            Assert.Equal(3, await verify.People.CountAsync(item => item.GenealogyId == genealogy.Id));
+            Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        }
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+
+        vm.SelectedPerson = vm.People.Single(item => item.Id == parentId);
+        vm.SelectedExistingChild = vm.People.Single(item => item.Id == existingChildId);
+        refreshFailure.Arm("INSERT INTO \"PersonRelationships\"");
+        await vm.AddExistingBiologicalChildAsync();
+        Assert.StartsWith("生物父子关系已建立，但目标谱系刷新失败：", vm.Status);
+        Assert.StartsWith("加载生物子女失败：", vm.ChildrenStatus);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Equal(2, await verify.PersonRelationships.CountAsync(item => item.GenealogyId == genealogy.Id));
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+        vm.SelectedPerson = vm.People.Single(item => item.Id == parentId);
+        await vm.LoadSelectedBiologicalChildrenAsync();
+        Assert.Equal(2, vm.BiologicalChildren.Count);
+
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(item => item.Id == existingChildId);
+        refreshFailure.Arm("DELETE FROM \"PersonRelationships\"");
+        await vm.RemoveBiologicalParentRelationshipAsync();
+        Assert.StartsWith("生物父子关系已解除，但目标谱系刷新失败：", vm.Status);
+        Assert.StartsWith("加载生物子女失败：", vm.ChildrenStatus);
+        Assert.Empty(vm.TargetTree);
+        await using (var verify = database.CreateContext())
+            Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+        refreshFailure.Disable();
+        await vm.SelectAsync(genealogy);
+        vm.SelectedPerson = vm.People.Single(item => item.Id == parentId);
+        await vm.LoadSelectedBiologicalChildrenAsync();
+        Assert.DoesNotContain(vm.BiologicalChildren, item => item.Id == existingChildId);
+        Assert.Single(vm.BiologicalChildren);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Target_relationship_and_union_editing_is_scoped_to_selected_genealogy()
     {
         await using var database = new TestDatabase();
@@ -1269,6 +1346,58 @@ public class GenealogySelectionTests
             var continuation = _continue;
             entered.TrySetResult();
             await continuation.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class FailRefreshAfterWriteInterceptor : DbCommandInterceptor
+    {
+        private string? _writeFragment;
+        private int _failReads;
+
+        public void Arm(string writeFragment)
+        {
+            _writeFragment = writeFragment;
+            Volatile.Write(ref _failReads, 0);
+        }
+
+        public void Disable()
+        {
+            _writeFragment = null;
+            Volatile.Write(ref _failReads, 0);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            ThrowWhenRefreshReads(command);
+            return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<int> NonQueryExecutedAsync(DbCommand command, CommandExecutedEventData eventData,
+            int result, CancellationToken cancellationToken = default)
+        {
+            ArmRefreshFailureAfterWrite(command);
+            return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<DbDataReader> ReaderExecutedAsync(DbCommand command, CommandExecutedEventData eventData,
+            DbDataReader result, CancellationToken cancellationToken = default)
+        {
+            ArmRefreshFailureAfterWrite(command);
+            return ValueTask.FromResult(result);
+        }
+
+        private void ArmRefreshFailureAfterWrite(DbCommand command)
+        {
+            var writeFragment = _writeFragment;
+            if (writeFragment is not null && command.CommandText.Contains(writeFragment, StringComparison.Ordinal))
+                Volatile.Write(ref _failReads, 1);
+        }
+
+        private void ThrowWhenRefreshReads(DbCommand command)
+        {
+            if (Volatile.Read(ref _failReads) == 1 && command.CommandText.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("simulated refresh read failure");
         }
     }
 }
