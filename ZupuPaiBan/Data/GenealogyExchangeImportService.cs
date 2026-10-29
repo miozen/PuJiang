@@ -36,7 +36,7 @@ public sealed record GenealogyExchangeImportPreflightResult(
     GenealogyExchangeImportPreflightReport Report);
 
 public sealed record GenealogyExchangeImportResult(bool Imported, GenealogyExchangeImportPreflightReport Report,
-    Guid? ImportRecordId);
+    Guid? GenealogyId, Guid? ImportRecordId);
 
 /// <summary>
 /// Insert-only persistence for the internal exchange format. Copy import is explicit; conflict merging is deliberately unsupported.
@@ -115,38 +115,52 @@ public sealed class GenealogyExchangeImportService
         string path, CancellationToken cancellationToken = default)
     {
         var preflight = await PreflightAsync(path, cancellationToken);
-        return await ImportPreflightedAsync(preflight, cancellationToken);
+        return await ImportPreflightedAsync(preflight, copyName: null, cancellationToken);
     }
 
     public async Task<GenealogyExchangeImportResult> ImportAsync(
         GenealogyExchangeDocument document, CancellationToken cancellationToken = default)
     {
         var preflight = await PreflightAsync(document, cancellationToken);
-        return await ImportPreflightedAsync(preflight, cancellationToken);
+        return await ImportPreflightedAsync(preflight, copyName: null, cancellationToken);
     }
 
     public async Task<GenealogyExchangeImportResult> ImportCopyAsync(
         string path, CancellationToken cancellationToken = default)
     {
         var preflight = await PreflightCopyAsync(path, cancellationToken);
-        return await ImportPreflightedAsync(preflight, cancellationToken);
+        return await ImportPreflightedAsync(preflight, copyName: null, cancellationToken);
+    }
+
+    public async Task<GenealogyExchangeImportResult> ImportCopyAsync(
+        string path, string copyName, CancellationToken cancellationToken = default)
+    {
+        var preflight = await PreflightCopyAsync(path, cancellationToken);
+        return await ImportPreflightedAsync(preflight, copyName, cancellationToken);
     }
 
     public async Task<GenealogyExchangeImportResult> ImportCopyAsync(
         GenealogyExchangeDocument document, CancellationToken cancellationToken = default)
     {
         var preflight = await PreflightCopyAsync(document, cancellationToken);
-        return await ImportPreflightedAsync(preflight, cancellationToken);
+        return await ImportPreflightedAsync(preflight, copyName: null, cancellationToken);
+    }
+
+    public async Task<GenealogyExchangeImportResult> ImportCopyAsync(
+        GenealogyExchangeDocument document, string copyName, CancellationToken cancellationToken = default)
+    {
+        var preflight = await PreflightCopyAsync(document, cancellationToken);
+        return await ImportPreflightedAsync(preflight, copyName, cancellationToken);
     }
 
     private async Task<GenealogyExchangeImportResult> ImportPreflightedAsync(
-        GenealogyExchangeImportPreflightResult preflight, CancellationToken cancellationToken)
+        GenealogyExchangeImportPreflightResult preflight, string? copyName, CancellationToken cancellationToken)
     {
         if (!preflight.Report.CanImport || preflight.Document is null)
-            return new(false, preflight.Report, null);
+            return new(false, preflight.Report, null, null);
 
         var target = preflight.Report.IsCopyImport
-            ? MapCopyTarget(preflight.Document)
+            ? MapCopyTarget(preflight.Document, NormalizeCopyName(copyName, preflight.Document.Genealogy.Name))
             : GenealogyExchangeService.MapToTarget(preflight.Document);
         var importRecord = new GenealogyImportRecord
         {
@@ -159,10 +173,10 @@ public sealed class GenealogyExchangeImportService
         };
         await _data.AddGenealogyAndGraphRecordsAsync(target.Genealogy, importRecord, target.Branches, target.People,
             target.Relationships, target.Unions, cancellationToken);
-        return new(true, preflight.Report, importRecord.Id);
+        return new(true, preflight.Report, target.Genealogy.Id, importRecord.Id);
     }
 
-    private static GenealogyExchangeTarget MapCopyTarget(GenealogyExchangeDocument document)
+    private static GenealogyExchangeTarget MapCopyTarget(GenealogyExchangeDocument document, string copyName)
     {
         var source = GenealogyExchangeService.MapToTarget(document);
         var genealogyId = Guid.NewGuid();
@@ -198,10 +212,17 @@ public sealed class GenealogyExchangeImportService
         }).ToList();
         var genealogy = new Genealogy
         {
-            Id = genealogyId, Name = source.Genealogy.Name, Surname = source.Genealogy.Surname,
+            Id = genealogyId, Name = copyName, Surname = source.Genealogy.Surname,
             Description = source.Genealogy.Description, CreatedAt = source.Genealogy.CreatedAt
         };
         return new(genealogy, people.AsReadOnly(), relationships.AsReadOnly(), unions.AsReadOnly(), branches.AsReadOnly());
+    }
+
+    private static string NormalizeCopyName(string? value, string sourceName)
+    {
+        var name = (value ?? sourceName).Trim();
+        if (name.Length is < 1 or > 200) throw new InvalidOperationException("副本族谱名称须为 1 至 200 个字符。");
+        return name;
     }
 
     private static async Task AddExistingIdIssueAsync<TEntity>(

@@ -35,6 +35,7 @@
                 <Separator/>
                 <MenuItem Header="导入 Excel 数据" Command="{Binding ImportFromExcelCommand}"/>
                 <MenuItem Header="导入 GEDCOM 数据" Command="{Binding ImportFromGedcomCommand}"/>
+                <MenuItem Header="导入内部 JSON…" Click="InternalJsonImport_Click"/>
                 <Separator/>
                 <MenuItem Header="导出 Excel 数据" Command="{Binding ExportToExcelCommand}"/>
                 <MenuItem Header="导出 GEDCOM 数据" Command="{Binding ExportToGedcomCommand}"/>

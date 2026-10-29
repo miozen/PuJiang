@@ -86,6 +86,7 @@ public class GenealogyExchangeTests
 
         Assert.True(result.Imported);
         Assert.True(result.Report.CanImport);
+        Assert.Equal(document.Genealogy.Id, result.GenealogyId);
         Assert.NotNull(result.ImportRecordId);
         Assert.Contains("预检通过", result.Report.ToDisplayText());
         await using var verify = database.CreateContext();
@@ -161,7 +162,7 @@ public class GenealogyExchangeTests
         await using var context = database.CreateContext();
         var importer = new GenealogyExchangeImportService(context);
         var original = await importer.ImportAsync(document);
-        var copy = await importer.ImportCopyAsync(document);
+        var copy = await importer.ImportCopyAsync(document, "用户指定的副本名称");
 
         Assert.True(original.Imported);
         Assert.True(copy.Imported);
@@ -171,6 +172,8 @@ public class GenealogyExchangeTests
         var genealogies = await verify.Genealogies.OrderBy(item => item.Id).ToListAsync();
         Assert.Equal(2, genealogies.Count);
         var copiedGenealogy = genealogies.Single(item => item.Id != document.Genealogy.Id);
+        Assert.Equal(copy.GenealogyId, copiedGenealogy.Id);
+        Assert.Equal("用户指定的副本名称", copiedGenealogy.Name);
         var originalPeople = await verify.People.Where(item => item.GenealogyId == document.Genealogy.Id).ToListAsync();
         var copiedPeople = await verify.People.Where(item => item.GenealogyId == copiedGenealogy.Id).ToListAsync();
         var copiedIds = copiedPeople.Select(item => item.Id).ToHashSet();

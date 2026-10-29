@@ -107,7 +107,7 @@ internal static class WpfAppExitWorker
                             throw new InvalidOperationException("XPS 写入失败时未保留失败状态或意外生成文件。");
                     }
                 }
-                if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel")
+                if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel" or "modal-internal-json-import-cancel")
                 {
                     if (_modalExitFailure is not null) throw _modalExitFailure;
                     if (!_modalExitObserved) throw new InvalidOperationException("未观察到模态入口的正常退出竞争。");
@@ -163,12 +163,13 @@ internal static class WpfAppExitWorker
     private static async Task VerifyScenarioAsync(App app, MainWindow main, TargetContextCoordinator coordinator,
         string root, string scenario)
     {
-        if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel")
+        if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel" or "modal-internal-json-import-cancel")
         {
             const string photoTitle = "选择照片";
             const string excelTitle = "导入 Excel 数据";
             const string gedcomTitle = "导入 GEDCOM 数据";
             const string collaborationTitle = "选择协作文件";
+            const string internalJsonTitle = "选择内部 JSON 文件";
             const string confirmTitle = "确认导入";
             Window? child = null;
             string title;
@@ -198,6 +199,17 @@ internal static class WpfAppExitWorker
                     title = gedcomTitle;
                     open = () => _ = viewModel.ImportFromGedcomCommand.ExecuteAsync(null);
                 }
+            }
+            else if (scenario == "modal-internal-json-import-cancel")
+            {
+                var import = new GenealogyExchangeImportDialog(coordinator)
+                { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                child = import;
+                child.Show();
+                import.OpenFileDialogFactory = () => new Microsoft.Win32.OpenFileDialog { Title = internalJsonTitle };
+                title = internalJsonTitle;
+                open = () => typeof(GenealogyExchangeImportDialog).GetMethod("SelectFile_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(import, [import, new RoutedEventArgs()]);
             }
             else
             {

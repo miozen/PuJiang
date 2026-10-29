@@ -157,6 +157,27 @@ public partial class MainWindow : Window
         new DatabaseBackupDialog(AppDataPaths.DatabasePath, _backupDirectory, _targetContexts) { Owner = this }.ShowDialog();
     }
 
+    private async void InternalJsonImport_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new GenealogyExchangeImportDialog(_targetContexts) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.ImportedGenealogyId is not Guid genealogyId) return;
+
+        genealogyPanel.IsEnabled = false;
+        try
+        {
+            await _genealogyViewModel!.LoadAsync();
+            var imported = _genealogyViewModel.Genealogies.SingleOrDefault(item => item.Id == genealogyId)
+                ?? throw new InvalidOperationException("导入成功，但未能找到新族谱。");
+            await _genealogyViewModel.SelectAsync(imported);
+            _genealogyViewModel.Status = $"已导入族谱：{imported.Name}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"导入已完成，但刷新族谱选择失败：{ex.Message}", "内部 JSON 导入", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void CreateGenealogy_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;
