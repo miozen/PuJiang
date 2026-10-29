@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 2026-10-29 已实测 `02b3dc0256c3430a360e7c533cd573ee704c6969` 与 `origin/dev` 一致，GitHub Actions run `40723794523` 成功；本轮 WPF 内部 JSON 导入入口检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
+- **Remote Sync：** 2026-10-29 已实测 `310f509a274927b6ec5ae88fac644fd7ffa3bf55` 与 `origin/dev` 一致；本轮外部格式预检检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** 内部 JSON WPF 操作入口及隔离测试已完成，待提交同步检查点；默认导入继续失败关闭。
-- **Last Completed：** 文件菜单新增独立“导入内部 JSON…”模态窗口，旧协作导入不受影响。文件选择、预检及提交使用 `TargetContextCoordinator` 外层许可；默认方式预选且冲突/无效预检会禁用确认，副本方式必须显式切换、重新预检、输入显示名称并二次确认。导入结果返回目标族谱 ID，主窗口据此刷新并选中新族谱；取消、拒绝与失败保持原选择。副本名称仅用于显示，不参与匹配。隔离 UI 子进程验证真实原生文件选择框取消时，正常退出会保留锁、拒绝新操作并等待操作结束；SQLite 专项继续覆盖默认冲突拒绝、副本重映射和写入失败完整回滚。未接入恢复。
-- **Uncommitted Work：** 内部 JSON WPF 导入窗口、菜单接入、导入结果 ID/副本名称支持、测试和本轮权威文档；以 `git status --short` 为准。
-- **Validation Performed：** Windows 原生 .NET 使用每例独立临时目录。Release build 成功（0 error）；内部 JSON 服务专项 9/9 通过；新增原生文件框取消/正常退出竞争 UI 测试 1/1 通过；`Category!=Performance&Category!=UI` 为 132/132 通过。未访问正式用户数据库，未启动生产恢复。存在既有 ImageSharp 1.0.4 高、中危告警。
-- **Validation Pending：** 本轮 GitHub Actions；完整 Excel/GEDCOM 解析与外部格式预检；`Application.Shutdown`、系统关机、强制终止、外部写入、真实 WAL 收敛和崩溃边界；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
-- **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；内部 JSON 的正常 UI 交互尚未人工验收，外部格式仍未映射到目标模型。ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 核对最终 diff、测试输出与远端 `dev` 后，提交并推送本内部 JSON WPF 入口检查点；随后继续 P0 的外部格式版本化预检与目标模型映射，保持自动合并和生产恢复关闭。
+- **Current Task：** ExcelLegacyV1 与 GEDCOM-5.5.x 的只读预检和目标模型映射已完成，待提交同步检查点；保持失败关闭。
+- **Last Completed：** 新增 `ExternalGenealogyExchangePreflightService`：ExcelLegacyV1 要求九列固定表头、按数据行序号解析父亲引用并报告不能安全匹配的配偶姓名文本；GEDCOM-5.5.x 映射人物、家庭父母/子女及双亲婚配，未支持标签进入损失报告。两种 profile 对版本、结构、姓名、性别和引用失败关闭，只返回内存目标图，不写数据库、不替换旧成员、不按名称/世代/排行匹配，也不接入恢复。
+- **Uncommitted Work：** 外部格式预检服务、三个独立文件 profile 测试及本轮权威文档；以 `git status --short` 为准。
+- **Validation Performed：** Windows 原生 .NET 使用每例独立临时目录。Release build 成功（0 error）；外部 profile 专项 3/3 通过；`Category!=Performance&Category!=UI` 为 135/135 通过。未访问正式用户数据库，未启动生产恢复。存在既有 ImageSharp 1.0.4 高、中危告警。
+- **Validation Pending：** `310f509` 与本轮 GitHub Actions；外部 profile 的持久化导入/损失报告 UI；`Application.Shutdown`、系统关机、强制终止、外部写入、真实 WAL 收敛和崩溃边界；生产恢复、完整备份包、真实性能与远端 CI 尚未验证。
+- **Known Issues / Blockers：** 独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库。旧成员树、导入与输出不受目标族谱选择影响；外部 profile 尚无持久化导入或 UI，且仅覆盖明确列出的兼容子集。ImageSharp 1.0.4 存在已知高、中危告警。
+- **Exact Next Action：** 核对最终 diff、测试输出与远端 `dev` 后，提交并推送本外部 profile 预检检查点；随后在 P0 设计外部格式的显式、失败关闭持久化导入与损失报告 UI，继续保持自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
