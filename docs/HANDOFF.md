@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 本轮开始时 `202394ebdb6a31fd3bdad8b79084cfcdcce9093b` 与 `origin/dev` 一致；本轮外部导入服务、测试及文档尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
+- **Remote Sync：** `71a72068579917bb980a2904680a40869cd49cd5` 已推送至 `origin/dev`；GitHub Actions 结论尚待核实。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
 - **Current Task：** 实现外部格式的显式失败关闭持久化导入与损失报告 UI；D-013 已确认，自动合并和生产恢复继续关闭。
 - **Last Completed：** 已实现 `ExternalGenealogyExchangeImportService`。Excel/GEDCOM 预检错误或缺少目标图零写入；有损映射必须显式 `acceptLosses`，否则零写入。成功导入始终创建新族谱并全量生成内部 ID，在同一事务保存图数据及 profile、版本、原始文件 SHA-256 指纹来源记录；不保存路径、不选择或修改既有族谱。D-013 已更新为 Accepted。
-- **Uncommitted Work：** 外部导入服务、其接受/拒绝损失的隔离 SQLite 测试及本轮权威文档；以 `git status --short` 为准。
+- **Uncommitted Work：** 无预期源码修改；以 `git status --short` 为准。
 - **Validation Performed：** Windows 原生 Release build 成功（0 error，既有 ImageSharp 1.0.4 警告）；`ExternalGenealogyExchangePreflightTests` 3/3 通过，新增用例验证拒绝有损 GEDCOM 不写入、明确接受后原子创建新族谱及来源指纹；日常 `Category!=Performance&Category!=UI` 136/136 通过。未访问正式用户数据库，未启动生产恢复。
-- **Validation Pending：** 提交推送及远端 CI；外部格式损失报告 UI、文件框至提交的隔离退出竞争测试；生产恢复、完整备份包和真实性能仍未验证。
+- **Validation Pending：** `71a7206` 的远端 CI；外部格式损失报告 UI、文件框至提交的隔离退出竞争测试；生产恢复、完整备份包和真实性能仍未验证。
 - **Known Issues / Blockers：** 外部持久化服务已可用但尚无 WPF 入口；独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 完成日常全量测试后提交并推送本检查点；随后实现独立的外部格式损失报告 UI 及隔离退出竞争测试，继续保持自动合并和生产恢复关闭。
+- **Exact Next Action：** 核实 `71a7206` 的远端 CI；随后实现独立的外部格式损失报告 UI 及隔离退出竞争测试，继续保持自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
