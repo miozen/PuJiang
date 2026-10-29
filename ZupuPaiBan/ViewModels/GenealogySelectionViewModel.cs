@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.Data.Sqlite;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 using ZupuPaiBan.Services;
@@ -150,8 +151,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
 
         Status = "正在加载人物…";
-        await using var context = _createContext();
-        var snapshot = await new GenealogyDataService(context).GetGraphSnapshotAsync(genealogy.Id);
+        var snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
         var tree = TargetMemberTreeProjection.Create(snapshot);
         var people = snapshot.People.OrderBy(p => p.Name, StringComparer.Ordinal).ThenBy(p => p.Id).Select(p => new Person
         {
@@ -452,6 +452,19 @@ public partial class GenealogySelectionViewModel : ObservableObject
         var person = People.SingleOrDefault(candidate => candidate.Id == selected.Id && candidate.GenealogyId == genealogy.Id)
             ?? throw new InvalidOperationException("所选人物不属于当前族谱，请重新选择。");
         return (genealogy, person);
+    }
+
+    private async Task<GenealogyGraphSnapshot> GetGraphSnapshotForSelectionAsync(Guid genealogyId)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            await using var context = _createContext();
+            try { return await new GenealogyDataService(context).GetGraphSnapshotAsync(genealogyId); }
+            catch (SqliteException exception) when (exception.SqliteErrorCode is 5 or 6 && attempt < 3)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * (attempt + 1)));
+            }
+        }
     }
 
     private static string GetRelationshipKindName(PersonRelationshipKind kind) => kind switch

@@ -17,6 +17,11 @@ public class WpfLifecycleTests
         => await RunWorkerAsync("--wpf-target-relationship");
 
     [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Tree_and_biological_child_edits_remain_scoped_when_selection_switches_inflight()
+        => await RunWorkerAsync("--wpf-target-tree-editing");
+
+    [Fact]
     [Trait("Category", "UI")]
     public async Task Displayed_windows_file_dialog_and_dispatcher_reentry_remain_closed_after_quiescence()
         => await RunWorkerAsync("--wpf-displayed");

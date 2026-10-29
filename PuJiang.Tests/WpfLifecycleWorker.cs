@@ -1,6 +1,8 @@
+using System.Data.Common;
 using System.Windows;
 using System.Windows.Threading;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using ZupuPaiBan;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Infrastructure;
@@ -26,6 +28,29 @@ internal static class WpfLifecycleWorker
             dispatcher.BeginInvoke(async () =>
             {
                 try { await VerifyTargetRelationshipEditingAsync(database); result.TrySetResult(0); }
+                catch (Exception exception) { Console.Error.WriteLine(exception); result.TrySetResult(1); }
+                finally { dispatcher.BeginInvokeShutdown(DispatcherPriority.Background); }
+            });
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        return await result.Task;
+    }
+
+    public static async Task<int> RunTargetTreeEditingAsync(string directory)
+    {
+        var database = new TestDatabase(directory);
+        Environment.SetEnvironmentVariable(AppDataPaths.TestRootEnvironmentVariable, directory);
+        var result = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            dispatcher.BeginInvoke(async () =>
+            {
+                try { await VerifyTargetTreeEditingAsync(database); result.TrySetResult(0); }
                 catch (Exception exception) { Console.Error.WriteLine(exception); result.TrySetResult(1); }
                 finally { dispatcher.BeginInvokeShutdown(DispatcherPriority.Background); }
             });
@@ -175,5 +200,136 @@ internal static class WpfLifecycleWorker
         unionDialog.Close();
         scopedDialog.Close();
         removalDialog.Close();
+    }
+
+    private static async Task VerifyTargetTreeEditingAsync(TestDatabase database)
+    {
+        var pause = new PauseTreeEditCommandInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False")
+            .AddInterceptors(pause).Options;
+        var coordinator = new TargetContextCoordinator(options);
+        await using (var migration = coordinator.CreateContext()) await migration.Database.MigrateAsync();
+        var viewModel = new GenealogySelectionViewModel(coordinator.CreateContext, coordinator) { NewName = "甲谱" };
+        await viewModel.CreateAsync();
+        var firstGenealogy = viewModel.SelectedGenealogy!;
+        foreach (var name in new[] { "甲父母", "待关联子女" })
+        {
+            viewModel.NewPersonName = name;
+            await viewModel.AddPersonAsync();
+        }
+        var parent = viewModel.People.Single(item => item.Name == "甲父母");
+        var existingChild = viewModel.People.Single(item => item.Name == "待关联子女");
+        viewModel.NewName = "乙谱";
+        await viewModel.CreateAsync();
+        var secondGenealogy = viewModel.SelectedGenealogy!;
+        viewModel.NewPersonName = "乙谱人物";
+        await viewModel.AddPersonAsync();
+
+        await viewModel.SelectAsync(firstGenealogy);
+        var parentNode = viewModel.TargetTree.Single(item => item.PersonId == parent.Id);
+        pause.Arm("UPDATE \"People\"");
+        var profile = viewModel.SaveTreePersonProfileAsync(parentNode, "甲父母已编辑", PersonSex.Male, null, null, "树节点档案");
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await SwitchAndReleaseAsync();
+        await profile;
+
+        await viewModel.SelectAsync(firstGenealogy);
+        parentNode = viewModel.TargetTree.Single(item => item.PersonId == parent.Id);
+        pause.Arm("INSERT INTO \"PersonRelationships\"");
+        var createChild = viewModel.AddBiologicalChildForTreeNodeAsync(parentNode, "树节点新增子女");
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await SwitchAndReleaseAsync();
+        await createChild;
+
+        await viewModel.SelectAsync(firstGenealogy);
+        viewModel.SelectedPerson = viewModel.People.Single(item => item.Id == parent.Id);
+        viewModel.SelectedExistingChild = viewModel.People.Single(item => item.Id == existingChild.Id);
+        pause.Arm("INSERT INTO \"PersonRelationships\"");
+        var linkExisting = viewModel.AddExistingBiologicalChildAsync();
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await SwitchAndReleaseAsync();
+        await linkExisting;
+
+        await viewModel.SelectAsync(firstGenealogy);
+        viewModel.SelectedPerson = viewModel.People.Single(item => item.Id == parent.Id);
+        viewModel.SelectedBiologicalChild = viewModel.People.Single(item => item.Name == "树节点新增子女");
+        pause.Arm("DELETE FROM \"PersonRelationships\"");
+        var unlink = viewModel.RemoveBiologicalParentRelationshipAsync();
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await SwitchAndReleaseAsync();
+        await unlink;
+
+        await using (var verify = database.CreateContext())
+        {
+            if ((await verify.People.SingleAsync(item => item.Id == parent.Id)).Biography != "树节点档案" ||
+                await verify.People.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 3 ||
+                await verify.People.CountAsync(item => item.GenealogyId == secondGenealogy.Id) != 1 ||
+                await verify.PersonRelationships.CountAsync(item => item.GenealogyId == secondGenealogy.Id) != 0)
+                throw new InvalidOperationException("跨谱切换导致成员树或父子编辑写入错误范围。");
+            var remaining = await verify.PersonRelationships.SingleAsync(item => item.GenealogyId == firstGenealogy.Id);
+            if (remaining.PersonId != existingChild.Id || remaining.RelatedPersonId != parent.Id)
+                throw new InvalidOperationException("跨谱切换导致生物父子解除错误删除。");
+        }
+        if (viewModel.SelectedGenealogy?.Id != secondGenealogy.Id || viewModel.SelectedPerson is not null ||
+            viewModel.People.Any(item => item.GenealogyId != secondGenealogy.Id) || viewModel.BiologicalChildren.Count != 0)
+            throw new InvalidOperationException("旧谱父子编辑回填了当前谱视图。");
+
+        await coordinator.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await using (var exclusive = new FileStream(database.DatabasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+
+        async Task SwitchAndReleaseAsync()
+        {
+            var switching = viewModel.SelectAsync(secondGenealogy);
+            if (viewModel.SelectedGenealogy?.Id != secondGenealogy.Id)
+                throw new InvalidOperationException("在途编辑期间未先切换当前族谱。");
+            pause.Release();
+            await switching;
+        }
+    }
+
+    private sealed class PauseTreeEditCommandInterceptor : DbCommandInterceptor
+    {
+        private string? _sqlFragment;
+        private int _armed;
+        private TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource _continue = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+
+        public void Arm(string sqlFragment)
+        {
+            _sqlFragment = sqlFragment;
+            _entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _continue = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _armed, 1);
+        }
+
+        public void Release() => _continue.TrySetResult();
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            await PauseIfArmedAsync(command, cancellationToken);
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            await PauseIfArmedAsync(command, cancellationToken);
+            return result;
+        }
+
+        private async Task PauseIfArmedAsync(DbCommand command, CancellationToken cancellationToken)
+        {
+            var fragment = _sqlFragment;
+            if (fragment is null || !command.CommandText.Contains(fragment, StringComparison.Ordinal) ||
+                Interlocked.Exchange(ref _armed, 0) != 1) return;
+            var entered = _entered;
+            var continuation = _continue;
+            entered.TrySetResult();
+            await continuation.Task.WaitAsync(cancellationToken);
+        }
     }
 }

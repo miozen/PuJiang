@@ -9,6 +9,8 @@ internal static class RestoreWorkerProgram
             return await WpfLifecycleWorker.RunAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-target-relationship")
             return await WpfLifecycleWorker.RunTargetRelationshipEditingAsync(args[1]);
+        if (args.Length == 2 && args[0] == "--wpf-target-tree-editing")
+            return await WpfLifecycleWorker.RunTargetTreeEditingAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-displayed")
             return await WpfDisplayedWorker.RunAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-inflight")
