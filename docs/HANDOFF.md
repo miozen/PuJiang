@@ -6,13 +6,13 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 用户已确认 `97b4b5f` 的 GitHub Actions 绿色；本轮文档检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
-- **Current Task：** 外部格式窗口的文件选择退出竞争已验证；继续覆盖文件确认后提交在途的退出竞争。D-013 已确认，自动合并和生产恢复继续关闭。
+- **Current Task：** 外部格式窗口的选择与提交在途退出竞争均已验证；继续 P0 的数据完整性建设。D-013 已确认，自动合并和生产恢复继续关闭。
 - **Last Completed：** 已实现 `ExternalGenealogyExchangeImportService`。Excel/GEDCOM 预检错误或缺少目标图零写入；有损映射必须显式 `acceptLosses`，否则零写入。成功导入始终创建新族谱并全量生成内部 ID，在同一事务保存图数据及 profile、版本、原始文件 SHA-256 指纹来源记录；不保存路径、不选择或修改既有族谱。D-013 已更新为 Accepted。
-- **Uncommitted Work：** 本轮隔离退出竞争验收的权威文档；以 `git status --short` 为准。
-- **Validation Performed：** 用户已确认 `71a7206`、`48f33b9` 和 `97b4b5f` CI 绿色；Windows 原生 Release build 成功（0 error，既有 ImageSharp 1.0.4 警告）；日常 `Category!=Performance&Category!=UI` 136/136 通过；新增的 `DisplayName~modal-external-exchange-import-cancel` 隔离 WPF 子进程场景 1/1 通过。未访问正式用户数据库，未启动生产恢复。
-- **Validation Pending：** 本轮文档提交后的远端 CI；外部格式窗口确认文件后的提交在途退出竞争测试；生产恢复、完整备份包和真实性能仍未验证。
-- **Known Issues / Blockers：** 外部窗口的文件选择取消已验收，但尚未验证确认文件后写入在途时的退出竞争；独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 提交并推送本轮验证文档；随后增加并验证外部格式窗口确认文件后的提交在途退出竞争，继续保持自动合并和生产恢复关闭。
+- **Uncommitted Work：** 外部导入在途隔离测试、工作器退出修复及本轮权威文档；以 `git status --short` 为准。
+- **Validation Performed：** 用户已确认 `71a7206`、`48f33b9` 和 `97b4b5f` CI 绿色；Windows 原生 Release build 成功（0 error，既有 ImageSharp 1.0.4 警告）；日常 `Category!=Performance&Category!=UI` 136/136 通过；外部文件选择取消与确认后在途写入的隔离 WPF 子进程场景均为 1/1 通过。未访问正式用户数据库，未启动生产恢复。
+- **Validation Pending：** 本轮提交后的远端 CI；生产恢复、完整备份包和真实性能仍未验证。
+- **Known Issues / Blockers：** 外部窗口的选择与确认后在途写入均已验收；独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
+- **Exact Next Action：** 提交并推送本轮测试检查点；随后继续 P0 的关系约束、事务和隔离测试建设，继续保持自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力

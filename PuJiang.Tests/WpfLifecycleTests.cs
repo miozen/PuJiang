@@ -21,6 +21,11 @@ public class WpfLifecycleTests
     public async Task Selected_import_and_window_close_keep_inflight_work_registered()
         => await RunWorkerAsync("--wpf-inflight");
 
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task External_exchange_confirmation_and_window_close_keep_atomic_import_registered()
+        => await RunWorkerAsync("--wpf-external-inflight");
+
     [Theory]
     [InlineData("success")]
     [InlineData("native-dialog")]

@@ -11,6 +11,8 @@ internal static class RestoreWorkerProgram
             return await WpfDisplayedWorker.RunAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-inflight")
             return await WpfInflightWorker.RunAsync(args[1]);
+        if (args.Length == 2 && args[0] == "--wpf-external-inflight")
+            return await WpfInflightWorker.RunExternalAsync(args[1]);
         if (args.Length == 3 && args[0] == "--wpf-app-exit")
             return await WpfAppExitWorker.RunAsync(args[1], args[2]);
         if (args.Length != 3) return 2;
