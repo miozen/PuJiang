@@ -52,6 +52,7 @@ public class WpfLifecycleTests
     [InlineData("modal-collaboration-import-cancel")]
     [InlineData("modal-collaboration-confirm-cancel")]
     [InlineData("modal-internal-json-import-cancel")]
+    [InlineData("modal-external-exchange-import-cancel")]
     [InlineData("backup-validate")]
     [InlineData("backup-preflight")]
     [InlineData("cancel")]
