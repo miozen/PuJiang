@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 用户已确认 `377ac09`、`a6b4c8f`、`7ab4ceb`、`7f94250`、`982fcd2` 和 `42d13f4` 的 GitHub Actions 绿色；本轮删除与关系写入隔离检查点尚待提交和推送。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
+- **Remote Sync：** 用户已确认 `377ac09`、`a6b4c8f`、`7ab4ceb`、`7f94250`、`982fcd2` 和 `42d13f4` 的 GitHub Actions 绿色；`fdb5521` 已推送至 `origin/dev`，其远端 CI 尚待确认。后续接力仍须用 `git ls-remote origin refs/heads/dev` 与本机 `HEAD` 比较确认，不得依赖旧跟踪引用。
 - **Current Phase：** P0 — 开发基础与数据模型。
 - **Current Task：** 外部格式窗口的选择与提交在途退出竞争均已验证；继续 P0 的数据完整性建设。D-013 已确认，自动合并和生产恢复继续关闭。
 - **Last Completed：** 删除无关人物与关系/婚配新增的两个顺序均已在独立 SQLite 上下文验证：删除先提交时陈旧写入由复合外键拒绝且没有悬挂记录；写入先提交时 `DeleteUnrelatedPersonAsync` 的原子条件拒绝删除且保留完整图记录。未模拟恢复或触碰正式数据。默认失败关闭、自动合并和生产恢复继续关闭。
-- **Uncommitted Work：** 删除与关系写入隔离测试及本轮权威文档；以 `git status --short` 为准。
+- **Uncommitted Work：** 无；以 `git status --short` 为准。
 - **Validation Performed：** 用户已确认 `71a7206`、`48f33b9`、`97b4b5f`、`55a5a21`、`377ac09`、`a6b4c8f`、`7ab4ceb`、`7f94250`、`982fcd2` 和 `42d13f4` CI 绿色；图事务隔离测试 11/11 通过；日常 `Category!=Performance&Category!=UI` 148/148 通过。未访问正式用户数据库，未启动生产恢复。
 - **Validation Pending：** 本轮提交后的远端 CI；生产恢复、完整备份包和真实性能仍未验证。
 - **Known Issues / Blockers：** 外部窗口的选择与确认后在途写入均已验收；独占锁不能阻止旧版本或第三方直接写库；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 提交并推送本轮删除与关系写入隔离检查点，确认远端 CI；随后继续 P0 的关系约束、事务和隔离测试建设，继续保持自动合并和生产恢复关闭。
+- **Exact Next Action：** 确认 `fdb5521` 的远端 CI；随后继续 P0 的关系约束、事务和隔离测试建设，继续保持自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
