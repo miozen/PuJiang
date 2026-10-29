@@ -400,8 +400,10 @@ public partial class GenealogySelectionViewModel : ObservableObject
     {
         using var operation = _operationCoordinator?.EnterOperation();
         var (genealogy, person) = GetCurrentSelectedPersonForEditing();
-        await using var context = _createContext();
-        var snapshot = await new GenealogyDataService(context).GetGraphSnapshotAsync(genealogy.Id);
+        var version = _selectionVersion;
+        var snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id)
+            throw new InvalidOperationException("当前选择已变化，请重新选择解除记录。");
         var names = snapshot.People.ToDictionary(item => item.Id, item => item.Name);
         var candidates = new List<TargetLinkRemovalCandidate>();
         foreach (var relationship in snapshot.Relationships.Where(item => item.PersonId == person.Id || item.RelatedPersonId == person.Id))

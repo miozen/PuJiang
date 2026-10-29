@@ -1111,6 +1111,94 @@ public class GenealogySelectionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Removal_candidates_fail_closed_on_busy_retry_exhaustion_and_can_reload()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False;Default Timeout=1").Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "候选忙锁谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(person => person.Name == "甲");
+        var second = vm.People.Single(person => person.Name == "乙");
+        vm.SelectedPerson = first;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+
+        await using var blocker = new SqliteConnection($"Data Source={database.DatabasePath};Pooling=False;Default Timeout=1");
+        await blocker.OpenAsync();
+        await using var command = blocker.CreateCommand();
+        command.CommandText = "BEGIN EXCLUSIVE;";
+        await command.ExecuteNonQueryAsync();
+        try
+        {
+            var failure = await Assert.ThrowsAsync<SqliteException>(() => vm.GetTargetLinkRemovalCandidatesAsync());
+            Assert.Equal(5, failure.SqliteErrorCode);
+            Assert.Equal(genealogy.Id, vm.SelectedGenealogy!.Id);
+            Assert.Equal(first.Id, vm.SelectedPerson!.Id);
+        }
+        finally
+        {
+            command.CommandText = "ROLLBACK;";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var candidates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        Assert.Single(candidates, item => item.Kind == TargetLinkRemovalKind.Relationship);
+        await using var verify = new ZupuDbContext(options);
+        Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == genealogy.Id).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Removal_candidates_reject_stale_selection_during_snapshot_read()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var pause = new PauseCommandInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False")
+            .AddInterceptors(pause).Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var firstGenealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(person => person.Name == "甲");
+        var second = vm.People.Single(person => person.Name == "乙");
+        vm.SelectedPerson = first;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        var secondGenealogy = vm.SelectedGenealogy!;
+        await vm.SelectAsync(firstGenealogy);
+        vm.SelectedPerson = vm.People.Single(person => person.Id == first.Id);
+
+        pause.Arm("SELECT");
+        var candidates = vm.GetTargetLinkRemovalCandidatesAsync();
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        await vm.SelectAsync(null);
+        pause.Release();
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => candidates);
+        Assert.Contains("当前选择已变化", failure.Message);
+        await vm.SelectAsync(secondGenealogy);
+        Assert.Equal(secondGenealogy.Id, vm.SelectedGenealogy!.Id);
+        Assert.Null(vm.SelectedPerson);
+        await using var verify = database.CreateContext();
+        Assert.Single(await verify.PersonRelationships.Where(item => item.GenealogyId == firstGenealogy.Id).ToListAsync());
+        Assert.Empty(await verify.PersonRelationships.Where(item => item.GenealogyId == secondGenealogy.Id).ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Target_relationship_and_union_editing_is_scoped_to_selected_genealogy()
     {
         await using var database = new TestDatabase();
