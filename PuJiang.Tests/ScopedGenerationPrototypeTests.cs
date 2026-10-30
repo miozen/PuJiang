@@ -44,10 +44,10 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
     }
 
     private static async Task InstallAsync(ZupuDbContext context, bool fail = false, Func<Task>? beforeCommit = null,
-        Action? beforeSchemaWrite = null)
+        Action? beforeTransaction = null)
     {
+        beforeTransaction?.Invoke();
         await using var tx = await context.Database.BeginTransactionAsync();
-        beforeSchemaWrite?.Invoke();
         await context.Database.ExecuteSqlRawAsync(TableSql);
         await context.Database.ExecuteSqlRawAsync("INSERT INTO ScopedGenerationPrototype (GenealogyId, Value) SELECT Id, 0 FROM Genealogies");
         foreach (var (_, sql) in ExpectedTriggers())
@@ -705,9 +705,10 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
 
         await using var installing = db.CreateContext();
         var installationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        // Microsoft.Data.Sqlite can synchronously wait for the write lock before its first async yield.
-        // Run that call on a separate thread so the test can release the prior writer deterministically.
-        var install = Task.Run(() => InstallAsync(installing, beforeSchemaWrite: installationStarted.SetResult));
+        // Microsoft.Data.Sqlite can synchronously wait for the write lock in BeginTransactionAsync.
+        // Run that call on a separate thread and signal before opening the transaction, so the test can
+        // deterministically release the prior writer while the install is blocked on its write lock.
+        var install = Task.Run(() => InstallAsync(installing, beforeTransaction: installationStarted.SetResult));
         await installationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await Task.Delay(200);
         Assert.False(install.IsCompleted);
