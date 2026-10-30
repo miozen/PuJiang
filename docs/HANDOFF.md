@@ -4,11 +4,11 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 2026-10-30 已实测 `d84bb9eeccda0e3a5dbb67a2bc0648033c82e335` 与 `origin/dev` 一致；GitHub Actions run `41051744551`（`windows-latest`，`build-and-test`）为 `success`，其中 Release build 和日常 `Category!=Performance&Category!=UI` 测试步骤均成功。后续接力仍须核对实际远端。
+- **Remote Sync：** 2026-10-30 已实测 `873d727ff7e633ad45c62f48fb53a1fe2edb2fe7` 已推送至 `origin/dev`；其前一功能提交 `d84bb9eeccda0e3a5dbb67a2bc0648033c82e335` 的 GitHub Actions run `41051744551`（`windows-latest`，`build-and-test`）为 `success`，其中 Release build 和日常 `Category!=Performance&Category!=UI` 测试步骤均成功。后续接力仍须核对实际远端。
 - **Current Phase：** P0 — 开发基础与数据模型。
 - **Current Task：** P0 按谱代数草案的正式 Migration、旧版共存、迁移外部写入、触发器重建与备份兼容接入验收；自动合并和生产恢复继续关闭。
 - **Last Completed：** 两项新增测试专用隔离验收已由 Windows CI 覆盖：旧模型写入在按谱安装事务持锁时等待、提交后由新触发器递增目标谱代数；SQLite 重建 `People` 表丢失按谱触发器时读取和解除失败关闭。它们不修改生产 Migration、解除策略、自动合并或恢复。
-- **Uncommitted Work：** 本接力状态更新；另有既有 `ZupuPaiBan/App.xaml` 行尾差异，必须排除。
+- **Uncommitted Work：** 仅既有 `ZupuPaiBan/App.xaml` 行尾差异，必须排除。
 - **Validation Performed：** 本机 `dotnet build PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-restore` 为 0 error；GitHub Actions `41051744551` 在 `windows-latest` 成功执行 Release build 及日常 `Category!=Performance&Category!=UI` 测试，覆盖新增用例。未访问正式用户数据库，未启动生产恢复。
 - **Validation Pending：** 本机 vstest 仍在运行前 90 秒无法连接 `testhost`，但已由稳定 Windows CI 验证；草案的正式 Migration、WPF 集成、旧版共存及生产备份兼容尚未实现或验收；生产恢复、完整备份包、完整图读取性能及预检清理本身失败或进程终止仍未验证。
 - **Known Issues / Blockers：** 全库代数造成无关变更也需重新确认；不能防护第三方有意篡改代数或替换数据库；未来重建受保护表的 Migration 必须显式重建触发器；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
