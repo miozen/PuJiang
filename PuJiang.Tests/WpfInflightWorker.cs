@@ -141,6 +141,9 @@ internal static class WpfInflightWorker
         while (!main.IsEnabled && deadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
         if (!main.IsEnabled) throw new TimeoutException("主窗口未完成初始化。");
         Stage("main-ready");
+        long generationBefore;
+        await using (var before = database.CreateContext())
+            generationBefore = await before.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
         var source = Path.Combine(root, "selected.ged");
         await File.WriteAllTextAsync(source, "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME 虚构 /人物/\n1 SEX M\n0 TRLR\n");
         var dialog = new ExternalGenealogyExchangeImportDialog(coordinator) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
@@ -170,6 +173,9 @@ internal static class WpfInflightWorker
         await using var verify = database.CreateContext();
         if (await verify.Genealogies.CountAsync() != 1 || await verify.People.CountAsync() != 1 || await verify.GenealogyImportRecords.CountAsync() != 1)
             throw new InvalidOperationException("外部导入未以完整图和来源记录原子完成。");
+        var generationAfter = await verify.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+        if (generationAfter != generationBefore + 1)
+            throw new InvalidOperationException("外部导入退出竞争中的代数与已提交人物不一致。");
         Stage("verified");
     }
 
@@ -213,6 +219,9 @@ internal static class WpfInflightWorker
         {
             await viewModel.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
         }
+        long generationBefore;
+        await using (var before = database.CreateContext())
+            generationBefore = await before.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
 
         pause.Enabled = true;
         Task edit = action == TargetLinkExitAction.AddUnion
@@ -235,6 +244,9 @@ internal static class WpfInflightWorker
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await using (var exclusive = new FileStream(database.DatabasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
         await using var verify = database.CreateContext();
+        var generationAfter = await verify.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+        if (generationAfter != generationBefore + 1)
+            throw new InvalidOperationException("目标关系退出竞争中的代数与已提交写入不一致。");
         if (action == TargetLinkExitAction.AddUnion)
         {
             if (await verify.FamilyUnions.CountAsync(union => union.GenealogyId == genealogy.Id) != 1 ||
