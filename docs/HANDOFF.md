@@ -4,7 +4,7 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** `b1688fe2c021d28db95f046e1e83bd02f3eabb0c` 已推送至 `origin/dev`；用户已确认其前一 `5f64198` Windows CI 为 green。当前工作树含 V1 Migration 实现检查点，提交后在本代码检查点核对 Windows CI。
+- **Remote Sync：** `5070ab3aaf980015a87cf408a14ed4e98f1ffab5` 已推送至 `origin/dev`；用户已确认其前一 `5f64198` Windows CI 为 green。本机未安装 `gh`，可用 GitHub 连接器也未返回该 push workflow 的状态，故本轮 CI 仍待实际外部核对。
 - **Current Phase：** P0 — 开发基础与数据模型。
 - **Current Task：** P0 按谱代数 V1 Migration 已实现后的接入验收与下一步边界评审；自动合并和生产恢复继续关闭。
 - **Last Completed：** 已实施 `20261030000200_AddScopedUnlinkGenerationV1` 和 `ScopedUnlinkGenerationV1`：两张无外键活动/墓碑表、11 个不可变触发器、事务化升级/降级、15 秒 `BUSY`/`LOCKED` 失败报告、正式备份预检和真实 `People` 重建后的双轨触发器重装均有隔离验收。生产解除候选仍为全库代数。详见[V1 实现设计](SCOPED_UNLINK_GENERATION_V1_DESIGN.md)。
@@ -12,7 +12,7 @@
 - **Validation Performed：** 本机 `dotnet build PuJiang.slnx --configuration Release --no-restore` 通过（0 error）；日常非 UI/Performance 测试 277/277 通过；V1 专项隔离 SQLite 4/4 通过；`dotnet-ef migrations has-pending-model-changes --no-build` 报告无模型差异。未访问正式用户数据库，未启动生产恢复。
 - **Validation Pending：** 本轮 V1 实现提交后的 Windows CI；旧程序二进制对新 V1 包的独立预检演练、按谱候选读取/解除切换及其 WPF/退出验收均未实施。生产恢复、完整备份包、完整图读取性能及预检清理本身失败或进程终止仍未验证。
 - **Known Issues / Blockers：** 全库代数造成无关变更也需重新确认；不能防护第三方有意篡改代数或替换数据库；未来重建受保护表的 Migration 必须显式重建触发器；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 提交并推送本轮 V1 实现，在该代码检查点核对 Windows CI；随后继续 P0，独立评审按谱候选读取/解除是否具备接入条件，先补旧程序预检演练与候选/WPF/退出隔离验收。生产仍用全库代数，自动合并和生产恢复关闭。
+- **Exact Next Action：** 在可用 GitHub 状态入口核对 `5070ab3` 的 Windows CI；随后继续 P0，独立评审按谱候选读取/解除是否具备接入条件，先补旧程序预检演练与候选/WPF/退出隔离验收。生产仍用全库代数，自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
