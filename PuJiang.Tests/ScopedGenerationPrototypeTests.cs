@@ -645,6 +645,13 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         await DatabaseSnapshotService.CreateAsync(db.DatabasePath, snapshotPath);
         await Assert.ThrowsAsync<InvalidOperationException>(() => InstallAsync(context, fail: true));
         Assert.Equal(0L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE name LIKE 'Scoped%Prototype%' OR name LIKE 'ScopedProto%'").SingleAsync());
+        await using (var legacyWriter = db.CreateContext())
+        {
+            var person = await legacyWriter.People.SingleAsync(item => item.Id == data.A1.Id);
+            person.Name = "安装失败后旧写";
+            await legacyWriter.SaveChangesAsync();
+        }
+        Assert.Equal("安装失败后旧写", (await context.People.AsNoTracking().SingleAsync(item => item.Id == data.A1.Id)).Name);
         await InstallAsync(context);
         Assert.Equal(0, await ReadAsync(context, data.A.Id));
         Assert.Equal(0, await ReadAsync(context, data.B.Id));
@@ -674,6 +681,8 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
 
         // This context represents an already-running old application: it has no knowledge of the test-only table.
         await using var oldModelWriter = db.CreateContext();
+        await oldModelWriter.Database.OpenConnectionAsync();
+        Assert.Equal(2, await oldModelWriter.Genealogies.AsNoTracking().CountAsync());
         await using var installing = db.CreateContext();
         var installed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseInstall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
