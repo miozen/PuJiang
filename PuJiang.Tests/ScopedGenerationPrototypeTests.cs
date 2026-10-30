@@ -142,6 +142,81 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         Assert.Equal(1, await DeleteAsync(context, data.A.Id, data.Link.Id, beforeA));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task Complex_genealogy_delete_restrictions_and_ordered_transaction_preserve_scope(bool commit)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        var family = await new GenealogyDataService(context).AddFamilyUnionAsync(new FamilyUnion { GenealogyId = data.A.Id,
+            PartnerOneId = data.A1.Id, PartnerTwoId = data.A2.Id, Kind = FamilyUnionKind.Marriage });
+        var parent = new FamilyBranch { GenealogyId = data.A.Id, Name = "主房" };
+        var child = new FamilyBranch { GenealogyId = data.A.Id, ParentBranchId = parent.Id, Name = "支房" };
+        context.Add(parent);
+        await context.SaveChangesAsync();
+        context.Add(child);
+        await context.SaveChangesAsync();
+        await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET BranchId = {child.Id} WHERE Id = {data.A1.Id}");
+        await InstallAsync(context);
+        var oldA = await ReadAsync(context, data.A.Id);
+        var oldB = await ReadAsync(context, data.B.Id);
+        var global = await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+        // RESTRICT dependencies prevent both individual and whole-genealogy implicit deletion.
+        await Assert.ThrowsAsync<SqliteException>(() => context.People.Where(p => p.Id == data.A1.Id).ExecuteDeleteAsync());
+        await Assert.ThrowsAsync<SqliteException>(() => context.Genealogies.Where(g => g.Id == data.A.Id).ExecuteDeleteAsync());
+        Assert.Equal(oldA, await ReadAsync(context, data.A.Id));
+        Assert.Equal(global, await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync());
+        await using (var tx = await context.Database.BeginTransactionAsync())
+        {
+            await context.PersonRelationships.Where(r => r.GenealogyId == data.A.Id).ExecuteDeleteAsync();
+            await context.FamilyUnions.Where(u => u.GenealogyId == data.A.Id).ExecuteDeleteAsync();
+            await context.People.Where(p => p.GenealogyId == data.A.Id).ExecuteDeleteAsync();
+            await context.FamilyBranches.Where(b => b.Id == child.Id).ExecuteDeleteAsync();
+            await context.Genealogies.Where(g => g.Id == data.A.Id).ExecuteDeleteAsync();
+            if (commit) await tx.CommitAsync(); else await tx.RollbackAsync();
+        }
+        Assert.Equal(oldA + (commit ? 6 : 0), await ReadAsync(context, data.A.Id));
+        Assert.Equal(oldB, await ReadAsync(context, data.B.Id));
+        Assert.Equal(global + (commit ? 5 : 0), await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync());
+        Assert.Equal(commit ? 0 : 3, await context.People.CountAsync(p => p.GenealogyId == data.A.Id));
+        Assert.Equal(commit ? 0 : 1, await context.PersonRelationships.CountAsync(r => r.Id == data.Link.Id));
+        Assert.Equal(commit ? 0 : 1, await context.FamilyUnions.CountAsync(u => u.Id == family.Id));
+        Assert.Equal(commit ? 0 : 2, await context.FamilyBranches.CountAsync(b => b.GenealogyId == data.A.Id));
+        Assert.Equal(commit ? 0 : 1, await DeleteAsync(context, data.A.Id, data.Link.Id, oldA));
+    }
+
+    [Fact]
+    [Trait("Category", "Performance")]
+    public async Task Compare_generation_guard_read_cost()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        await context.Database.OpenConnectionAsync();
+        var samples = new Dictionary<bool, List<double>> { [false] = [], [true] = [] };
+        for (var iteration = -1; iteration < 3; iteration++)
+        foreach (var scoped in iteration % 2 == 0 ? new[] { false, true } : new[] { true, false })
+        {
+            var stopwatch = Stopwatch.StartNew();
+            for (var i = 0; i < 100; i++)
+            {
+                var value = scoped ? await ReadAsync(context, data.A.Id) :
+                    await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync();
+                Assert.True(value >= 0);
+            }
+            stopwatch.Stop();
+            if (iteration >= 0) samples[scoped].Add(stopwatch.Elapsed.TotalMilliseconds);
+        }
+        foreach (var scoped in new[] { false, true })
+            output.WriteLine($"{(scoped ? "scoped" : "global")} guard, 100 reads: {string.Join(", ", samples[scoped].Select(x => x.ToString("F1")))} ms; median {samples[scoped].Order().ElementAt(1):F1} ms");
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Scoped_generation_and_people_share_read_transaction_during_external_write()
@@ -584,14 +659,16 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
     }
 
     // Isolated test reference and candidate; production preflight intentionally rejects this prototype schema.
-    private static async Task<bool> FullScopedPreflightAsync(string path)
+    private static async Task<bool> FullScopedPreflightAsync(string path, Action<string, string>? checkpoint = null)
     {
         await using var referenceDb = new TestDatabase();
         await referenceDb.MigrateAsync();
         await using var reference = referenceDb.CreateContext();
         await InstallAsync(reference);
+        checkpoint?.Invoke("reference-ready", Path.GetDirectoryName(referenceDb.DatabasePath)!);
         await using var candidateDb = new TestDatabase();
         Directory.CreateDirectory(Path.GetDirectoryName(candidateDb.DatabasePath)!);
+        checkpoint?.Invoke("candidate-created", Path.GetDirectoryName(candidateDb.DatabasePath)!);
         await using var package = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         var manifest = await OfflineBackupPackageService.ValidateStreamAsync(package, CancellationToken.None);
         package.Position = 0;
@@ -599,6 +676,7 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         await using (var destination = new FileStream(candidateDb.DatabasePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         await using (var source = archive.GetEntry(manifest.DatabaseEntry)!.Open())
             await source.CopyToAsync(destination);
+        checkpoint?.Invoke("copy-ready", Path.GetDirectoryName(candidateDb.DatabasePath)!);
         await using (var header = File.OpenRead(candidateDb.DatabasePath))
         {
             var bytes = new byte[20];
@@ -610,6 +688,7 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
             .UseSqlite(new SqliteConnectionStringBuilder { DataSource = candidateDb.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()).Options;
         await using var candidate = new ZupuDbContext(candidateOptions);
         await candidate.Database.OpenConnectionAsync();
+        checkpoint?.Invoke("candidate-open", Path.GetDirectoryName(candidateDb.DatabasePath)!);
         await reference.Database.OpenConnectionAsync();
         var connection = candidate.Database.GetDbConnection();
         await using (var command = connection.CreateCommand())
@@ -637,5 +716,39 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         foreach (var id in await candidate.Genealogies.AsNoTracking().Select(item => item.Id).ToListAsync())
             try { await ReadAsync(candidate, id); } catch (InvalidOperationException) { return false; }
         return true;
+    }
+
+    [Theory]
+    [InlineData("reference-ready")]
+    [InlineData("candidate-created")]
+    [InlineData("copy-ready")]
+    [InlineData("candidate-open")]
+    [Trait("Category", "Integration")]
+    public async Task Scoped_preflight_exception_cleans_owned_directories_and_preserves_input(string failurePoint)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using (var seed = db.CreateContext())
+        {
+            await SeedAsync(seed);
+            await InstallAsync(seed);
+        }
+        Directory.CreateDirectory(db.BackupDirectory);
+        var path = Path.Combine(db.BackupDirectory, "scoped.zip");
+        await OfflineBackupPackageService.CreateAsync(db.DatabasePath, path);
+        var originalDb = await File.ReadAllBytesAsync(db.DatabasePath);
+        var originalPackage = await File.ReadAllBytesAsync(path);
+        var ownedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => FullScopedPreflightAsync(path, (stage, directory) =>
+        {
+            ownedDirectories.Add(directory);
+            if (stage == failurePoint) throw new InvalidOperationException("injected " + stage);
+        }));
+        Assert.Equal("injected " + failurePoint, error.Message);
+        Assert.NotEmpty(ownedDirectories);
+        Assert.All(ownedDirectories, directory => Assert.False(Directory.Exists(directory)));
+        Assert.Equal(originalDb, await File.ReadAllBytesAsync(db.DatabasePath));
+        Assert.Equal(originalPackage, await File.ReadAllBytesAsync(path));
+        Assert.Single(Directory.GetFiles(db.BackupDirectory));
     }
 }
