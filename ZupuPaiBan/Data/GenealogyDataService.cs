@@ -4,6 +4,9 @@ using ZupuPaiBan.Models;
 
 namespace ZupuPaiBan.Data;
 
+/// <summary>A scoped unlink found no matching current record.</summary>
+public sealed class StaleTargetLinkException(string message) : InvalidOperationException(message);
+
 /// <summary>目标模型的最小应用服务：所有读取均显式按族谱范围过滤。</summary>
 public sealed class GenealogyDataService
 {
@@ -86,7 +89,7 @@ public sealed class GenealogyDataService
                 (relationship.PersonId == participantId || relationship.RelatedPersonId == participantId))
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
-            throw new InvalidOperationException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
+            throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
     }
 
     /// <summary>
@@ -101,7 +104,7 @@ public sealed class GenealogyDataService
                 (union.PartnerOneId == participantId || union.PartnerTwoId == participantId))
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
-            throw new InvalidOperationException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");
+            throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");
     }
 
     public async Task<Person> AddPersonAsync(Person person, CancellationToken cancellationToken = default)

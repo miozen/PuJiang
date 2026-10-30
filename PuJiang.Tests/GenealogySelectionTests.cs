@@ -1339,16 +1339,71 @@ public class GenealogySelectionTests
         await vm.LoadAsync();
         await vm.SelectAsync(vm.Genealogies.Single(item => item.Id == firstGenealogy.Id));
         vm.SelectedPerson = vm.People.Single(item => item.Id == first.Id);
+        var ownCandidate = Assert.Single(await vm.GetTargetLinkRemovalCandidatesAsync());
         await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(
-            new TargetLinkRemovalCandidate(foreignUnion.Id, TargetLinkRemovalKind.FamilyUnion, "伪造跨谱婚配")));
-        await vm.RemoveTargetLinkAsync(new TargetLinkRemovalCandidate(ownRelationship.Id, TargetLinkRemovalKind.Relationship, "当前关系"));
+            ownCandidate with { Id = foreignUnion.Id, Kind = TargetLinkRemovalKind.FamilyUnion, Description = "伪造跨谱婚配" }));
+        await vm.RemoveTargetLinkAsync(ownCandidate);
         await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(
-            new TargetLinkRemovalCandidate(ownRelationship.Id, TargetLinkRemovalKind.Relationship, "已解除关系")));
+            ownCandidate with { Description = "已解除关系" }));
 
         await using var verify = database.CreateContext();
         Assert.Empty(await verify.PersonRelationships.Where(item => item.GenealogyId == firstGenealogy.Id).ToListAsync());
         Assert.Single(await verify.FamilyUnions.Where(item => item.GenealogyId == secondGenealogy.Id).ToListAsync());
         Assert.Equal(4, await verify.People.CountAsync());
+    }
+
+    [Theory]
+    [InlineData(TargetLinkRemovalKind.Relationship)]
+    [InlineData(TargetLinkRemovalKind.FamilyUnion)]
+    [Trait("Category", "Integration")]
+    public async Task Removal_confirmation_rejects_external_removal_and_person_reselection(TargetLinkRemovalKind kind)
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "确认谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(p => p.Name == "甲");
+        var second = vm.People.Single(p => p.Name == "乙");
+        vm.SelectedPerson = first;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, second.Id);
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Kind == kind);
+
+        // Switching to the other participant and back invalidates the original confirmation even though IDs match.
+        vm.SelectedPerson = second;
+        vm.SelectedPerson = first;
+        var changed = await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(candidate));
+        Assert.Contains("当前选择已变化", changed.Message);
+        await using (var verify = database.CreateContext())
+        {
+            Assert.Single(await verify.PersonRelationships.ToListAsync());
+            Assert.Single(await verify.FamilyUnions.ToListAsync());
+        }
+
+        candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Kind == kind);
+        await using (var external = database.CreateContext())
+        {
+            var service = new GenealogyDataService(external);
+            if (kind == TargetLinkRemovalKind.Relationship)
+                await service.RemoveRelationshipForParticipantAsync(genealogy.Id, candidate.Id, first.Id);
+            else
+                await service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, candidate.Id, first.Id);
+        }
+        var stale = await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(candidate));
+        Assert.Contains("解除候选已过期", stale.Message);
+        Assert.Equal("解除候选已过期，当前图数据已重新加载。", vm.Status);
+        Assert.Equal(first.Id, vm.SelectedPerson!.Id);
+        Assert.DoesNotContain(await vm.GetTargetLinkRemovalCandidatesAsync(), c => c.Id == candidate.Id);
+        await using var final = database.CreateContext();
+        Assert.Equal(2, await final.People.CountAsync());
+        Assert.Equal(kind == TargetLinkRemovalKind.Relationship ? 0 : 1, await final.PersonRelationships.CountAsync());
+        Assert.Equal(kind == TargetLinkRemovalKind.FamilyUnion ? 0 : 1, await final.FamilyUnions.CountAsync());
     }
 
     [Fact]

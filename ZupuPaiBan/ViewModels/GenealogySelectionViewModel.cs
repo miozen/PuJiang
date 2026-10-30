@@ -14,6 +14,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
     private readonly TargetContextCoordinator? _operationCoordinator;
     private int _selectionVersion;
     private int _personSelectionVersion;
+    private int _candidatePersonSelectionVersion;
 
     [ObservableProperty] private ObservableCollection<Genealogy> _genealogies = new();
     [ObservableProperty] private Genealogy? _selectedGenealogy;
@@ -197,6 +198,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
     partial void OnSelectedPersonChanged(Person? value)
     {
         ++_personSelectionVersion;
+        ++_candidatePersonSelectionVersion;
         SelectedBiologicalChild = null;
         SelectedExistingChild = null;
         BiologicalChildren.Clear();
@@ -401,8 +403,10 @@ public partial class GenealogySelectionViewModel : ObservableObject
         using var operation = _operationCoordinator?.EnterOperation();
         var (genealogy, person) = GetCurrentSelectedPersonForEditing();
         var version = _selectionVersion;
+        var personVersion = _candidatePersonSelectionVersion;
         var snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
-        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id)
+        if (version != _selectionVersion || personVersion != _candidatePersonSelectionVersion ||
+            SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id)
             throw new InvalidOperationException("当前选择已变化，请重新选择解除记录。");
         var names = snapshot.People.ToDictionary(item => item.Id, item => item.Name);
         var candidates = new List<TargetLinkRemovalCandidate>();
@@ -413,7 +417,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
                 ? names.GetValueOrDefault(relatedId, "已不存在的人物")
                 : "（无对方）";
             candidates.Add(new TargetLinkRemovalCandidate(relationship.Id, TargetLinkRemovalKind.Relationship,
-                $"人物关系：{subject} → {related}（{GetRelationshipKindName(relationship.Kind)}）"));
+                $"人物关系：{subject} → {related}（{GetRelationshipKindName(relationship.Kind)}）",
+                genealogy.Id, person.Id, version, personVersion));
         }
         foreach (var union in snapshot.Unions.Where(item => item.PartnerOneId == person.Id || item.PartnerTwoId == person.Id))
         {
@@ -422,7 +427,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
                 ? names.GetValueOrDefault(secondId, "已不存在的人物")
                 : "（未详）";
             candidates.Add(new TargetLinkRemovalCandidate(union.Id, TargetLinkRemovalKind.FamilyUnion,
-                $"婚配：{first} — {second}（{GetFamilyUnionKindName(union.Kind)}）"));
+                $"婚配：{first} — {second}（{GetFamilyUnionKindName(union.Kind)}）",
+                genealogy.Id, person.Id, version, personVersion));
         }
         return candidates.OrderBy(item => item.Kind).ThenBy(item => item.Description, StringComparer.Ordinal).ToList();
     }
@@ -435,20 +441,42 @@ public partial class GenealogySelectionViewModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(candidate);
         using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.GenealogyId != SelectedGenealogy?.Id || candidate.ParticipantId != SelectedPerson?.Id ||
+            candidate.SelectionVersion != _selectionVersion || candidate.PersonSelectionVersion != _candidatePersonSelectionVersion)
+        {
+            Status = "当前选择已变化，请重新选择解除记录。";
+            throw new InvalidOperationException("当前选择已变化，请重新选择解除记录。");
+        }
+
         var (genealogy, person) = GetCurrentSelectedPersonForEditing();
         var version = _selectionVersion;
         await using var context = _createContext();
         var service = new GenealogyDataService(context);
-        switch (candidate.Kind)
+        try
         {
-            case TargetLinkRemovalKind.Relationship:
-                await service.RemoveRelationshipForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
-                break;
-            case TargetLinkRemovalKind.FamilyUnion:
-                await service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
-                break;
-            default:
-                throw new InvalidOperationException("解除类型无效。");
+            switch (candidate.Kind)
+            {
+                case TargetLinkRemovalKind.Relationship:
+                    await service.RemoveRelationshipForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
+                    break;
+                case TargetLinkRemovalKind.FamilyUnion:
+                    await service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
+                    break;
+                default:
+                    throw new InvalidOperationException("解除类型无效。");
+            }
+        }
+        catch (StaleTargetLinkException exception)
+        {
+            if (version == _selectionVersion && candidate.PersonSelectionVersion == _candidatePersonSelectionVersion &&
+                SelectedGenealogy?.Id == genealogy.Id && SelectedPerson?.Id == person.Id)
+            {
+                if (candidate.Kind == TargetLinkRemovalKind.Relationship)
+                    await LoadSelectedBiologicalChildrenAsync();
+                if (await RefreshTargetTreeAsync(genealogy.Id, version, "解除候选已过期", candidate.PersonSelectionVersion))
+                    Status = "解除候选已过期，当前图数据已重新加载。";
+            }
+            throw new InvalidOperationException($"解除候选已过期：{exception.Message}", exception);
         }
 
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
@@ -499,13 +527,17 @@ public partial class GenealogySelectionViewModel : ObservableObject
         _ => "未知类型"
     };
 
-    private async Task<bool> RefreshTargetTreeAsync(Guid genealogyId, int version, string completedOperation)
+    private async Task<bool> RefreshTargetTreeAsync(Guid genealogyId, int version, string completedOperation,
+        int? personSelectionVersion = null)
     {
+        bool IsCurrent() => version == _selectionVersion && SelectedGenealogy?.Id == genealogyId &&
+            (personSelectionVersion is null || personSelectionVersion == _candidatePersonSelectionVersion);
+        if (!IsCurrent()) return false;
         try
         {
             var snapshot = await GetGraphSnapshotForSelectionAsync(genealogyId);
             var tree = TargetMemberTreeProjection.Create(snapshot);
-            if (version == _selectionVersion && SelectedGenealogy?.Id == genealogyId)
+            if (IsCurrent())
             {
                 TargetTree = new ObservableCollection<TargetMemberTreeNode>(tree);
                 return true;
@@ -513,7 +545,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            if (version == _selectionVersion && SelectedGenealogy?.Id == genealogyId)
+            if (IsCurrent())
             {
                 TargetTree.Clear();
                 Status = $"{completedOperation}，但目标谱系刷新失败：{ex.Message}";
