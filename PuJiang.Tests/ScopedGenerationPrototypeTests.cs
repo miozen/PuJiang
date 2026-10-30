@@ -43,9 +43,11 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
             yield return ($"ScopedProto{table}{operation}", TriggerSql(table, operation));
     }
 
-    private static async Task InstallAsync(ZupuDbContext context, bool fail = false, Func<Task>? beforeCommit = null)
+    private static async Task InstallAsync(ZupuDbContext context, bool fail = false, Func<Task>? beforeCommit = null,
+        Action? beforeSchemaWrite = null)
     {
         await using var tx = await context.Database.BeginTransactionAsync();
+        beforeSchemaWrite?.Invoke();
         await context.Database.ExecuteSqlRawAsync(TableSql);
         await context.Database.ExecuteSqlRawAsync("INSERT INTO ScopedGenerationPrototype (GenealogyId, Value) SELECT Id, 0 FROM Genealogies");
         foreach (var (_, sql) in ExpectedTriggers())
@@ -702,7 +704,11 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         await priorWriter.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"迁移前外写"} WHERE Id = {personId}");
 
         await using var installing = db.CreateContext();
-        var install = InstallAsync(installing);
+        var installationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Microsoft.Data.Sqlite can synchronously wait for the write lock before its first async yield.
+        // Run that call on a separate thread so the test can release the prior writer deterministically.
+        var install = Task.Run(() => InstallAsync(installing, beforeSchemaWrite: installationStarted.SetResult));
+        await installationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await Task.Delay(200);
         Assert.False(install.IsCompleted);
         await priorTransaction.CommitAsync();
