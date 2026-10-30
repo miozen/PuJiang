@@ -95,7 +95,7 @@ public class BackupRestorePreflightTests
                 VALUES ($id, $genealogyId, $missingPersonId, $relatedPersonId, 1, 0)
                 """;
             insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
-            insert.Parameters.AddWithValue("$genealogyId", genealogyId.ToString());
+            insert.Parameters.AddWithValue("$genealogyId", genealogyId.ToString().ToUpperInvariant());
             insert.Parameters.AddWithValue("$missingPersonId", Guid.NewGuid().ToString());
             insert.Parameters.AddWithValue("$relatedPersonId", relatedPersonId.ToString());
             await insert.ExecuteNonQueryAsync();

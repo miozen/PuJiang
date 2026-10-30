@@ -104,6 +104,12 @@ public sealed class BackupRestorePreflightService
                 if (Convert.ToInt64(await generation.ExecuteScalarAsync(cancellationToken)) != 1)
                     throw new InvalidDataException("解除操作代数缺失或损坏。");
             }
+            await using (var scopedGeneration = candidate.CreateCommand())
+            {
+                scopedGeneration.CommandText = $"SELECT COUNT(*) FROM ({ScopedUnlinkGenerationV1.DatabaseGuardSql})";
+                if (Convert.ToInt64(await scopedGeneration.ExecuteScalarAsync(cancellationToken)) != 1)
+                    throw new InvalidDataException("按谱解除代数缺失或损坏。");
+            }
             return new BackupRestorePreflightReport(manifest.FormatVersion, migrations.AsReadOnly(), true,
                 manifest.IncludesAttachments, manifest.IncludesConfiguration);
         }
