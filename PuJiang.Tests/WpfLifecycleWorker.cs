@@ -62,6 +62,29 @@ internal static class WpfLifecycleWorker
         return await result.Task;
     }
 
+    public static async Task<int> RunScopedCandidateIntegrationAsync(string directory)
+    {
+        var database = new TestDatabase(directory);
+        Environment.SetEnvironmentVariable(AppDataPaths.TestRootEnvironmentVariable, directory);
+        var result = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            dispatcher.BeginInvoke(async () =>
+            {
+                try { await VerifyScopedCandidateStillUsesGlobalGenerationAsync(database); result.TrySetResult(0); }
+                catch (Exception exception) { Console.Error.WriteLine(exception); result.TrySetResult(1); }
+                finally { dispatcher.BeginInvokeShutdown(DispatcherPriority.Background); }
+            });
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        return await result.Task;
+    }
+
     public static async Task<int> RunAsync(string directory)
     {
         var database = new TestDatabase(directory); // Validates the existing GUID-named temporary root.
@@ -278,6 +301,82 @@ internal static class WpfLifecycleWorker
         staleSelectionDialog.Close();
         switchedDialog.Close();
     }
+
+    private static async Task VerifyScopedCandidateStillUsesGlobalGenerationAsync(TestDatabase database)
+    {
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").Options;
+        var coordinator = new TargetContextCoordinator(options);
+        await using (var migration = coordinator.CreateContext()) await migration.Database.MigrateAsync();
+        var viewModel = new GenealogySelectionViewModel(coordinator.CreateContext, coordinator) { NewName = "候选甲谱" };
+        await viewModel.CreateAsync();
+        var firstGenealogy = viewModel.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            viewModel.NewPersonName = name;
+            await viewModel.AddPersonAsync();
+        }
+        var first = viewModel.People.Single(person => person.Name == "甲");
+        var second = viewModel.People.Single(person => person.Name == "乙");
+        viewModel.SelectedPerson = first;
+        await viewModel.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+
+        viewModel.NewName = "候选乙谱";
+        await viewModel.CreateAsync();
+        var secondGenealogy = viewModel.SelectedGenealogy!;
+        viewModel.NewPersonName = "外谱人物";
+        await viewModel.AddPersonAsync();
+        var foreignPerson = viewModel.People.Single();
+        await viewModel.SelectAsync(firstGenealogy);
+        viewModel.SelectedPerson = viewModel.People.Single(person => person.Id == first.Id);
+        var candidates = await viewModel.GetTargetLinkRemovalCandidatesAsync();
+        if (candidates.Count != 1) throw new InvalidOperationException("WPF 解除入口未返回唯一的当前谱候选。");
+        var candidate = candidates[0];
+        var dialog = new TargetLinkRemovalDialog([candidate]);
+        ((System.Windows.Controls.ListBox)dialog.FindName("CandidateList")).SelectedItem = candidate;
+        ((System.Windows.Controls.CheckBox)dialog.FindName("ConfirmationBox")).IsChecked = true;
+        if (!((System.Windows.Controls.Button)dialog.FindName("RemoveButton")).IsEnabled)
+            throw new InvalidOperationException("按谱 V1 存在时 WPF 解除确认未正确绑定候选。");
+
+        long globalBefore, firstScopedBefore, secondScopedBefore;
+        await using (var before = database.CreateContext())
+        {
+            globalBefore = await before.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync();
+            firstScopedBefore = await ScopedValueAsync(before, firstGenealogy.Id);
+            secondScopedBefore = await ScopedValueAsync(before, secondGenealogy.Id);
+        }
+        await using (var external = database.CreateContext())
+        {
+            var person = await external.People.SingleAsync(item => item.Id == foreignPerson.Id);
+            person.Name = "外谱人物已修改";
+            await external.SaveChangesAsync();
+        }
+        await using (var after = database.CreateContext())
+        {
+            if (await after.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync() != globalBefore + 1 ||
+                await ScopedValueAsync(after, firstGenealogy.Id) != firstScopedBefore ||
+                await ScopedValueAsync(after, secondGenealogy.Id) != secondScopedBefore + 1)
+                throw new InvalidOperationException("跨谱写入后的双轨代数边界不符合预期。");
+        }
+
+        try
+        {
+            await viewModel.RemoveTargetLinkAsync(candidate);
+            throw new InvalidOperationException("WPF 候选错误地按谱放行了跨谱写入后的旧确认。");
+        }
+        catch (InvalidOperationException exception) when (exception.Message.Contains("解除候选已过期", StringComparison.Ordinal)) { }
+        finally { dialog.Close(); }
+        if (viewModel.Status != "解除候选已过期，当前图数据已重新加载。")
+            throw new InvalidOperationException("WPF 候选未报告全库代数导致的保守失效。");
+        await using var verify = database.CreateContext();
+        if (await verify.PersonRelationships.CountAsync(item => item.GenealogyId == firstGenealogy.Id) != 1 ||
+            await verify.PersonRelationships.CountAsync(item => item.GenealogyId == secondGenealogy.Id) != 0)
+            throw new InvalidOperationException("候选失败关闭后错误修改了图数据。");
+    }
+
+    private static Task<long> ScopedValueAsync(ZupuDbContext context, Guid genealogyId) =>
+        context.Database.SqlQueryRaw<long>(ScopedUnlinkGenerationV1.GuardSql(),
+            new Microsoft.Data.Sqlite.SqliteParameter("@genealogy", genealogyId.ToString().ToUpperInvariant())).SingleAsync();
 
     private static async Task VerifyTargetTreeEditingAsync(TestDatabase database)
     {

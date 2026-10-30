@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using System.IO.Compression;
 using Xunit;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
@@ -126,7 +127,69 @@ public sealed class ScopedUnlinkGenerationV1IntegrationTests
         Assert.Equal(0L, await seed.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE name = 'ScopedUnlinkGenerationV1'").SingleAsync());
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Pre_v1_program_preflight_rehearsal_rejects_v1_package_without_changing_source_or_package()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        Directory.CreateDirectory(database.BackupDirectory);
+        var package = Path.Combine(database.BackupDirectory, "v1.zip");
+        await OfflineBackupPackageService.CreateAsync(database.DatabasePath, package);
+        var sourceBefore = await File.ReadAllBytesAsync(database.DatabasePath);
+        var packageBefore = await File.ReadAllBytesAsync(package);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RehearsePreV1PreflightAsync(package, database.BackupDirectory));
+
+        Assert.Contains("迁移版本", error.Message);
+        Assert.Equal(sourceBefore, await File.ReadAllBytesAsync(database.DatabasePath));
+        Assert.Equal(packageBefore, await File.ReadAllBytesAsync(package));
+        Assert.Single(Directory.GetFiles(database.BackupDirectory));
+    }
+
     private static Task<long> ScopedValueAsync(ZupuDbContext context, Guid genealogyId) =>
         context.Database.SqlQueryRaw<long>(ScopedUnlinkGenerationV1.GuardSql(),
             new SqliteParameter("@genealogy", genealogyId.ToString().ToUpperInvariant())).SingleAsync();
+
+    // This is an isolated rehearsal of the previous program's strict migration comparison. It deliberately does
+    // not invoke restore, upgrade the package, or alter the active database; the previous binary cannot know V1.
+    private static async Task RehearsePreV1PreflightAsync(string packagePath, string scratchDirectory)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var candidatePath = Path.Combine(scratchDirectory, $".pre-v1-candidate-{id}.db");
+        var referencePath = Path.Combine(scratchDirectory, $".pre-v1-reference-{id}.db");
+        try
+        {
+            await using (var package = new FileStream(packagePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var manifest = await OfflineBackupPackageService.ValidateStreamAsync(package, CancellationToken.None);
+                package.Position = 0;
+                using var archive = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: true);
+                await using var input = archive.GetEntry(manifest.DatabaseEntry)!.Open();
+                await using var output = new FileStream(candidatePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await input.CopyToAsync(output);
+            }
+
+            var referenceOptions = new DbContextOptionsBuilder<ZupuDbContext>()
+                .UseSqlite($"Data Source={referencePath};Pooling=False").Options;
+            await using var reference = new ZupuDbContext(referenceOptions);
+            await reference.GetService<IMigrator>().MigrateAsync(PreviousMigration);
+            var expected = await reference.Database.GetAppliedMigrationsAsync();
+
+            var candidateOptions = new DbContextOptionsBuilder<ZupuDbContext>()
+                .UseSqlite($"Data Source={candidatePath};Mode=ReadOnly;Pooling=False").Options;
+            await using var candidate = new ZupuDbContext(candidateOptions);
+            var actual = await candidate.Database.GetAppliedMigrationsAsync();
+            if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
+                throw new InvalidDataException("数据库迁移版本与当前程序不兼容。");
+
+            throw new InvalidOperationException("旧程序预检演练意外接受了包含 V1 的备份包。");
+        }
+        finally
+        {
+            if (File.Exists(candidatePath)) File.Delete(candidatePath);
+            if (File.Exists(referencePath)) File.Delete(referencePath);
+        }
+    }
 }

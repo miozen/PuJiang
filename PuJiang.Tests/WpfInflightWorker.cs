@@ -219,9 +219,12 @@ internal static class WpfInflightWorker
         {
             await viewModel.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
         }
-        long generationBefore;
+        long generationBefore, scopedGenerationBefore;
         await using (var before = database.CreateContext())
+        {
             generationBefore = await before.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+            scopedGenerationBefore = await ScopedValueAsync(before, genealogy.Id);
+        }
 
         pause.Enabled = true;
         Task edit = action == TargetLinkExitAction.AddUnion
@@ -247,6 +250,8 @@ internal static class WpfInflightWorker
         var generationAfter = await verify.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
         if (generationAfter != generationBefore + 1)
             throw new InvalidOperationException("目标关系退出竞争中的代数与已提交写入不一致。");
+        if (await ScopedValueAsync(verify, genealogy.Id) != scopedGenerationBefore + 1)
+            throw new InvalidOperationException("目标关系退出竞争中的按谱代数与已提交写入不一致。");
         if (action == TargetLinkExitAction.AddUnion)
         {
             if (await verify.FamilyUnions.CountAsync(union => union.GenealogyId == genealogy.Id) != 1 ||
@@ -336,4 +341,8 @@ internal static class WpfInflightWorker
         AddUnion,
         RemoveRelationship
     }
+
+    private static Task<long> ScopedValueAsync(ZupuDbContext context, Guid genealogyId) =>
+        context.Database.SqlQueryRaw<long>(ScopedUnlinkGenerationV1.GuardSql(),
+            new Microsoft.Data.Sqlite.SqliteParameter("@genealogy", genealogyId.ToString().ToUpperInvariant())).SingleAsync();
 }

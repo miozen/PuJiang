@@ -18,6 +18,11 @@ public class WpfLifecycleTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Scoped_generation_v1_does_not_switch_the_wpf_unlink_candidate_from_global_generation()
+        => await RunWorkerAsync("--wpf-scoped-candidate");
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Tree_and_biological_child_edits_remain_scoped_when_selection_switches_inflight()
         => await RunWorkerAsync("--wpf-target-tree-editing");
 

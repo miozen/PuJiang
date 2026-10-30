@@ -22,6 +22,8 @@ internal static class RestoreWorkerProgram
             return await WpfLifecycleWorker.RunAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-target-relationship")
             return await WpfLifecycleWorker.RunTargetRelationshipEditingAsync(args[1]);
+        if (args.Length == 2 && args[0] == "--wpf-scoped-candidate")
+            return await WpfLifecycleWorker.RunScopedCandidateIntegrationAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-target-tree-editing")
             return await WpfLifecycleWorker.RunTargetTreeEditingAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-displayed")
