@@ -98,6 +98,12 @@ public sealed class BackupRestorePreflightService
             var expectedSchema = await ReadSchemaAsync(reference, cancellationToken);
             if (!actualSchema.SequenceEqual(expectedSchema, StringComparer.Ordinal))
                 throw new InvalidDataException("数据库结构与当前程序不兼容。");
+            await using (var generation = candidate.CreateCommand())
+            {
+                generation.CommandText = $"SELECT COUNT(*) FROM ({UnlinkGenerationV1.GuardSql})";
+                if (Convert.ToInt64(await generation.ExecuteScalarAsync(cancellationToken)) != 1)
+                    throw new InvalidDataException("解除操作代数缺失或损坏。");
+            }
             return new BackupRestorePreflightReport(manifest.FormatVersion, migrations.AsReadOnly(), true,
                 manifest.IncludesAttachments, manifest.IncludesConfiguration);
         }

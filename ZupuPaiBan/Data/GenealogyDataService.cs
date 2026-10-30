@@ -29,6 +29,7 @@ public sealed class GenealogyDataService
     public async Task<GenealogyGraphSnapshot> GetGraphSnapshotAsync(Guid genealogyId, CancellationToken cancellationToken = default)
     {
         await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        var unlinkGeneration = await _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync(cancellationToken);
         var genealogy = await _context.Genealogies.AsNoTracking().Where(g => g.Id == genealogyId)
             .Select(g => new GenealogyGraphInfo(g.Id, g.Name, g.Surname, g.Description, g.CreatedAt))
             .SingleOrDefaultAsync(cancellationToken)
@@ -46,7 +47,7 @@ public sealed class GenealogyDataService
         var branches = await _context.FamilyBranches.AsNoTracking().Where(b => b.GenealogyId == genealogyId).OrderBy(b => b.Id)
             .Select(b => new GenealogyBranchData(b.Id, b.ParentBranchId, b.Name, b.SortOrder)).ToListAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new GenealogyGraphSnapshot(genealogy, people.AsReadOnly(), relationships.AsReadOnly(), unions.AsReadOnly(), branches.AsReadOnly());
+        return new GenealogyGraphSnapshot(genealogy, people.AsReadOnly(), relationships.AsReadOnly(), unions.AsReadOnly(), branches.AsReadOnly(), unlinkGeneration);
     }
 
     public async Task<Genealogy> CreateGenealogyAsync(Genealogy genealogy, CancellationToken cancellationToken = default)
@@ -83,7 +84,7 @@ public sealed class GenealogyDataService
     /// DELETE, so a failed/stale request changes nothing.
     /// </summary>
     public async Task RemoveRelationshipForParticipantAsync(Guid genealogyId, GenealogyRelationshipData expected, Guid participantId,
-        string firstName, string? secondName,
+        string firstName, string? secondName, long unlinkGeneration,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(expected);
@@ -95,7 +96,8 @@ public sealed class GenealogyDataService
                 relationship.Note == expected.Note && relationship.SourceCitation == expected.SourceCitation &&
                 _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == relationship.PersonId && p.Name == firstName) &&
                 (relationship.RelatedPersonId == null || _context.People.Any(p => p.GenealogyId == genealogyId &&
-                    p.Id == relationship.RelatedPersonId && p.Name == secondName)))
+                    p.Id == relationship.RelatedPersonId && p.Name == secondName)) &&
+                _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == unlinkGeneration))
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
@@ -107,7 +109,7 @@ public sealed class GenealogyDataService
     /// relationship record.
     /// </summary>
     public async Task RemoveFamilyUnionForParticipantAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
-        string firstName, string? secondName,
+        string firstName, string? secondName, long unlinkGeneration,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(expected);
@@ -119,7 +121,8 @@ public sealed class GenealogyDataService
                 union.EndDateText == expected.EndDateText && union.Note == expected.Note &&
                 _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == union.PartnerOneId && p.Name == firstName) &&
                 (union.PartnerTwoId == null || _context.People.Any(p => p.GenealogyId == genealogyId &&
-                    p.Id == union.PartnerTwoId && p.Name == secondName)))
+                    p.Id == union.PartnerTwoId && p.Name == secondName)) &&
+                _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == unlinkGeneration))
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");

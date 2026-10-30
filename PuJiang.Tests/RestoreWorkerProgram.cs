@@ -5,6 +5,19 @@ internal static class RestoreWorkerProgram
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--aba-rename")
+        {
+            var isolated = new TestDatabase(args[1]);
+            if (!Guid.TryParse(args[2], out var personId)) return 2;
+            await using var context = isolated.CreateContext();
+            var person = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.SingleAsync(context.People, item => item.Id == personId);
+            var originalName = person.Name;
+            person.Name = originalName + "-临时";
+            await context.SaveChangesAsync();
+            person.Name = originalName;
+            await context.SaveChangesAsync();
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--wpf-lifecycle")
             return await WpfLifecycleWorker.RunAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-target-relationship")

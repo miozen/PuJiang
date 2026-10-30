@@ -8,7 +8,8 @@ public sealed record GenealogyGraphSnapshot(
     IReadOnlyList<GenealogyPersonData> People,
     IReadOnlyList<GenealogyRelationshipData> Relationships,
     IReadOnlyList<GenealogyUnionData> Unions,
-    IReadOnlyList<GenealogyBranchData> Branches);
+    IReadOnlyList<GenealogyBranchData> Branches,
+    long UnlinkGeneration = 0);
 
 public sealed record GenealogyGraphInfo(Guid Id, string Name, string? Surname, string? Description, DateTimeOffset CreatedAt);
 public sealed record GenealogyPersonData(Guid Id, string Name, PersonSex Sex, string? BirthDateText,

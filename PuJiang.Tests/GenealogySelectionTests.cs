@@ -1303,6 +1303,8 @@ public class GenealogySelectionTests
             Assert.Single(await afterRelationship.FamilyUnions.ToListAsync());
         }
 
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(union));
+        union = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(item => item.Kind == TargetLinkRemovalKind.FamilyUnion);
         await vm.RemoveTargetLinkAsync(union);
         Assert.Equal("已解除婚配关系。", vm.Status);
         await using var verify = database.CreateContext();
@@ -1532,7 +1534,8 @@ public class GenealogySelectionTests
         Assert.Equal(2, candidates.Count);
         Assert.All(candidates, candidate => Assert.Null(candidate.SecondName));
         await vm.RemoveTargetLinkAsync(candidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship));
-        await vm.RemoveTargetLinkAsync(candidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.FamilyUnion));
+        var freshUnion = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(candidate => candidate.Kind == TargetLinkRemovalKind.FamilyUnion);
+        await vm.RemoveTargetLinkAsync(freshUnion);
         await using var verify = database.CreateContext();
         Assert.Single(await verify.People.ToListAsync());
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
@@ -1781,9 +1784,9 @@ public class GenealogySelectionTests
         var unionSnapshot = snapshot.Unions.Single(item => item.Id == union.Id);
         var names = snapshot.People.ToDictionary(item => item.Id, item => item.Name);
         await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveRelationshipForParticipantAsync(genealogy.Id, relSnapshot, first.Id,
-            names[relSnapshot.PersonId], names[relSnapshot.RelatedPersonId!.Value]));
+            names[relSnapshot.PersonId], names[relSnapshot.RelatedPersonId!.Value], snapshot.UnlinkGeneration));
         await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, unionSnapshot, first.Id,
-            names[unionSnapshot.PartnerOneId], names[unionSnapshot.PartnerTwoId!.Value]));
+            names[unionSnapshot.PartnerOneId], names[unionSnapshot.PartnerTwoId!.Value], snapshot.UnlinkGeneration));
         await using var verify = database.CreateContext();
         Assert.Equal(2, await verify.People.CountAsync());
         Assert.Single(await verify.PersonRelationships.ToListAsync());

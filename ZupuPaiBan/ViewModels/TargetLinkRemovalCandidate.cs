@@ -14,6 +14,7 @@ public sealed record TargetLinkRemovalCandidate(
     Guid ParticipantId,
     int SelectionVersion,
     int PersonSelectionVersion,
+    long UnlinkGeneration,
     string SubjectName,
     string FirstName,
     string? SecondName,

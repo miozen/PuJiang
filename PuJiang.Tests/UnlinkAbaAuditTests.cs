@@ -14,7 +14,7 @@ public class UnlinkAbaAuditTests
     [InlineData(TargetLinkRemovalKind.FamilyUnion, false)]
     [InlineData(TargetLinkRemovalKind.FamilyUnion, true)]
     [Trait("Category", "Integration")]
-    public async Task Current_unlink_accepts_candidate_after_committed_aba(TargetLinkRemovalKind kind, bool rename)
+    public async Task Current_unlink_rejects_candidate_after_committed_aba(TargetLinkRemovalKind kind, bool rename)
     {
         await using var database = new TestDatabase();
         await database.MigrateAsync();
@@ -45,11 +45,10 @@ public class UnlinkAbaAuditTests
             await external.SaveChangesAsync();
         }
 
-        // This documents the present limitation, not the intended protection: a stale confirmation succeeds.
-        await vm.RemoveTargetLinkAsync(candidate);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(candidate));
         await using var verify = database.CreateContext();
-        Assert.Equal(kind == TargetLinkRemovalKind.Relationship ? 0 : 1, await verify.PersonRelationships.CountAsync());
-        Assert.Equal(kind == TargetLinkRemovalKind.FamilyUnion ? 0 : 1, await verify.FamilyUnions.CountAsync());
+        Assert.Equal(1, await verify.PersonRelationships.CountAsync());
+        Assert.Equal(1, await verify.FamilyUnions.CountAsync());
         Assert.Equal(2, await verify.People.CountAsync());
     }
 
