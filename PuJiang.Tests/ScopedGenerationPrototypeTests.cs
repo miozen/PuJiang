@@ -59,6 +59,25 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         await tx.CommitAsync();
     }
 
+    // Test-only template for a future migration which has rebuilt People and must restore both guards.
+#pragma warning disable EF1003 // Trigger names derive exclusively from the fixed Operations collection.
+    private static async Task ReinstallPeopleGenerationTriggersAsync(ZupuDbContext context)
+    {
+        await using var tx = await context.Database.BeginTransactionAsync();
+        foreach (var operation in Operations)
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS UnlinkGenerationPeople" + operation);
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS ScopedProtoPeople" + operation);
+        }
+        foreach (var operation in Operations)
+        {
+            await context.Database.ExecuteSqlRawAsync(UnlinkGenerationV1.TriggerSql("People", operation));
+            await context.Database.ExecuteSqlRawAsync(TriggerSql("People", operation));
+        }
+        await tx.CommitAsync();
+    }
+#pragma warning restore EF1003
+
     // Exact test-owned schema and generation are checked within the same SQL statement.
     private static string GuardSql()
     {
@@ -723,7 +742,7 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task Rebuilt_people_table_drops_scoped_triggers_and_scope_guard_fails_closed()
+    public async Task Rebuilt_people_table_drops_guards_until_test_migration_reinstalls_both_trigger_sets()
     {
         await using var db = new TestDatabase();
         await db.MigrateAsync();
@@ -731,6 +750,7 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         var data = await SeedAsync(context);
         await InstallAsync(context);
         var captured = await ReadAsync(context, data.A.Id);
+        var globalBefore = await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
         await context.Database.OpenConnectionAsync();
         try
         {
@@ -750,7 +770,13 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
             Assert.Equal(0L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'ScopedProtoPeople%'").SingleAsync());
             await Assert.ThrowsAsync<InvalidOperationException>(() => ReadAsync(context, data.A.Id));
             Assert.Equal(0, await DeleteAsync(context, data.A.Id, data.Link.Id, captured));
-            Assert.Equal("甲", (await context.People.AsNoTracking().SingleAsync(item => item.Id == data.A1.Id)).Name);
+            await ReinstallPeopleGenerationTriggersAsync(context);
+            Assert.Equal(3L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'UnlinkGenerationPeople%'").SingleAsync());
+            Assert.Equal(3L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'ScopedProtoPeople%'").SingleAsync());
+            await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"重装后"} WHERE Id = {data.A1.Id}");
+            Assert.Equal(captured + 1, await ReadAsync(context, data.A.Id));
+            Assert.Equal(globalBefore + 1, await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync());
+            Assert.Equal("重装后", (await context.People.AsNoTracking().SingleAsync(item => item.Id == data.A1.Id)).Name);
             Assert.Single(await context.PersonRelationships.AsNoTracking().ToListAsync());
         }
         finally { await context.Database.CloseConnectionAsync(); }
@@ -799,6 +825,35 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         Assert.Equal(beforeDb, await File.ReadAllBytesAsync(db.DatabasePath));
         Assert.Equal(beforePackage, await File.ReadAllBytesAsync(package));
         Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".scoped-check-*.db"));
+        Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".pujiang-preflight-*.db"));
+        Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".pujiang-reference-*.db"));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Legacy_and_scoped_backup_preflights_reject_each_others_schema_without_replacing_any_database()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        Directory.CreateDirectory(db.BackupDirectory);
+        await using (var seed = db.CreateContext()) await SeedAsync(seed);
+        var legacyPackage = Path.Combine(db.BackupDirectory, "legacy.zip");
+        await OfflineBackupPackageService.CreateAsync(db.DatabasePath, legacyPackage);
+        var legacyBytes = await File.ReadAllBytesAsync(legacyPackage);
+        var legacyPreflight = new BackupRestorePreflightService(db.BackupDirectory);
+        Assert.True((await legacyPreflight.CheckAsync(legacyPackage)).IncludesDatabase);
+        Assert.False(await FullScopedPreflightAsync(legacyPackage));
+        Assert.Equal(legacyBytes, await File.ReadAllBytesAsync(legacyPackage));
+
+        await using (var context = db.CreateContext()) await InstallAsync(context);
+        var scopedPackage = Path.Combine(db.BackupDirectory, "scoped.zip");
+        await OfflineBackupPackageService.CreateAsync(db.DatabasePath, scopedPackage);
+        var activeBefore = await File.ReadAllBytesAsync(db.DatabasePath);
+        var scopedBytes = await File.ReadAllBytesAsync(scopedPackage);
+        await Assert.ThrowsAsync<InvalidDataException>(() => legacyPreflight.CheckAsync(scopedPackage));
+        Assert.True(await FullScopedPreflightAsync(scopedPackage));
+        Assert.Equal(activeBefore, await File.ReadAllBytesAsync(db.DatabasePath));
+        Assert.Equal(scopedBytes, await File.ReadAllBytesAsync(scopedPackage));
         Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".pujiang-preflight-*.db"));
         Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".pujiang-reference-*.db"));
     }
