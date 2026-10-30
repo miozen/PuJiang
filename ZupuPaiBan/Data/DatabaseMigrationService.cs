@@ -56,8 +56,9 @@ public sealed class DatabaseMigrationService
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 Directory.CreateDirectory(_backupDirectory);
-                backupPath = Path.Combine(_backupDirectory, $"pre-migration-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.db");
-                await DatabaseSnapshotService.CreateAsync(sourcePath, backupPath, _busyTimeoutMilliseconds, cancellationToken);
+                var candidateBackupPath = Path.Combine(_backupDirectory, $"pre-migration-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.db");
+                await DatabaseSnapshotService.CreateAsync(sourcePath, candidateBackupPath, _busyTimeoutMilliseconds, cancellationToken);
+                backupPath = candidateBackupPath;
             }
 
             await _context.Database.MigrateAsync(cancellationToken);
