@@ -343,10 +343,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            var person = _genealogyViewModel!.GetSelectedPersonForEditing();
             genealogyPanel.IsEnabled = false;
             IReadOnlyList<TargetLinkRemovalCandidate> candidates;
-            try { candidates = await _genealogyViewModel.GetTargetLinkRemovalCandidatesAsync(); }
+            try { candidates = await _genealogyViewModel!.GetTargetLinkRemovalCandidatesAsync(); }
             finally { genealogyPanel.IsEnabled = true; }
             if (candidates.Count == 0)
             {
@@ -354,7 +353,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var dialog = new TargetLinkRemovalDialog(person, candidates) { Owner = this };
+            var dialog = new TargetLinkRemovalDialog(candidates) { Owner = this };
             if (dialog.ShowDialog() != true || dialog.SelectedCandidate is not { } candidate) return;
             genealogyPanel.IsEnabled = false;
             try { await _genealogyViewModel.RemoveTargetLinkAsync(candidate); }

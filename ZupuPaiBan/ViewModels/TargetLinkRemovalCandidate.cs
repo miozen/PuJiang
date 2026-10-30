@@ -14,6 +14,9 @@ public sealed record TargetLinkRemovalCandidate(
     Guid ParticipantId,
     int SelectionVersion,
     int PersonSelectionVersion,
+    string SubjectName,
+    string FirstName,
+    string? SecondName,
     GenealogyRelationshipData? RelationshipSnapshot,
     GenealogyUnionData? UnionSnapshot);
 

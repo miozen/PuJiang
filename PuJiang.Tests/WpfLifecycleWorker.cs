@@ -162,10 +162,19 @@ internal static class WpfLifecycleWorker
         partnerBox.SelectedItem = partnerBox.Items[0];
         await viewModel.AddTargetFamilyUnionAsync(unionDialog.Kind, unionDialog.PartnerTwoId ?? Guid.Empty);
 
+        // Simulate a rename after the people list was loaded but before opening the confirmation.
+        await using (var external = database.CreateContext())
+        {
+            (await external.People.SingleAsync(person => person.Id == first.Id)).Name = "甲新";
+            await external.SaveChangesAsync();
+        }
         var removalCandidates = await viewModel.GetTargetLinkRemovalCandidatesAsync();
         if (removalCandidates.Count != 2 || removalCandidates.Any(candidate => !candidate.Description.Contains("甲") && !candidate.Description.Contains("乙")))
             throw new InvalidOperationException("解除入口未仅显示当前人物参与的记录。");
-        var removalDialog = new TargetLinkRemovalDialog(viewModel.GetSelectedPersonForEditing(), removalCandidates);
+        var removalDialog = new TargetLinkRemovalDialog(removalCandidates);
+        var subjectLabel = (System.Windows.Controls.TextBlock)removalDialog.FindName("SubjectLabel");
+        if (!subjectLabel.Text.Contains("甲新", StringComparison.Ordinal))
+            throw new InvalidOperationException("确认窗口主体姓名未使用同一次候选快照。");
         var candidateList = (System.Windows.Controls.ListBox)removalDialog.FindName("CandidateList");
         var confirmation = (System.Windows.Controls.CheckBox)removalDialog.FindName("ConfirmationBox");
         var removeButton = (System.Windows.Controls.Button)removalDialog.FindName("RemoveButton");
@@ -173,6 +182,27 @@ internal static class WpfLifecycleWorker
         candidateList.SelectedItem = removalCandidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship);
         confirmation.IsChecked = true;
         if (!removeButton.IsEnabled) throw new InvalidOperationException("解除入口未在选择并确认后启用。");
+
+        await using (var external = database.CreateContext())
+        {
+            (await external.People.SingleAsync(person => person.Id == second.Id)).Name = "乙新";
+            await external.SaveChangesAsync();
+        }
+        try
+        {
+            await viewModel.RemoveTargetLinkAsync(removalDialog.SelectedCandidate!);
+            throw new InvalidOperationException("人物改名后的旧确认仍被接受。");
+        }
+        catch (InvalidOperationException exception) when (exception.Message.Contains("解除候选已过期", StringComparison.Ordinal)) { }
+        if (viewModel.People.Single(person => person.Id == second.Id).Name != "乙新")
+            throw new InvalidOperationException("人物改名后未恢复当前人物列表。");
+        removalDialog.Close();
+        removalCandidates = await viewModel.GetTargetLinkRemovalCandidatesAsync();
+        removalDialog = new TargetLinkRemovalDialog(removalCandidates);
+        candidateList = (System.Windows.Controls.ListBox)removalDialog.FindName("CandidateList");
+        confirmation = (System.Windows.Controls.CheckBox)removalDialog.FindName("ConfirmationBox");
+        candidateList.SelectedItem = removalCandidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship);
+        confirmation.IsChecked = true;
 
         // The modal confirmation keeps an immutable candidate, but another supported process can still edit the
         // SQLite file. The stale confirmation must delete nothing and reload the current graph before reporting it.
@@ -190,7 +220,7 @@ internal static class WpfLifecycleWorker
         if (remainingCandidates.Single().Kind != TargetLinkRemovalKind.FamilyUnion)
             throw new InvalidOperationException("外部解除后的候选列表仍保留过期关系或丢失婚配。");
 
-        var staleSelectionDialog = new TargetLinkRemovalDialog(viewModel.GetSelectedPersonForEditing(), remainingCandidates);
+        var staleSelectionDialog = new TargetLinkRemovalDialog(remainingCandidates);
         var staleCandidateList = (System.Windows.Controls.ListBox)staleSelectionDialog.FindName("CandidateList");
         var staleConfirmation = (System.Windows.Controls.CheckBox)staleSelectionDialog.FindName("ConfirmationBox");
         staleCandidateList.SelectedItem = remainingCandidates.Single();
@@ -211,7 +241,7 @@ internal static class WpfLifecycleWorker
         if (viewModel.Status != "解除候选已过期，当前图数据已重新加载。")
             throw new InvalidOperationException("外部修改后未恢复当前图状态。");
         remainingCandidates = await viewModel.GetTargetLinkRemovalCandidatesAsync();
-        var switchedDialog = new TargetLinkRemovalDialog(viewModel.GetSelectedPersonForEditing(), remainingCandidates);
+        var switchedDialog = new TargetLinkRemovalDialog(remainingCandidates);
         ((System.Windows.Controls.ListBox)switchedDialog.FindName("CandidateList")).SelectedItem = remainingCandidates.Single();
         ((System.Windows.Controls.CheckBox)switchedDialog.FindName("ConfirmationBox")).IsChecked = true;
 

@@ -1406,6 +1406,140 @@ public class GenealogySelectionTests
     }
 
     [Theory]
+    [InlineData(TargetLinkRemovalKind.Relationship, true)]
+    [InlineData(TargetLinkRemovalKind.Relationship, false)]
+    [InlineData(TargetLinkRemovalKind.FamilyUnion, true)]
+    [InlineData(TargetLinkRemovalKind.FamilyUnion, false)]
+    [Trait("Category", "Integration")]
+    public async Task Confirmation_rejects_changed_displayed_name_at_delete_and_can_reload(TargetLinkRemovalKind kind, bool renameSelected)
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var pause = new PauseCommandInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").AddInterceptors(pause).Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "姓名竞争谱" };
+        await vm.CreateAsync();
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(item => item.Name == "甲");
+        var second = vm.People.Single(item => item.Name == "乙");
+        vm.SelectedPerson = first;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, second.Id);
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(item => item.Kind == kind);
+        pause.Arm(kind == TargetLinkRemovalKind.Relationship ? "DELETE FROM \"PersonRelationships\"" : "DELETE FROM \"FamilyUnions\"");
+        var removal = vm.RemoveTargetLinkAsync(candidate);
+        await pause.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        var renamedId = renameSelected ? first.Id : second.Id;
+        var newName = renameSelected ? "乙" : "甲";
+        try
+        {
+            await using var external = database.CreateContext();
+            (await external.People.SingleAsync(person => person.Id == renamedId)).Name = newName;
+            await external.SaveChangesAsync();
+        }
+        finally { pause.Release(); }
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => removal);
+        Assert.Contains("解除候选已过期", failure.Message);
+        Assert.Equal("解除候选已过期，当前图数据已重新加载。", vm.Status);
+        Assert.Equal(newName, vm.People.Single(person => person.Id == renamedId).Name);
+        Assert.Equal(2, vm.People.Count(person => person.Name == newName));
+        Assert.Equal(first.Id, vm.SelectedPerson!.Id);
+        await using (var verify = database.CreateContext())
+        {
+            Assert.Single(await verify.PersonRelationships.ToListAsync());
+            Assert.Single(await verify.FamilyUnions.ToListAsync());
+            Assert.Equal(newName, (await verify.People.SingleAsync(person => person.Id == renamedId)).Name);
+        }
+        var fresh = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(item => item.Kind == kind);
+        Assert.Contains(newName, fresh.Description);
+        await vm.RemoveTargetLinkAsync(fresh);
+        await using var final = database.CreateContext();
+        Assert.Equal(kind == TargetLinkRemovalKind.Relationship ? 0 : 1, await final.PersonRelationships.CountAsync());
+        Assert.Equal(kind == TargetLinkRemovalKind.FamilyUnion ? 0 : 1, await final.FamilyUnions.CountAsync());
+    }
+
+    [Theory]
+    [InlineData(TargetLinkRemovalKind.Relationship)]
+    [InlineData(TargetLinkRemovalKind.FamilyUnion)]
+    [Trait("Category", "Integration")]
+    public async Task Name_change_with_failed_recovery_clears_stale_views_and_can_reselect(TargetLinkRemovalKind kind)
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var failure = new FailRefreshAfterWriteInterceptor();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={database.DatabasePath};Pooling=False").AddInterceptors(failure).Options;
+        var vm = new GenealogySelectionViewModel(() => new ZupuDbContext(options)) { NewName = "恢复谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "甲", "乙" })
+        {
+            vm.NewPersonName = name;
+            await vm.AddPersonAsync();
+        }
+        var first = vm.People.Single(person => person.Name == "甲");
+        var second = vm.People.Single(person => person.Name == "乙");
+        vm.SelectedPerson = first;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.Spouse, second.Id);
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, second.Id);
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(item => item.Kind == kind);
+        await using (var external = database.CreateContext())
+        {
+            (await external.People.SingleAsync(person => person.Id == second.Id)).Name = "乙新";
+            await external.SaveChangesAsync();
+        }
+        failure.Arm(kind == TargetLinkRemovalKind.Relationship ? "DELETE FROM \"PersonRelationships\"" : "DELETE FROM \"FamilyUnions\"");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveTargetLinkAsync(candidate));
+        Assert.Contains("解除候选已过期，但目标谱系刷新失败", vm.Status);
+        Assert.Empty(vm.TargetTree);
+        Assert.Empty(vm.People);
+        Assert.Null(vm.SelectedPerson);
+        failure.Disable();
+        await vm.SelectAsync(genealogy);
+        Assert.Contains(vm.People, person => person.Id == second.Id && person.Name == "乙新");
+        await using var verify = database.CreateContext();
+        Assert.Single(await verify.PersonRelationships.ToListAsync());
+        Assert.Single(await verify.FamilyUnions.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Removal_with_unknown_counterpart_accepts_unchanged_snapshot()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "失考谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "甲";
+        await vm.AddPersonAsync();
+        var first = Assert.Single(vm.People);
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = first.Id,
+                Kind = PersonRelationshipKind.LostAncestry });
+            await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = first.Id,
+                PartnerTwoId = null, Kind = FamilyUnionKind.Unknown });
+        }
+        vm.SelectedPerson = first;
+        var candidates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        Assert.Equal(2, candidates.Count);
+        Assert.All(candidates, candidate => Assert.Null(candidate.SecondName));
+        await vm.RemoveTargetLinkAsync(candidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship));
+        await vm.RemoveTargetLinkAsync(candidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.FamilyUnion));
+        await using var verify = database.CreateContext();
+        Assert.Single(await verify.People.ToListAsync());
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        Assert.Empty(await verify.FamilyUnions.ToListAsync());
+    }
+
+    [Theory]
     [InlineData("relationship-person")]
     [InlineData("relationship-related")]
     [InlineData("relationship-kind")]
@@ -1643,8 +1777,13 @@ public class GenealogySelectionTests
         await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectTargetUnionDelete BEFORE DELETE ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'simulated union delete failure'); END;");
 
         var snapshot = await service.GetGraphSnapshotAsync(genealogy.Id);
-        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveRelationshipForParticipantAsync(genealogy.Id, snapshot.Relationships.Single(item => item.Id == relationship.Id), first.Id));
-        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, snapshot.Unions.Single(item => item.Id == union.Id), first.Id));
+        var relSnapshot = snapshot.Relationships.Single(item => item.Id == relationship.Id);
+        var unionSnapshot = snapshot.Unions.Single(item => item.Id == union.Id);
+        var names = snapshot.People.ToDictionary(item => item.Id, item => item.Name);
+        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveRelationshipForParticipantAsync(genealogy.Id, relSnapshot, first.Id,
+            names[relSnapshot.PersonId], names[relSnapshot.RelatedPersonId!.Value]));
+        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, unionSnapshot, first.Id,
+            names[unionSnapshot.PartnerOneId], names[unionSnapshot.PartnerTwoId!.Value]));
         await using var verify = database.CreateContext();
         Assert.Equal(2, await verify.People.CountAsync());
         Assert.Single(await verify.PersonRelationships.ToListAsync());

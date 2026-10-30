@@ -83,6 +83,7 @@ public sealed class GenealogyDataService
     /// DELETE, so a failed/stale request changes nothing.
     /// </summary>
     public async Task RemoveRelationshipForParticipantAsync(Guid genealogyId, GenealogyRelationshipData expected, Guid participantId,
+        string firstName, string? secondName,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(expected);
@@ -91,7 +92,10 @@ public sealed class GenealogyDataService
                 (relationship.PersonId == participantId || relationship.RelatedPersonId == participantId) &&
                 relationship.PersonId == expected.PersonId && relationship.RelatedPersonId == expected.RelatedPersonId &&
                 relationship.Kind == expected.Kind && relationship.IsPreferredForLineage == expected.IsPreferredForLineage &&
-                relationship.Note == expected.Note && relationship.SourceCitation == expected.SourceCitation)
+                relationship.Note == expected.Note && relationship.SourceCitation == expected.SourceCitation &&
+                _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == relationship.PersonId && p.Name == firstName) &&
+                (relationship.RelatedPersonId == null || _context.People.Any(p => p.GenealogyId == genealogyId &&
+                    p.Id == relationship.RelatedPersonId && p.Name == secondName)))
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
@@ -103,6 +107,7 @@ public sealed class GenealogyDataService
     /// relationship record.
     /// </summary>
     public async Task RemoveFamilyUnionForParticipantAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
+        string firstName, string? secondName,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(expected);
@@ -111,7 +116,10 @@ public sealed class GenealogyDataService
                 (union.PartnerOneId == participantId || union.PartnerTwoId == participantId) &&
                 union.PartnerOneId == expected.PartnerOneId && union.PartnerTwoId == expected.PartnerTwoId &&
                 union.Kind == expected.Kind && union.StartDateText == expected.StartDateText &&
-                union.EndDateText == expected.EndDateText && union.Note == expected.Note)
+                union.EndDateText == expected.EndDateText && union.Note == expected.Note &&
+                _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == union.PartnerOneId && p.Name == firstName) &&
+                (union.PartnerTwoId == null || _context.People.Any(p => p.GenealogyId == genealogyId &&
+                    p.Id == union.PartnerTwoId && p.Name == secondName)))
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");

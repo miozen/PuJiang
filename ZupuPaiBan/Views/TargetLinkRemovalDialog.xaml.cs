@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using ZupuPaiBan.Models;
 using ZupuPaiBan.ViewModels;
 
 namespace ZupuPaiBan.Views;
@@ -10,12 +9,15 @@ public partial class TargetLinkRemovalDialog : Window
 {
     public TargetLinkRemovalCandidate? SelectedCandidate => CandidateList.SelectedItem as TargetLinkRemovalCandidate;
 
-    public TargetLinkRemovalDialog(Person subject, IReadOnlyCollection<TargetLinkRemovalCandidate> candidates)
+    public TargetLinkRemovalDialog(IReadOnlyCollection<TargetLinkRemovalCandidate> candidates)
     {
-        ArgumentNullException.ThrowIfNull(subject);
         ArgumentNullException.ThrowIfNull(candidates);
+        var subject = candidates.FirstOrDefault() ?? throw new ArgumentException("解除候选不能为空。", nameof(candidates));
+        if (candidates.Any(candidate => candidate.GenealogyId != subject.GenealogyId ||
+            candidate.ParticipantId != subject.ParticipantId || candidate.SubjectName != subject.SubjectName))
+            throw new ArgumentException("解除候选的主体不一致。", nameof(candidates));
         InitializeComponent();
-        SubjectLabel.Text = $"当前人物：{subject.Name}（ID: {subject.Id}）";
+        SubjectLabel.Text = $"当前人物：{subject.SubjectName}（ID: {subject.ParticipantId}）";
         CandidateList.ItemsSource = candidates.OrderBy(candidate => candidate.Kind).ThenBy(candidate => candidate.Description, StringComparer.Ordinal).ToList();
     }
 
