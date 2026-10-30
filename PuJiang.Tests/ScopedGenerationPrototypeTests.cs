@@ -1,0 +1,421 @@
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using System.IO.Compression;
+using Xunit;
+using ZupuPaiBan.Data;
+using ZupuPaiBan.Models;
+
+namespace PuJiang.Tests;
+
+// Isolated design only. Existing production generation and migration remain untouched.
+public class ScopedGenerationPrototypeTests
+{
+    private const string TableSql = "CREATE TABLE ScopedGenerationPrototype (GenealogyId TEXT PRIMARY KEY, Value INTEGER NOT NULL CHECK (typeof(Value) = 'integer' AND Value >= 0))";
+    private static readonly string[] Tables = ["People", "PersonRelationships", "FamilyUnions"];
+    private static readonly string[] Operations = ["INSERT", "UPDATE", "DELETE"];
+    private const string InsertGenealogySql = "CREATE TRIGGER ScopedProtoGenealogyINSERT AFTER INSERT ON Genealogies BEGIN INSERT INTO ScopedGenerationPrototype (GenealogyId, Value) VALUES (NEW.Id, 0) ON CONFLICT(GenealogyId) DO UPDATE SET Value = Value + 1; END";
+    private const string DeleteGenealogySql = "CREATE TRIGGER ScopedProtoGenealogyDELETE AFTER DELETE ON Genealogies BEGIN SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ScopedGenerationPrototype WHERE GenealogyId = OLD.Id AND typeof(Value) = 'integer' AND Value >= 0 AND Value < 9223372036854775807) THEN RAISE(ABORT, 'invalid scoped generation') END; UPDATE ScopedGenerationPrototype SET Value = Value + 1 WHERE GenealogyId = OLD.Id; END";
+
+    private static string TriggerSql(string table, string operation)
+    {
+        var primary = operation == "INSERT" ? "NEW.GenealogyId" : "OLD.GenealogyId";
+        var validate = $"SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ScopedGenerationPrototype WHERE GenealogyId = {primary} AND typeof(Value) = 'integer' AND Value >= 0 AND Value < 9223372036854775807) THEN RAISE(ABORT, 'invalid scoped generation') END;";
+        if (operation == "UPDATE")
+            validate += " SELECT CASE WHEN NEW.GenealogyId <> OLD.GenealogyId AND NOT EXISTS (SELECT 1 FROM ScopedGenerationPrototype WHERE GenealogyId = NEW.GenealogyId AND typeof(Value) = 'integer' AND Value >= 0 AND Value < 9223372036854775807) THEN RAISE(ABORT, 'invalid scoped generation') END;";
+        var update = $" UPDATE ScopedGenerationPrototype SET Value = Value + 1 WHERE GenealogyId = {primary};";
+        if (operation == "UPDATE")
+            update += " UPDATE ScopedGenerationPrototype SET Value = Value + 1 WHERE GenealogyId = NEW.GenealogyId AND NEW.GenealogyId <> OLD.GenealogyId;";
+        return $"CREATE TRIGGER ScopedProto{table}{operation} AFTER {operation} ON {table} BEGIN {validate}{update} END";
+    }
+
+    private static IEnumerable<(string Name, string Sql)> ExpectedTriggers()
+    {
+        yield return ("ScopedProtoGenealogyINSERT", InsertGenealogySql);
+        yield return ("ScopedProtoGenealogyDELETE", DeleteGenealogySql);
+        foreach (var table in Tables)
+        foreach (var operation in Operations)
+            yield return ($"ScopedProto{table}{operation}", TriggerSql(table, operation));
+    }
+
+    private static async Task InstallAsync(ZupuDbContext context, bool fail = false)
+    {
+        await using var tx = await context.Database.BeginTransactionAsync();
+        await context.Database.ExecuteSqlRawAsync(TableSql);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO ScopedGenerationPrototype (GenealogyId, Value) SELECT Id, 0 FROM Genealogies");
+        foreach (var (_, sql) in ExpectedTriggers())
+        {
+            await context.Database.ExecuteSqlRawAsync(sql);
+            if (fail) throw new InvalidOperationException("模拟迁移中断");
+        }
+        await tx.CommitAsync();
+    }
+
+    // Exact test-owned schema and generation are checked within the same SQL statement.
+    private static string GuardSql()
+    {
+        static string Literal(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+        var sql = "SELECT Value AS Value FROM ScopedGenerationPrototype WHERE GenealogyId = @genealogy AND typeof(Value) = 'integer' AND Value >= 0 AND Value < 9223372036854775807";
+        sql += $" AND EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ScopedGenerationPrototype' AND sql = {Literal(TableSql)})";
+        foreach (var (name, definition) in ExpectedTriggers())
+            sql += $" AND EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = {Literal(name)} AND sql = {Literal(definition)})";
+        return sql;
+    }
+
+    private static Task<long> ReadAsync(ZupuDbContext context, Guid genealogyId) =>
+        context.Database.SqlQueryRaw<long>(GuardSql(), new SqliteParameter("@genealogy", genealogyId.ToString().ToUpperInvariant())).SingleAsync();
+
+    private static Task<int> DeleteAsync(ZupuDbContext context, Guid genealogyId, Guid relationshipId, long generation) =>
+        context.Database.ExecuteSqlRawAsync($"DELETE FROM PersonRelationships WHERE Id = @record AND GenealogyId = @genealogy AND EXISTS (SELECT 1 FROM ({GuardSql()}) AS expected WHERE expected.Value = @generation)",
+            new SqliteParameter("@record", relationshipId.ToString().ToUpperInvariant()),
+            new SqliteParameter("@genealogy", genealogyId.ToString().ToUpperInvariant()),
+            new SqliteParameter("@generation", generation));
+
+    private static Task<int> DeleteUnionAsync(ZupuDbContext context, Guid genealogyId, Guid unionId, long generation) =>
+        context.Database.ExecuteSqlRawAsync($"DELETE FROM FamilyUnions WHERE Id = @record AND GenealogyId = @genealogy AND EXISTS (SELECT 1 FROM ({GuardSql()}) AS expected WHERE expected.Value = @generation)",
+            new SqliteParameter("@record", unionId.ToString().ToUpperInvariant()),
+            new SqliteParameter("@genealogy", genealogyId.ToString().ToUpperInvariant()),
+            new SqliteParameter("@generation", generation));
+
+    private static async Task<(Genealogy A, Genealogy B, Person A1, Person A2, Person Moving, PersonRelationship Link)> SeedAsync(ZupuDbContext context)
+    {
+        var service = new GenealogyDataService(context);
+        var a = await service.CreateGenealogyAsync(new Genealogy { Name = "甲谱" });
+        var b = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+        var a1 = await service.AddPersonAsync(new Person { GenealogyId = a.Id, Name = "甲" });
+        var a2 = await service.AddPersonAsync(new Person { GenealogyId = a.Id, Name = "乙" });
+        var moving = await service.AddPersonAsync(new Person { GenealogyId = a.Id, Name = "可移动人物" });
+        var link = await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = a.Id, PersonId = a1.Id,
+            RelatedPersonId = a2.Id, Kind = PersonRelationshipKind.Spouse });
+        return (a, b, a1, a2, moving, link);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Integration")]
+    public async Task Cross_genealogy_move_changes_both_generations_only_on_commit(bool commit)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        var beforeA = await ReadAsync(context, data.A.Id);
+        var beforeB = await ReadAsync(context, data.B.Id);
+        await using (var external = db.CreateContext())
+        {
+            await using var tx = await external.Database.BeginTransactionAsync();
+            // EF treats GenealogyId as a key and disallows tracked changes; emulate a third-party SQL writer.
+            await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET GenealogyId = {data.B.Id} WHERE Id = {data.Moving.Id}");
+            if (commit) await tx.CommitAsync(); else await tx.RollbackAsync();
+        }
+        Assert.Equal(beforeA + (commit ? 1 : 0), await ReadAsync(context, data.A.Id));
+        Assert.Equal(beforeB + (commit ? 1 : 0), await ReadAsync(context, data.B.Id));
+        Assert.Equal(commit ? 0 : 1, await DeleteAsync(context, data.A.Id, data.Link.Id, beforeA));
+        await using var verify = db.CreateContext();
+        Assert.Equal(commit ? data.B.Id : data.A.Id, (await verify.People.SingleAsync(person => person.Id == data.Moving.Id)).GenealogyId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Other_genealogy_write_does_not_invalidate_unrelated_candidate()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        var oldA = await ReadAsync(context, data.A.Id);
+        var oldB = await ReadAsync(context, data.B.Id);
+        await using (var external = db.CreateContext())
+            await new GenealogyDataService(external).AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "乙谱新人物" });
+        Assert.Equal(oldA, await ReadAsync(context, data.A.Id));
+        Assert.Equal(oldB + 1, await ReadAsync(context, data.B.Id));
+        Assert.Equal(1, await DeleteAsync(context, data.A.Id, data.Link.Id, oldA));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Cross_genealogy_move_with_missing_destination_generation_rolls_back_everything()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        var beforeA = await ReadAsync(context, data.A.Id);
+        var beforeGlobal = await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+        await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM ScopedGenerationPrototype WHERE GenealogyId = {data.B.Id}");
+        await Assert.ThrowsAsync<SqliteException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE People SET GenealogyId = {data.B.Id} WHERE Id = {data.Moving.Id}"));
+        Assert.Equal(beforeA, await ReadAsync(context, data.A.Id));
+        Assert.Equal(beforeGlobal, await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync());
+        Assert.Equal(data.A.Id, (await context.People.AsNoTracking().SingleAsync(person => person.Id == data.Moving.Id)).GenealogyId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task External_move_of_relationship_or_union_advances_old_and_new_genealogies(bool union)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        var service = new GenealogyDataService(context);
+        var b1 = await service.AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "丙" });
+        var b2 = await service.AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "丁" });
+        var originalUnion = await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = data.A.Id,
+            PartnerOneId = data.A1.Id, PartnerTwoId = data.A2.Id, Kind = FamilyUnionKind.Marriage });
+        await InstallAsync(context);
+        var beforeA = await ReadAsync(context, data.A.Id);
+        var beforeB = await ReadAsync(context, data.B.Id);
+        await using (var external = db.CreateContext())
+        {
+            if (union)
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE FamilyUnions SET GenealogyId = {data.B.Id}, PartnerOneId = {b1.Id}, PartnerTwoId = {b2.Id} WHERE Id = {originalUnion.Id}");
+            else
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE PersonRelationships SET GenealogyId = {data.B.Id}, PersonId = {b1.Id}, RelatedPersonId = {b2.Id} WHERE Id = {data.Link.Id}");
+        }
+        Assert.Equal(beforeA + 1, await ReadAsync(context, data.A.Id));
+        Assert.Equal(beforeB + 1, await ReadAsync(context, data.B.Id));
+        await using var verify = db.CreateContext();
+        if (union) Assert.Equal(data.B.Id, (await verify.FamilyUnions.SingleAsync()).GenealogyId);
+        else Assert.Equal(data.B.Id, (await verify.PersonRelationships.SingleAsync()).GenealogyId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Deleted_genealogy_recreated_with_same_ids_keeps_tombstone_and_rejects_old_candidate()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        var service = new GenealogyDataService(context);
+        var b1 = await service.AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "丙" });
+        var b2 = await service.AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "丁" });
+        var link = await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = data.B.Id, PersonId = b1.Id,
+            RelatedPersonId = b2.Id, Kind = PersonRelationshipKind.Spouse });
+        var old = await ReadAsync(context, data.B.Id);
+        await using (var external = db.CreateContext())
+        {
+            await using var tx = await external.Database.BeginTransactionAsync();
+            await external.PersonRelationships.Where(item => item.Id == link.Id).ExecuteDeleteAsync();
+            await external.People.Where(item => item.GenealogyId == data.B.Id).ExecuteDeleteAsync();
+            await external.Genealogies.Where(item => item.Id == data.B.Id).ExecuteDeleteAsync();
+            external.Genealogies.Add(new Genealogy { Id = data.B.Id, Name = "乙谱" });
+            await external.SaveChangesAsync();
+            external.People.AddRange(new Person { Id = b1.Id, GenealogyId = data.B.Id, Name = "丙" },
+                new Person { Id = b2.Id, GenealogyId = data.B.Id, Name = "丁" });
+            await external.SaveChangesAsync();
+            external.PersonRelationships.Add(new PersonRelationship { Id = link.Id, GenealogyId = data.B.Id,
+                PersonId = b1.Id, RelatedPersonId = b2.Id, Kind = PersonRelationshipKind.Spouse });
+            await external.SaveChangesAsync();
+            await tx.CommitAsync();
+        }
+        var current = await ReadAsync(context, data.B.Id);
+        Assert.True(current > old);
+        Assert.Equal(0, await DeleteAsync(context, data.B.Id, link.Id, old));
+        Assert.Equal(1, await DeleteAsync(context, data.B.Id, link.Id, current));
+        Assert.Single(await context.PersonRelationships.AsNoTracking().Where(item => item.GenealogyId == data.A.Id).ToListAsync());
+    }
+
+    [Theory]
+    [InlineData("name-aba", false)]
+    [InlineData("record-aba", false)]
+    [InlineData("delete-reinsert", false)]
+    [InlineData("name-aba", true)]
+    [InlineData("record-aba", true)]
+    [InlineData("delete-reinsert", true)]
+    [Trait("Category", "Integration")]
+    public async Task Same_genealogy_aba_and_reinsert_reject_old_candidate(string scenario, bool union)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        var family = await new GenealogyDataService(context).AddFamilyUnionAsync(new FamilyUnion { GenealogyId = data.A.Id,
+            PartnerOneId = data.A1.Id, PartnerTwoId = data.A2.Id, Kind = FamilyUnionKind.Marriage });
+        await InstallAsync(context);
+        var captured = await ReadAsync(context, data.A.Id);
+        await using (var external = db.CreateContext())
+        {
+            if (scenario == "name-aba")
+            {
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"改名"} WHERE Id = {data.A2.Id}");
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"乙"} WHERE Id = {data.A2.Id}");
+            }
+            if (scenario == "record-aba" && !union)
+            {
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE PersonRelationships SET Note = {"临时"} WHERE Id = {data.Link.Id}");
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE PersonRelationships SET Note = NULL WHERE Id = {data.Link.Id}");
+            }
+            if (scenario == "record-aba" && union)
+            {
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE FamilyUnions SET Note = {"临时"} WHERE Id = {family.Id}");
+                await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE FamilyUnions SET Note = NULL WHERE Id = {family.Id}");
+            }
+            if (scenario == "delete-reinsert" && !union)
+            {
+                var original = await external.PersonRelationships.AsNoTracking().SingleAsync(item => item.Id == data.Link.Id);
+                await external.PersonRelationships.Where(item => item.Id == data.Link.Id).ExecuteDeleteAsync();
+                external.PersonRelationships.Add(original);
+                await external.SaveChangesAsync();
+            }
+            if (scenario == "delete-reinsert" && union)
+            {
+                var original = await external.FamilyUnions.AsNoTracking().SingleAsync(item => item.Id == family.Id);
+                await external.FamilyUnions.Where(item => item.Id == family.Id).ExecuteDeleteAsync();
+                external.FamilyUnions.Add(original);
+                await external.SaveChangesAsync();
+            }
+        }
+        Assert.Equal(captured + 2, await ReadAsync(context, data.A.Id));
+        Assert.Equal(0, union ? await DeleteUnionAsync(context, data.A.Id, family.Id, captured) :
+            await DeleteAsync(context, data.A.Id, data.Link.Id, captured));
+        Assert.Single(await context.PersonRelationships.AsNoTracking().ToListAsync());
+        Assert.Single(await context.FamilyUnions.AsNoTracking().ToListAsync());
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("negative")]
+    [InlineData("text")]
+    [InlineData("overflow")]
+    [InlineData("trigger")]
+    [InlineData("altered-trigger")]
+    [Trait("Category", "Integration")]
+    public async Task Missing_damaged_or_untrusted_generation_fails_closed(string fault)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        var captured = await ReadAsync(context, data.A.Id);
+        if (fault == "missing") await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM ScopedGenerationPrototype WHERE GenealogyId = {data.A.Id}");
+        if (fault is "negative" or "text" or "overflow")
+        {
+            await context.Database.OpenConnectionAsync();
+            await context.Database.ExecuteSqlRawAsync("PRAGMA ignore_check_constraints = ON");
+            if (fault == "negative") await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE ScopedGenerationPrototype SET Value = -1 WHERE GenealogyId = {data.A.Id}");
+            else if (fault == "text") await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE ScopedGenerationPrototype SET Value = {"broken"} WHERE GenealogyId = {data.A.Id}");
+            else await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE ScopedGenerationPrototype SET Value = 9223372036854775807 WHERE GenealogyId = {data.A.Id}");
+        }
+        if (fault == "trigger") await context.Database.ExecuteSqlRawAsync("DROP TRIGGER ScopedProtoPeopleUPDATE");
+        if (fault == "altered-trigger")
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER ScopedProtoPeopleUPDATE");
+            await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER ScopedProtoPeopleUPDATE AFTER UPDATE ON People BEGIN SELECT 1; END");
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ReadAsync(context, data.A.Id));
+        Assert.Equal(0, await DeleteAsync(context, data.A.Id, data.Link.Id, captured));
+        if (fault is not ("trigger" or "altered-trigger"))
+            await Assert.ThrowsAsync<SqliteException>(() => context.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"拒绝"} WHERE Id = {data.A1.Id}"));
+        Assert.Equal("甲", (await context.People.AsNoTracking().SingleAsync(person => person.Id == data.A1.Id)).Name);
+        Assert.Single(await context.PersonRelationships.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Test_migration_initializes_old_genealogies_and_failure_rolls_back_schema()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        Directory.CreateDirectory(db.BackupDirectory);
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        var snapshotPath = Path.Combine(db.BackupDirectory, "before-scoped.db");
+        await DatabaseSnapshotService.CreateAsync(db.DatabasePath, snapshotPath);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => InstallAsync(context, fail: true));
+        Assert.Equal(0L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE name LIKE 'Scoped%Prototype%' OR name LIKE 'ScopedProto%'").SingleAsync());
+        await InstallAsync(context);
+        Assert.Equal(0, await ReadAsync(context, data.A.Id));
+        Assert.Equal(0, await ReadAsync(context, data.B.Id));
+        Assert.Equal(12L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE name LIKE 'Scoped%Prototype%' OR name LIKE 'ScopedProto%'").SingleAsync());
+        var backupOptions = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={snapshotPath};Mode=ReadOnly;Pooling=False").Options;
+        await using var old = new ZupuDbContext(backupOptions);
+        Assert.Equal(0L, await old.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE name = 'ScopedGenerationPrototype'").SingleAsync());
+        Assert.Equal(2, await old.Genealogies.CountAsync());
+        Assert.Single(await old.PersonRelationships.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData("valid", true)]
+    [InlineData("missing", false)]
+    [InlineData("negative", false)]
+    [InlineData("altered-trigger", false)]
+    [Trait("Category", "Integration")]
+    public async Task Scoped_backup_check_detects_generation_and_schema_faults_without_touching_active_database(string fault, bool expected)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        Directory.CreateDirectory(db.BackupDirectory);
+        var oldPackage = Path.Combine(db.BackupDirectory, "old.zip");
+        await using (var seed = db.CreateContext()) await SeedAsync(seed);
+        await OfflineBackupPackageService.CreateAsync(db.DatabasePath, oldPackage);
+        var productionPreflight = new BackupRestorePreflightService(db.BackupDirectory);
+        Assert.True((await productionPreflight.CheckAsync(oldPackage)).IncludesDatabase);
+        await using (var context = db.CreateContext())
+        {
+            await InstallAsync(context);
+            if (fault == "missing") await context.Database.ExecuteSqlRawAsync("DELETE FROM ScopedGenerationPrototype WHERE GenealogyId = (SELECT Id FROM Genealogies LIMIT 1)");
+            if (fault == "negative")
+            {
+                await context.Database.OpenConnectionAsync();
+                await context.Database.ExecuteSqlRawAsync("PRAGMA ignore_check_constraints = ON");
+                await context.Database.ExecuteSqlRawAsync("UPDATE ScopedGenerationPrototype SET Value = -1 WHERE GenealogyId = (SELECT Id FROM Genealogies LIMIT 1)");
+                await context.Database.CloseConnectionAsync();
+            }
+            if (fault == "altered-trigger")
+            {
+                await context.Database.ExecuteSqlRawAsync("DROP TRIGGER ScopedProtoPeopleUPDATE");
+                await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER ScopedProtoPeopleUPDATE AFTER UPDATE ON People BEGIN SELECT 1; END");
+            }
+        }
+        var package = Path.Combine(db.BackupDirectory, "scoped.zip");
+        await OfflineBackupPackageService.CreateAsync(db.DatabasePath, package);
+        var beforeDb = await File.ReadAllBytesAsync(db.DatabasePath);
+        var beforePackage = await File.ReadAllBytesAsync(package);
+        // Existing production preflight rejects the test-only schema even when the prototype data are valid.
+        await Assert.ThrowsAsync<InvalidDataException>(() => productionPreflight.CheckAsync(package));
+        Assert.Equal(expected, await CheckScopedPackageAsync(package, db.BackupDirectory));
+        Assert.Equal(beforeDb, await File.ReadAllBytesAsync(db.DatabasePath));
+        Assert.Equal(beforePackage, await File.ReadAllBytesAsync(package));
+        Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".scoped-check-*.db"));
+        Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".pujiang-preflight-*.db"));
+        Assert.Empty(Directory.EnumerateFiles(db.BackupDirectory, ".pujiang-reference-*.db"));
+    }
+
+    // Narrow test-only check: does not replace the production integrity, FK and migration preflight.
+    private static async Task<bool> CheckScopedPackageAsync(string package, string scratch)
+    {
+        var manifest = await OfflineBackupPackageService.ValidateAsync(package);
+        var copyPath = Path.Combine(scratch, $".scoped-check-{Guid.NewGuid():N}.db");
+        var ownsCopy = false;
+        try
+        {
+            using (var archive = ZipFile.OpenRead(package))
+            await using (var output = new FileStream(copyPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                ownsCopy = true;
+                await using var input = archive.GetEntry(manifest.DatabaseEntry)!.Open();
+                await input.CopyToAsync(output);
+            }
+            var options = new DbContextOptionsBuilder<ZupuDbContext>()
+                .UseSqlite($"Data Source={copyPath};Mode=ReadOnly;Pooling=False").Options;
+            await using var copy = new ZupuDbContext(options);
+            if (await copy.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM ScopedGenerationPrototype WHERE typeof(Value) <> 'integer' OR Value < 0 OR Value >= 9223372036854775807").SingleAsync() != 0)
+                return false;
+            var ids = await copy.Genealogies.AsNoTracking().Select(item => item.Id).ToListAsync();
+            try { foreach (var id in ids) await ReadAsync(copy, id); }
+            catch (InvalidOperationException) { return false; }
+            return true;
+        }
+        finally { if (ownsCopy) File.Delete(copyPath); }
+    }
+}
