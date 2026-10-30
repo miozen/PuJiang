@@ -1,14 +1,17 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.IO.Compression;
+using System.Diagnostics;
 using Xunit;
+using Xunit.Abstractions;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
 
 // Isolated design only. Existing production generation and migration remain untouched.
-public class ScopedGenerationPrototypeTests
+[Collection("ProcessWorkerExclusive")]
+public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
 {
     private const string TableSql = "CREATE TABLE ScopedGenerationPrototype (GenealogyId TEXT PRIMARY KEY, Value INTEGER NOT NULL CHECK (typeof(Value) = 'integer' AND Value >= 0))";
     private static readonly string[] Tables = ["People", "PersonRelationships", "FamilyUnions"];
@@ -87,6 +90,131 @@ public class ScopedGenerationPrototypeTests
         var link = await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = a.Id, PersonId = a1.Id,
             RelatedPersonId = a2.Id, Kind = PersonRelationshipKind.Spouse });
         return (a, b, a1, a2, moving, link);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Integration")]
+    public async Task Independent_process_aba_invalidates_only_its_genealogy(bool sameGenealogy)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        var other = await new GenealogyDataService(context).AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "外谱" });
+        await InstallAsync(context);
+        var oldA = await ReadAsync(context, data.A.Id);
+        var oldB = await ReadAsync(context, data.B.Id);
+        var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add(typeof(RestoreWorkerProgram).Assembly.Location);
+        start.ArgumentList.Add("--aba-rename");
+        start.ArgumentList.Add(Path.GetDirectoryName(db.DatabasePath)!);
+        start.ArgumentList.Add((sameGenealogy ? data.A2.Id : other.Id).ToString());
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动隔离工作进程。");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); throw; }
+        Assert.True(process.ExitCode == 0, $"隔离进程失败：{await stderr} {await stdout}");
+        Assert.Equal(oldA + (sameGenealogy ? 2 : 0), await ReadAsync(context, data.A.Id));
+        Assert.Equal(oldB + (sameGenealogy ? 0 : 2), await ReadAsync(context, data.B.Id));
+        Assert.Equal(sameGenealogy ? 0 : 1, await DeleteAsync(context, data.A.Id, data.Link.Id, oldA));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Genealogy_cascade_updates_tombstone_and_preserves_other_scope()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await new GenealogyDataService(context).AddPersonAsync(new Person { GenealogyId = data.B.Id, Name = "级联人物" });
+        await InstallAsync(context);
+        var beforeA = await ReadAsync(context, data.A.Id);
+        var beforeB = await ReadAsync(context, data.B.Id);
+        await context.Genealogies.Where(item => item.Id == data.B.Id).ExecuteDeleteAsync();
+        Assert.Equal(beforeB + 2, await ReadAsync(context, data.B.Id));
+        Assert.Equal(beforeA, await ReadAsync(context, data.A.Id));
+        Assert.Empty(await context.People.AsNoTracking().Where(item => item.GenealogyId == data.B.Id).ToListAsync());
+        Assert.Equal(1, await DeleteAsync(context, data.A.Id, data.Link.Id, beforeA));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Scoped_generation_and_people_share_read_transaction_during_external_write()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var seed = db.CreateContext();
+        var data = await SeedAsync(seed);
+        await InstallAsync(seed);
+        await using var reader = db.CreateContext();
+        await using var tx = await reader.Database.BeginTransactionAsync();
+        var generation = await ReadAsync(reader, data.A.Id);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writer = Task.Run(async () =>
+        {
+            await using var external = db.CreateContext();
+            started.SetResult();
+            await external.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"已修改"} WHERE Id = {data.A2.Id}");
+        });
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.WhenAny(writer, Task.Delay(250));
+            Assert.Equal("乙", (await reader.People.AsNoTracking().SingleAsync(item => item.Id == data.A2.Id)).Name);
+            Assert.Equal(generation, await ReadAsync(reader, data.A.Id));
+        }
+        finally { await tx.CommitAsync(); }
+        await writer.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(generation + 1, await ReadAsync(seed, data.A.Id));
+        Assert.Equal(0, await DeleteAsync(seed, data.A.Id, data.Link.Id, generation));
+    }
+
+    [Fact]
+    [Trait("Category", "Performance")]
+    public async Task Compare_global_and_scoped_generation_graph_insert_cost()
+    {
+        var samples = new Dictionary<bool, List<double>> { [false] = [], [true] = [] };
+        for (var iteration = -1; iteration < 3; iteration++)
+        foreach (var scoped in iteration % 2 == 0 ? new[] { false, true } : new[] { true, false })
+        {
+            await using var db = new TestDatabase();
+            await db.MigrateAsync();
+            await using var context = db.CreateContext();
+            var genealogy = await new GenealogyDataService(context).CreateGenealogyAsync(new Genealogy { Name = "虚构基准谱" });
+            var people = Enumerable.Range(0, 1000).Select(i => new Person { GenealogyId = genealogy.Id, Name = $"虚构{i}" }).ToArray();
+            context.People.AddRange(people);
+            await context.SaveChangesAsync();
+            if (scoped)
+            {
+                await InstallAsync(context);
+                await context.Database.ExecuteSqlRawAsync("DROP TRIGGER UnlinkGenerationPersonRelationshipsINSERT");
+                await context.Database.ExecuteSqlRawAsync("DROP TRIGGER UnlinkGenerationFamilyUnionsINSERT");
+            }
+            var relationships = Enumerable.Range(0, 999).Select(i => new PersonRelationship { GenealogyId = genealogy.Id,
+                PersonId = people[i].Id, RelatedPersonId = people[i + 1].Id, Kind = PersonRelationshipKind.Spouse }).ToArray();
+            var unions = Enumerable.Range(0, 500).Select(i => new FamilyUnion { GenealogyId = genealogy.Id,
+                PartnerOneId = people[i * 2].Id, PartnerTwoId = people[i * 2 + 1].Id, Kind = FamilyUnionKind.Marriage }).ToArray();
+            var before = scoped ? await ReadAsync(context, genealogy.Id) :
+                await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+            context.PersonRelationships.AddRange(relationships);
+            context.FamilyUnions.AddRange(unions);
+            var stopwatch = Stopwatch.StartNew();
+            await context.SaveChangesAsync();
+            stopwatch.Stop();
+            var after = scoped ? await ReadAsync(context, genealogy.Id) :
+                await context.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+            Assert.Equal(before + 1499, after);
+            Assert.Equal(999, await context.PersonRelationships.CountAsync());
+            Assert.Equal(500, await context.FamilyUnions.CountAsync());
+            if (iteration >= 0) samples[scoped].Add(stopwatch.Elapsed.TotalMilliseconds);
+        }
+        foreach (var scoped in new[] { false, true })
+            output.WriteLine($"{(scoped ? "scoped" : "global")}: {string.Join(", ", samples[scoped].Select(x => x.ToString("F1")))} ms; median {samples[scoped].Order().ElementAt(1):F1} ms");
     }
 
     [Theory]
@@ -417,5 +545,97 @@ public class ScopedGenerationPrototypeTests
             return true;
         }
         finally { if (ownsCopy) File.Delete(copyPath); }
+    }
+
+    [Theory]
+    [InlineData("valid", true)]
+    [InlineData("foreign-key", false)]
+    [InlineData("migration", false)]
+    [InlineData("schema", false)]
+    [InlineData("missing-generation", false)]
+    [Trait("Category", "Integration")]
+    public async Task Full_test_only_preflight_checks_scoped_package_without_replacing_active_database(string fault, bool valid)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using (var context = db.CreateContext())
+        {
+            var data = await SeedAsync(context);
+            await InstallAsync(context);
+            if (fault == "foreign-key")
+            {
+                await context.Database.OpenConnectionAsync();
+                await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+                await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE PersonRelationships SET RelatedPersonId = {Guid.NewGuid()} WHERE Id = {data.Link.Id}");
+                await context.Database.CloseConnectionAsync();
+            }
+            if (fault == "migration") await context.Database.ExecuteSqlRawAsync("DELETE FROM __EFMigrationsHistory");
+            if (fault == "schema") await context.Database.ExecuteSqlRawAsync("DROP TRIGGER ScopedProtoPeopleUPDATE");
+            if (fault == "missing-generation") await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM ScopedGenerationPrototype WHERE GenealogyId = {data.A.Id}");
+        }
+        Directory.CreateDirectory(db.BackupDirectory);
+        var package = Path.Combine(db.BackupDirectory, "full.zip");
+        await OfflineBackupPackageService.CreateAsync(db.DatabasePath, package);
+        var activeBefore = await File.ReadAllBytesAsync(db.DatabasePath);
+        var packageBefore = await File.ReadAllBytesAsync(package);
+        Assert.Equal(valid, await FullScopedPreflightAsync(package));
+        Assert.Equal(activeBefore, await File.ReadAllBytesAsync(db.DatabasePath));
+        Assert.Equal(packageBefore, await File.ReadAllBytesAsync(package));
+    }
+
+    // Isolated test reference and candidate; production preflight intentionally rejects this prototype schema.
+    private static async Task<bool> FullScopedPreflightAsync(string path)
+    {
+        await using var referenceDb = new TestDatabase();
+        await referenceDb.MigrateAsync();
+        await using var reference = referenceDb.CreateContext();
+        await InstallAsync(reference);
+        await using var candidateDb = new TestDatabase();
+        Directory.CreateDirectory(Path.GetDirectoryName(candidateDb.DatabasePath)!);
+        await using var package = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var manifest = await OfflineBackupPackageService.ValidateStreamAsync(package, CancellationToken.None);
+        package.Position = 0;
+        using (var archive = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: true))
+        await using (var destination = new FileStream(candidateDb.DatabasePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        await using (var source = archive.GetEntry(manifest.DatabaseEntry)!.Open())
+            await source.CopyToAsync(destination);
+        await using (var header = File.OpenRead(candidateDb.DatabasePath))
+        {
+            var bytes = new byte[20];
+            if (header.Length < bytes.Length) return false;
+            await header.ReadExactlyAsync(bytes);
+            if (bytes[18] != 1 || bytes[19] != 1 || header.Length != manifest.DatabaseBytes) return false;
+        }
+        var candidateOptions = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite(new SqliteConnectionStringBuilder { DataSource = candidateDb.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()).Options;
+        await using var candidate = new ZupuDbContext(candidateOptions);
+        await candidate.Database.OpenConnectionAsync();
+        await reference.Database.OpenConnectionAsync();
+        var connection = candidate.Database.GetDbConnection();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA integrity_check";
+            if (!string.Equals(await command.ExecuteScalarAsync() as string, "ok", StringComparison.OrdinalIgnoreCase)) return false;
+            command.CommandText = "PRAGMA foreign_key_check";
+            await using var violations = await command.ExecuteReaderAsync();
+            if (await violations.ReadAsync()) return false;
+        }
+        var expectedMigrations = reference.Database.GetMigrations().ToArray();
+        if (!expectedMigrations.SequenceEqual(await candidate.Database.GetAppliedMigrationsAsync())) return false;
+        static async Task<List<string>> SchemaAsync(ZupuDbContext context)
+        {
+            await using var command = context.Database.GetDbConnection().CreateCommand();
+            command.CommandText = "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type, name";
+            var items = new List<string>();
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) items.Add($"{reader.GetString(0)}\n{reader.GetString(1)}\n{reader.GetString(2)}");
+            return items;
+        }
+        if (!(await SchemaAsync(reference)).SequenceEqual(await SchemaAsync(candidate), StringComparer.Ordinal)) return false;
+        if (!await candidate.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).AnyAsync()) return false;
+        if (await candidate.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM ScopedGenerationPrototype WHERE typeof(Value) <> 'integer' OR Value < 0 OR Value >= 9223372036854775807").SingleAsync() != 0) return false;
+        foreach (var id in await candidate.Genealogies.AsNoTracking().Select(item => item.Id).ToListAsync())
+            try { await ReadAsync(candidate, id); } catch (InvalidOperationException) { return false; }
+        return true;
     }
 }
