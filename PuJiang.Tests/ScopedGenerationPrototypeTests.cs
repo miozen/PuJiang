@@ -43,7 +43,7 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
             yield return ($"ScopedProto{table}{operation}", TriggerSql(table, operation));
     }
 
-    private static async Task InstallAsync(ZupuDbContext context, bool fail = false)
+    private static async Task InstallAsync(ZupuDbContext context, bool fail = false, Func<Task>? beforeCommit = null)
     {
         await using var tx = await context.Database.BeginTransactionAsync();
         await context.Database.ExecuteSqlRawAsync(TableSql);
@@ -53,6 +53,7 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
             await context.Database.ExecuteSqlRawAsync(sql);
             if (fail) throw new InvalidOperationException("模拟迁移中断");
         }
+        if (beforeCommit is not null) await beforeCommit();
         await tx.CommitAsync();
     }
 
@@ -633,6 +634,85 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         Assert.Equal(0L, await old.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE name = 'ScopedGenerationPrototype'").SingleAsync());
         Assert.Equal(2, await old.Genealogies.CountAsync());
         Assert.Single(await old.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Old_model_writer_waits_for_scoped_install_and_is_counted_after_commit()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        Guid genealogyId;
+        Guid personId;
+        await using (var seed = db.CreateContext())
+        {
+            var data = await SeedAsync(seed);
+            genealogyId = data.A.Id;
+            personId = data.A1.Id;
+        }
+
+        // This context represents an already-running old application: it has no knowledge of the test-only table.
+        await using var oldModelWriter = db.CreateContext();
+        await using var installing = db.CreateContext();
+        var installed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseInstall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var install = InstallAsync(installing, beforeCommit: async () =>
+        {
+            installed.TrySetResult();
+            await releaseInstall.Task;
+        });
+        await installed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var writer = Task.Run(async () =>
+        {
+            var person = await oldModelWriter.People.SingleAsync(item => item.Id == personId);
+            person.Name = "迁移外写";
+            await oldModelWriter.SaveChangesAsync();
+        });
+        await Task.Delay(200);
+        Assert.False(writer.IsCompleted);
+        releaseInstall.TrySetResult();
+        await install.WaitAsync(TimeSpan.FromSeconds(10));
+        await writer.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await using var verify = db.CreateContext();
+        Assert.Equal(1, await ReadAsync(verify, genealogyId));
+        Assert.Equal("迁移外写", (await verify.People.AsNoTracking().SingleAsync(item => item.Id == personId)).Name);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Rebuilt_people_table_drops_scoped_triggers_and_scope_guard_fails_closed()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        await InstallAsync(context);
+        var captured = await ReadAsync(context, data.A.Id);
+        await context.Database.OpenConnectionAsync();
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+            var tableSql = await context.Database.SqlQueryRaw<string>("SELECT sql AS Value FROM sqlite_master WHERE type = 'table' AND name = 'People'").SingleAsync();
+            var rebuiltSql = tableSql.Replace("\"People\"", "\"ScopedPeopleRebuilt\"", StringComparison.Ordinal);
+            Assert.NotEqual(tableSql, rebuiltSql);
+            await using (var transaction = await context.Database.BeginTransactionAsync())
+            {
+                await context.Database.ExecuteSqlRawAsync(rebuiltSql);
+                await context.Database.ExecuteSqlRawAsync("INSERT INTO ScopedPeopleRebuilt SELECT * FROM People");
+                await context.Database.ExecuteSqlRawAsync("DROP TABLE People");
+                await context.Database.ExecuteSqlRawAsync("ALTER TABLE ScopedPeopleRebuilt RENAME TO People");
+                await transaction.CommitAsync();
+            }
+            await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON");
+            Assert.Equal(0L, await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'ScopedProtoPeople%'").SingleAsync());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => ReadAsync(context, data.A.Id));
+            Assert.Equal(0, await DeleteAsync(context, data.A.Id, data.Link.Id, captured));
+            Assert.Equal("甲", (await context.People.AsNoTracking().SingleAsync(item => item.Id == data.A1.Id)).Name);
+            Assert.Single(await context.PersonRelationships.AsNoTracking().ToListAsync());
+        }
+        finally { await context.Database.CloseConnectionAsync(); }
     }
 
     [Theory]
