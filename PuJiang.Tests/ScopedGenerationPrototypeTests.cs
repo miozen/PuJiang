@@ -2,6 +2,9 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.IO.Compression;
 using System.Diagnostics;
+using System.Data.Common;
+using System.Text;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 using Xunit.Abstractions;
 using ZupuPaiBan.Data;
@@ -215,6 +218,91 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
         }
         foreach (var scoped in new[] { false, true })
             output.WriteLine($"{(scoped ? "scoped" : "global")} guard, 100 reads: {string.Join(", ", samples[scoped].Select(x => x.ToString("F1")))} ms; median {samples[scoped].Order().ElementAt(1):F1} ms");
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("provenance")]
+    [InlineData("union")]
+    [InlineData("generation-overflow")]
+    [InlineData("source-changed")]
+    [Trait("Category", "Integration")]
+    public async Task Bulk_import_commits_or_rolls_back_scoped_generations_and_provenance(string scenario)
+    {
+        const int count = 50;
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var seed = db.CreateContext();
+        var original = await SeedAsync(seed);
+        await InstallAsync(seed);
+        if (scenario == "generation-overflow")
+            await seed.Database.ExecuteSqlRawAsync("CREATE TRIGGER TestImportOverflow BEFORE INSERT ON People WHEN NEW.Name LIKE '虚构%' BEGIN UPDATE ScopedGenerationPrototype SET Value = 9223372036854775807 WHERE GenealogyId = NEW.GenealogyId; END");
+        var oldA = await ReadAsync(seed, original.A.Id);
+        var oldB = await ReadAsync(seed, original.B.Id);
+        var oldGlobal = await seed.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+        var path = Path.Combine(Path.GetDirectoryName(db.DatabasePath)!, "fictional.ged");
+        var gedcom = new StringBuilder("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n");
+        for (var i = 1; i <= count; i++) gedcom.Append($"0 @I{i}@ INDI\n1 NAME 虚构{i} /氏/\n");
+        gedcom.Append("0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n0 TRLR\n");
+        await File.WriteAllTextAsync(path, gedcom.ToString());
+        var interceptor = new FailImportInsert(scenario);
+        var options = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite($"Data Source={db.DatabasePath};Pooling=False").AddInterceptors(interceptor).Options;
+        ExternalGenealogyExchangeImportResult? result = null;
+        await using (var importing = new ZupuDbContext(options))
+        {
+            var importer = new ExternalGenealogyExchangeImportService(importing);
+            if (scenario == "source-changed")
+                importer.AfterPreflightForTestingAsync = token => File.WriteAllTextAsync(path, "changed", token);
+            if (scenario is "provenance" or "union" or "generation-overflow")
+            {
+                var error = await Assert.ThrowsAsync<DbUpdateException>(() => importer.ImportGedcomAsync(path, "导入谱", true));
+                if (scenario == "generation-overflow") Assert.IsType<SqliteException>(error.InnerException);
+                else { Assert.IsType<IOException>(error.InnerException); Assert.True(interceptor.Triggered); }
+            }
+            else result = await importer.ImportGedcomAsync(path, "导入谱", true);
+        }
+        await using var verify = db.CreateContext();
+        var success = scenario == "success";
+        if (success)
+        {
+            Assert.True(result!.Imported);
+            var id = Assert.IsType<Guid>(result.GenealogyId);
+            Assert.Equal(51, await ReadAsync(verify, id));
+            Assert.Equal(count, await verify.People.CountAsync(p => p.GenealogyId == id));
+            Assert.Single(await verify.FamilyUnions.Where(u => u.GenealogyId == id).ToListAsync());
+            Assert.Single(await verify.GenealogyImportRecords.Where(r => r.GenealogyId == id).ToListAsync());
+        }
+        if (scenario == "source-changed")
+        {
+            Assert.False(result!.Imported);
+            Assert.Contains(result.Report.Errors, e => e.Code == "SourceChangedAfterPreflight");
+        }
+        Assert.Equal(success ? 3 : 2, await verify.Genealogies.CountAsync());
+        Assert.Equal(success ? 3L : 2L, await verify.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM ScopedGenerationPrototype").SingleAsync());
+        Assert.Equal(success ? count + 3 : 3, await verify.People.CountAsync());
+        Assert.Equal(success ? 1 : 0, await verify.FamilyUnions.CountAsync());
+        Assert.Equal(success ? 1 : 0, await verify.GenealogyImportRecords.CountAsync());
+        Assert.Equal(oldGlobal + (success ? 51 : 0), await verify.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync());
+        Assert.Equal(oldA, await ReadAsync(verify, original.A.Id));
+        Assert.Equal(oldB, await ReadAsync(verify, original.B.Id));
+        Assert.Equal(1, await DeleteAsync(verify, original.A.Id, original.Link.Id, oldA));
+    }
+
+    private sealed class FailImportInsert(string scenario) : DbCommandInterceptor
+    {
+        public bool Triggered { get; private set; }
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            var table = scenario == "provenance" ? "GenealogyImportRecords" : scenario == "union" ? "FamilyUnions" : null;
+            if (table is not null && command.CommandText.Contains($"INSERT INTO \"{table}\"", StringComparison.Ordinal))
+            {
+                Triggered = true;
+                throw new IOException("隔离测试：模拟导入写入失败。");
+            }
+            return ValueTask.FromResult(result);
+        }
     }
 
     [Fact]
