@@ -682,6 +682,40 @@ public class ScopedGenerationPrototypeTests(ITestOutputHelper output)
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Scoped_install_waits_for_prior_external_write_and_uses_it_as_the_baseline()
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        Guid genealogyId;
+        Guid personId;
+        long globalBefore;
+        await using (var seed = db.CreateContext())
+        {
+            var data = await SeedAsync(seed);
+            genealogyId = data.A.Id;
+            personId = data.A1.Id;
+            globalBefore = await seed.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync();
+        }
+
+        await using var priorWriter = db.CreateContext();
+        await using var priorTransaction = await priorWriter.Database.BeginTransactionAsync();
+        await priorWriter.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"迁移前外写"} WHERE Id = {personId}");
+
+        await using var installing = db.CreateContext();
+        var install = InstallAsync(installing);
+        await Task.Delay(200);
+        Assert.False(install.IsCompleted);
+        await priorTransaction.CommitAsync();
+        await install.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await using var verify = db.CreateContext();
+        Assert.Equal(0, await ReadAsync(verify, genealogyId));
+        Assert.Equal(globalBefore + 1, await verify.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM UnlinkGeneration WHERE Id = 1").SingleAsync());
+        Assert.Equal("迁移前外写", (await verify.People.AsNoTracking().SingleAsync(item => item.Id == personId)).Name);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Rebuilt_people_table_drops_scoped_triggers_and_scope_guard_fails_closed()
     {
         await using var db = new TestDatabase();
