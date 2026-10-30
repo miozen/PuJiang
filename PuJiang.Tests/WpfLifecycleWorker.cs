@@ -177,8 +177,7 @@ internal static class WpfLifecycleWorker
         // The modal confirmation keeps an immutable candidate, but another supported process can still edit the
         // SQLite file. The stale confirmation must delete nothing and reload the current graph before reporting it.
         await using (var external = database.CreateContext())
-            await new GenealogyDataService(external).RemoveRelationshipForParticipantAsync(firstGenealogy.Id,
-                removalDialog.SelectedCandidate!.Id, first.Id);
+            await external.PersonRelationships.Where(item => item.Id == removalDialog.SelectedCandidate!.Id).ExecuteDeleteAsync();
         try
         {
             await viewModel.RemoveTargetLinkAsync(removalDialog.SelectedCandidate!);
@@ -197,6 +196,25 @@ internal static class WpfLifecycleWorker
         staleCandidateList.SelectedItem = remainingCandidates.Single();
         staleConfirmation.IsChecked = true;
 
+        await using (var external = database.CreateContext())
+        {
+            var record = await external.FamilyUnions.SingleAsync(item => item.Id == staleSelectionDialog.SelectedCandidate!.Id);
+            record.Note = "外部修改";
+            await external.SaveChangesAsync();
+        }
+        try
+        {
+            await viewModel.RemoveTargetLinkAsync(staleSelectionDialog.SelectedCandidate!);
+            throw new InvalidOperationException("外部修改后的确认候选仍被接受。");
+        }
+        catch (InvalidOperationException exception) when (exception.Message.Contains("解除候选已过期", StringComparison.Ordinal)) { }
+        if (viewModel.Status != "解除候选已过期，当前图数据已重新加载。")
+            throw new InvalidOperationException("外部修改后未恢复当前图状态。");
+        remainingCandidates = await viewModel.GetTargetLinkRemovalCandidatesAsync();
+        var switchedDialog = new TargetLinkRemovalDialog(viewModel.GetSelectedPersonForEditing(), remainingCandidates);
+        ((System.Windows.Controls.ListBox)switchedDialog.FindName("CandidateList")).SelectedItem = remainingCandidates.Single();
+        ((System.Windows.Controls.CheckBox)switchedDialog.FindName("ConfirmationBox")).IsChecked = true;
+
         viewModel.NewName = "乙谱";
         await viewModel.CreateAsync();
         viewModel.NewPersonName = "外谱人物";
@@ -205,7 +223,7 @@ internal static class WpfLifecycleWorker
         viewModel.SelectedPerson = foreign;
         try
         {
-            await viewModel.RemoveTargetLinkAsync(staleSelectionDialog.SelectedCandidate!);
+            await viewModel.RemoveTargetLinkAsync(switchedDialog.SelectedCandidate!);
             throw new InvalidOperationException("切换族谱后的确认候选仍被接受。");
         }
         catch (InvalidOperationException exception) when (exception.Message.Contains("当前选择", StringComparison.Ordinal)) { }
@@ -228,6 +246,7 @@ internal static class WpfLifecycleWorker
         scopedDialog.Close();
         removalDialog.Close();
         staleSelectionDialog.Close();
+        switchedDialog.Close();
     }
 
     private static async Task VerifyTargetTreeEditingAsync(TestDatabase database)

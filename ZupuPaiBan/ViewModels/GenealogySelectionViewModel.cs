@@ -418,7 +418,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
                 : "（无对方）";
             candidates.Add(new TargetLinkRemovalCandidate(relationship.Id, TargetLinkRemovalKind.Relationship,
                 $"人物关系：{subject} → {related}（{GetRelationshipKindName(relationship.Kind)}）",
-                genealogy.Id, person.Id, version, personVersion));
+                genealogy.Id, person.Id, version, personVersion, relationship, null));
         }
         foreach (var union in snapshot.Unions.Where(item => item.PartnerOneId == person.Id || item.PartnerTwoId == person.Id))
         {
@@ -428,7 +428,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
                 : "（未详）";
             candidates.Add(new TargetLinkRemovalCandidate(union.Id, TargetLinkRemovalKind.FamilyUnion,
                 $"婚配：{first} — {second}（{GetFamilyUnionKindName(union.Kind)}）",
-                genealogy.Id, person.Id, version, personVersion));
+                genealogy.Id, person.Id, version, personVersion, null, union));
         }
         return candidates.OrderBy(item => item.Kind).ThenBy(item => item.Description, StringComparer.Ordinal).ToList();
     }
@@ -456,11 +456,13 @@ public partial class GenealogySelectionViewModel : ObservableObject
         {
             switch (candidate.Kind)
             {
-                case TargetLinkRemovalKind.Relationship:
-                    await service.RemoveRelationshipForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
+                case TargetLinkRemovalKind.Relationship when candidate.RelationshipSnapshot is { } relationship &&
+                                                             candidate.UnionSnapshot is null && relationship.Id == candidate.Id:
+                    await service.RemoveRelationshipForParticipantAsync(genealogy.Id, relationship, person.Id);
                     break;
-                case TargetLinkRemovalKind.FamilyUnion:
-                    await service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, candidate.Id, person.Id);
+                case TargetLinkRemovalKind.FamilyUnion when candidate.UnionSnapshot is { } union &&
+                                                            candidate.RelationshipSnapshot is null && union.Id == candidate.Id:
+                    await service.RemoveFamilyUnionForParticipantAsync(genealogy.Id, union, person.Id);
                     break;
                 default:
                     throw new InvalidOperationException("解除类型无效。");

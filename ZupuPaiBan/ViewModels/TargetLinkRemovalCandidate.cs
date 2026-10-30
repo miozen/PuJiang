@@ -1,3 +1,5 @@
+using ZupuPaiBan.Data;
+
 namespace ZupuPaiBan.ViewModels;
 
 /// <summary>
@@ -11,7 +13,9 @@ public sealed record TargetLinkRemovalCandidate(
     Guid GenealogyId,
     Guid ParticipantId,
     int SelectionVersion,
-    int PersonSelectionVersion);
+    int PersonSelectionVersion,
+    GenealogyRelationshipData? RelationshipSnapshot,
+    GenealogyUnionData? UnionSnapshot);
 
 public enum TargetLinkRemovalKind
 {

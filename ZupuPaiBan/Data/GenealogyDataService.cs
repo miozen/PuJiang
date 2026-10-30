@@ -79,14 +79,19 @@ public sealed class GenealogyDataService
 
     /// <summary>
     /// Deletes exactly one relationship only when it still belongs to the specified genealogy and includes the
-    /// currently selected participant. This is one scoped SQL DELETE, so a failed/stale request changes nothing.
+    /// currently selected participant and all fields still match the confirmed snapshot. This is one scoped SQL
+    /// DELETE, so a failed/stale request changes nothing.
     /// </summary>
-    public async Task RemoveRelationshipForParticipantAsync(Guid genealogyId, Guid relationshipId, Guid participantId,
+    public async Task RemoveRelationshipForParticipantAsync(Guid genealogyId, GenealogyRelationshipData expected, Guid participantId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         var count = await _context.PersonRelationships
-            .Where(relationship => relationship.GenealogyId == genealogyId && relationship.Id == relationshipId &&
-                (relationship.PersonId == participantId || relationship.RelatedPersonId == participantId))
+            .Where(relationship => relationship.GenealogyId == genealogyId && relationship.Id == expected.Id &&
+                (relationship.PersonId == participantId || relationship.RelatedPersonId == participantId) &&
+                relationship.PersonId == expected.PersonId && relationship.RelatedPersonId == expected.RelatedPersonId &&
+                relationship.Kind == expected.Kind && relationship.IsPreferredForLineage == expected.IsPreferredForLineage &&
+                relationship.Note == expected.Note && relationship.SourceCitation == expected.SourceCitation)
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
@@ -94,14 +99,19 @@ public sealed class GenealogyDataService
 
     /// <summary>
     /// Deletes exactly one union only when it still belongs to the specified genealogy and includes the current
-    /// participant. It never deletes either person or a related relationship record.
+    /// participant and all fields still match the confirmed snapshot. It never deletes either person or a related
+    /// relationship record.
     /// </summary>
-    public async Task RemoveFamilyUnionForParticipantAsync(Guid genealogyId, Guid unionId, Guid participantId,
+    public async Task RemoveFamilyUnionForParticipantAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         var count = await _context.FamilyUnions
-            .Where(union => union.GenealogyId == genealogyId && union.Id == unionId &&
-                (union.PartnerOneId == participantId || union.PartnerTwoId == participantId))
+            .Where(union => union.GenealogyId == genealogyId && union.Id == expected.Id &&
+                (union.PartnerOneId == participantId || union.PartnerTwoId == participantId) &&
+                union.PartnerOneId == expected.PartnerOneId && union.PartnerTwoId == expected.PartnerTwoId &&
+                union.Kind == expected.Kind && union.StartDateText == expected.StartDateText &&
+                union.EndDateText == expected.EndDateText && union.Note == expected.Note)
             .ExecuteDeleteAsync(cancellationToken);
         if (count == 0)
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");
