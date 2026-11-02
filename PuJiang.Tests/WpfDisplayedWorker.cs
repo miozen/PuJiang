@@ -131,6 +131,61 @@ internal static class WpfDisplayedWorker
         if (!genealogy.ParentBranchChoices.Any(b => b.Id == thirdBranch && b.Label.Contains("新长房 / 新次支 / 三支")) || genealogy.People.Single().BranchId != thirdBranch)
             throw new InvalidOperationException("移动到顶层并重载后结果不正确。");
 
+        await CreateChildAsync(firstBranch, "临时房");
+        var temporary = genealogy.Branches.Single(b => b.Name == "临时房").Id;
+        await CreateChildAsync(temporary, "临时支");
+        var temporaryChild = genealogy.Branches.Single(b => b.Name == "临时支").Id;
+        await EditBranchAsync(thirdBranch, temporary);
+        ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == temporary);
+        var cancelTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        cancelTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<BranchReassignmentDialog>().FirstOrDefault(w => w.IsVisible);
+            if (dialog is null) return;
+            cancelTimer.Stop();
+            dialog.Close();
+        };
+        cancelTimer.Start();
+        ((System.Windows.Controls.Button)main.FindName("reassignDeleteBranchButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        cancelTimer.Stop();
+        if (!genealogy.Branches.Any(b => b.Id == temporary) || genealogy.People.Single().BranchId != temporary)
+            throw new InvalidOperationException("取消安置后数据发生改变。");
+        var reassignTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        reassignTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<BranchReassignmentDialog>().FirstOrDefault(w => w.IsVisible);
+            if (dialog is null) return;
+            reassignTimer.Stop();
+            var childBox = (System.Windows.Controls.ComboBox)dialog.FindName("ChildTarget");
+            var personBox = (System.Windows.Controls.ComboBox)dialog.FindName("PersonTarget");
+            childBox.SelectedItem = childBox.Items.Cast<BranchReassignmentDialog.Destination>().Single(d => d.Id == firstBranch);
+            personBox.SelectedItem = personBox.Items.Cast<BranchReassignmentDialog.Destination>().Single(d => d.Id is null);
+            var confirmTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            confirmTimer.Tick += (_, _) =>
+            {
+                var confirmation = FindWindow(null, "确认删除房支");
+                if (confirmation == IntPtr.Zero) return;
+                GetWindowThreadProcessId(confirmation, out var ownerPid);
+                if (ownerPid != (uint)Environment.ProcessId) return;
+                confirmTimer.Stop();
+                PostMessage(confirmation, 0x0111, new IntPtr(6), IntPtr.Zero);
+            };
+            confirmTimer.Start();
+            ((System.Windows.Controls.Button)dialog.FindName("ConfirmButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            confirmTimer.Stop();
+        };
+        reassignTimer.Start();
+        ((System.Windows.Controls.Button)main.FindName("reassignDeleteBranchButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        reassignTimer.Stop();
+        var reassignWait = Stopwatch.StartNew();
+        while (!panel.IsEnabled && reassignWait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (!panel.IsEnabled || genealogy.Branches.Any(b => b.Id == temporary) ||
+            genealogy.Branches.Single(b => b.Id == temporaryChild).ParentBranchId != firstBranch || genealogy.People.Single().BranchId is not null)
+            throw new InvalidOperationException("界面安置并删除房支结果不正确。");
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        await EditBranchAsync(null, thirdBranch);
+        await ConfirmDeleteBranchAsync(temporaryChild, true);
+
         async Task MoveBranchAsync(Guid branchId, Guid? parentId)
         {
             ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == branchId);
@@ -215,7 +270,9 @@ internal static class WpfDisplayedWorker
                 editTimer.Stop();
                 var box = (System.Windows.Controls.ComboBox)dialog.FindName("BranchBox");
                 if (dialog.BranchId != expected) failure = new InvalidOperationException("重开档案时房支不正确。");
-                if (!box.Items.Cast<object>().Any(item => item.GetType().GetProperty("Label")!.GetValue(item)!.ToString()!.Contains("长房 / 次支")))
+                if (!box.Items.Cast<object>().Any(item =>
+                    item.GetType().GetProperty("Label")!.GetValue(item)!.ToString() is string label &&
+                    (label.Contains("长房 / 次支") || label.Contains("新长房 / 新次支"))))
                     failure = new InvalidOperationException("嵌套房支未显示层级路径。");
                 box.SelectedItem = box.Items.Cast<object>().Single(item => (Guid?)item.GetType().GetProperty("Id")!.GetValue(item) == target);
                 ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))

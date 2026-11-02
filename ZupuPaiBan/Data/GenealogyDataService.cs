@@ -6,6 +6,8 @@ namespace ZupuPaiBan.Data;
 
 /// <summary>A scoped unlink found no matching current record.</summary>
 public sealed class StaleTargetLinkException(string message) : InvalidOperationException(message);
+public sealed record BranchPersonSnapshot(Guid Id, string Name);
+public sealed record NonEmptyBranchSnapshot(Guid GenealogyId, GenealogyBranchData Source, IReadOnlyList<GenealogyBranchData> Branches, IReadOnlyList<BranchPersonSnapshot> People);
 
 /// <summary>目标模型的最小应用服务：所有读取均显式按族谱范围过滤。</summary>
 public sealed class GenealogyDataService
@@ -160,6 +162,44 @@ public sealed class GenealogyDataService
                 AND sibling.ParentBranchId IS {targetId} AND sibling.Name = {source.Name} AND sibling.Id <> {source.Id})
             """, cancellationToken);
         if (count == 0) throw new InvalidOperationException("房支或目标已变化，或目标会造成循环或同级重名，请重新选择。");
+    }
+
+    public async Task DeleteBranchAndReassignAsync(NonEmptyBranchSnapshot snapshot, Guid? childDestination, Guid? personDestination, CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        var branches = await _context.FamilyBranches.Where(b => b.GenealogyId == snapshot.GenealogyId).ToListAsync(cancellationToken);
+        var current = branches.Select(b => new GenealogyBranchData(b.Id, b.ParentBranchId, b.Name, b.SortOrder)).OrderBy(b => b.Id).ToArray();
+        var people = await _context.People.Where(p => p.GenealogyId == snapshot.GenealogyId && p.BranchId == snapshot.Source.Id).ToListAsync(cancellationToken);
+        if (!current.SequenceEqual(snapshot.Branches.OrderBy(b => b.Id)) ||
+            !people.Select(p => new BranchPersonSnapshot(p.Id, p.Name)).OrderBy(p => p.Id).SequenceEqual(snapshot.People.OrderBy(p => p.Id)))
+            throw new InvalidOperationException("房支或受影响人员已变化，请重新预览。");
+        var source = branches.SingleOrDefault(b => b.Id == snapshot.Source.Id);
+        if (source is null || new GenealogyBranchData(source.Id, source.ParentBranchId, source.Name, source.SortOrder) != snapshot.Source)
+            throw new InvalidOperationException("房支已失效，请重新预览。");
+        var children = branches.Where(b => b.ParentBranchId == source.Id).ToList();
+        if (childDestination == source.Id || personDestination == source.Id ||
+            (childDestination is Guid childId && !branches.Any(b => b.Id == childId)) ||
+            (personDestination is Guid personId && !branches.Any(b => b.Id == personId)))
+            throw new InvalidOperationException("目标不属于当前族谱或即将被删除。");
+        if (childDestination is Guid targetId)
+        {
+            var cursor = branches.Single(b => b.Id == targetId);
+            var seen = new HashSet<Guid>();
+            while (true)
+            {
+                if (!seen.Add(cursor.Id) || cursor.Id == source.Id) throw new InvalidOperationException("不能将子房支移动到自身或其后代。");
+                if (cursor.ParentBranchId is not Guid parent) break;
+                cursor = branches.SingleOrDefault(b => b.Id == parent) ?? throw new InvalidOperationException("房支层级不完整。");
+            }
+        }
+        if (children.Any(c => branches.Any(b => b.Id != source.Id && b.Id != c.Id && b.ParentBranchId == childDestination && b.Name == c.Name)))
+            throw new InvalidOperationException("目标位置存在同名房支，请先处理重名。");
+        foreach (var child in children) child.ParentBranchId = childDestination;
+        foreach (var person in people) person.BranchId = personDestination;
+        await _context.SaveChangesAsync(cancellationToken);
+        _context.FamilyBranches.Remove(source);
+        await _context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task DeleteEmptyBranchAsync(Guid genealogyId, Guid branchId, string expectedName, Guid? expectedParentId, int expectedSortOrder,

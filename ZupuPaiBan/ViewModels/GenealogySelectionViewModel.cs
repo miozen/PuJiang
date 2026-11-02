@@ -12,6 +12,7 @@ public sealed record GenealogyProfileCandidate(GenealogyGraphInfo Snapshot, int 
 public sealed record GenealogyImportHistory(GenealogyGraphInfo Genealogy, IReadOnlyList<GenealogyImportRecord> Records);
 public sealed record BranchDeleteCandidate(Guid GenealogyId, GenealogyBranchData Branch, BranchChoice Choice, int SelectionVersion);
 public sealed record BranchMoveCandidate(Guid GenealogyId, GenealogyBranchData Source, GenealogyBranchData? Target, BranchChoice SourceChoice, BranchChoice? TargetChoice, int SelectionVersion);
+public sealed record BranchReassignmentCandidate(NonEmptyBranchSnapshot Snapshot, BranchChoice Choice, int SelectionVersion);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -232,6 +233,27 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.GenealogyId) return;
         try { await SelectAsync(SelectedGenealogy); }
         catch (Exception ex) { if (SelectedGenealogy?.Id == candidate.GenealogyId) Status = $"房支已删除，但刷新失败：{ex.Message}"; }
+    }
+
+    public BranchReassignmentCandidate GetBranchReassignmentCandidate()
+    {
+        var source = GetBranchDeleteCandidate();
+        return new BranchReassignmentCandidate(new NonEmptyBranchSnapshot(source.GenealogyId, source.Branch,
+            Branches.ToArray(), People.Where(p => p.BranchId == source.Branch.Id)
+                .Select(p => new BranchPersonSnapshot(p.Id, p.Name)).ToArray()), source.Choice, source.SelectionVersion);
+    }
+
+    public async Task DeleteBranchAndReassignAsync(BranchReassignmentCandidate candidate, Guid? childDestination, Guid? personDestination)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.Snapshot.GenealogyId ||
+            !ReferenceEquals(BranchToRename, candidate.Choice))
+            throw new InvalidOperationException("选择已变化，请重新预览。");
+        await using var context = _createContext();
+        await new GenealogyDataService(context).DeleteBranchAndReassignAsync(candidate.Snapshot, childDestination, personDestination);
+        if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.Snapshot.GenealogyId) return;
+        try { await SelectAsync(SelectedGenealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == candidate.Snapshot.GenealogyId) Status = $"房支已删除，但刷新失败：{ex.Message}"; }
     }
 
     public BranchMoveCandidate GetBranchMoveCandidate()

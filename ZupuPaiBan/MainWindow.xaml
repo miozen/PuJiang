@@ -144,6 +144,7 @@
                     <TextBox x:Name="renameBranchName" Width="140" MaxLength="200" Text="{Binding RenamedBranchName, UpdateSourceTrigger=PropertyChanged}"/>
                     <Button x:Name="renameBranchButton" Content="重命名房支" Click="RenameBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
                     <Button x:Name="deleteBranchButton" Content="删除空房支" Click="DeleteBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
+                    <Button x:Name="reassignDeleteBranchButton" Content="安置内容并删除房支" Click="ReassignDeleteBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="移动所选房支到：" VerticalAlignment="Center"/>

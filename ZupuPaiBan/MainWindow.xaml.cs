@@ -287,6 +287,19 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void ReassignDeleteBranch_Click(object sender, RoutedEventArgs e)
+    {
+        BranchReassignmentCandidate candidate;
+        try { candidate = _genealogyViewModel!.GetBranchReassignmentCandidate(); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        var dialog = new BranchReassignmentDialog(candidate, _genealogyViewModel.ParentBranchChoices.ToList()) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel.DeleteBranchAndReassignAsync(candidate, dialog.ChildDestination, dialog.PersonDestination); }
+        catch (Exception ex) { MessageBox.Show($"删除房支失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void MoveBranch_Click(object sender, RoutedEventArgs e)
     {
         BranchMoveCandidate candidate;
