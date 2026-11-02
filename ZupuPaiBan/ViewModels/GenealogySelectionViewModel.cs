@@ -801,6 +801,24 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (await RefreshTargetTreeAsync(genealogy.Id, version, "父母关系类型已更正")) Status = "父母关系类型已更正。";
     }
 
+    public async Task CompleteUnknownUnionPartnerAsync(TargetLinkRemovalCandidate candidate, Person partner)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.GenealogyId != SelectedGenealogy?.Id || candidate.ParticipantId != SelectedPerson?.Id ||
+            candidate.SelectionVersion != _selectionVersion || candidate.PersonSelectionVersion != _candidatePersonSelectionVersion ||
+            candidate.Kind != TargetLinkRemovalKind.FamilyUnion || candidate.UnionSnapshot is not { PartnerTwoId: null } union ||
+            candidate.RelationshipSnapshot is not null || union.Id != candidate.Id ||
+            partner.Id == candidate.ParticipantId || !People.Any(p => ReferenceEquals(p, partner)) || partner.GenealogyId != candidate.GenealogyId)
+            throw new InvalidOperationException("选择已变化或婚配不符合补全条件，请重新选择。");
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).CompleteUnknownUnionPartnerAsync(genealogy.Id, union, person.Id,
+            candidate.FirstName, candidate.UnlinkGeneration, partner.Id, partner.Name);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, "婚配对方已补全")) Status = "婚配对方已补全。";
+    }
+
     public async Task UpdateTargetFamilyUnionDetailsAsync(TargetLinkRemovalCandidate candidate,
         string? startDateText, string? endDateText, string? note)
     {

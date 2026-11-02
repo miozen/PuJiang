@@ -1,0 +1,22 @@
+<Window x:Class="ZupuPaiBan.Views.CompleteUnionPartnerDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="补全婚配对方" Width="650" Height="430" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="16">
+        <TextBlock x:Name="SubjectLabel" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <TextBlock Text="选择当前族谱中的对方："/>
+            <ComboBox x:Name="PartnerBox" Margin="0,4,0,8">
+                <ComboBox.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding Name}"/><TextBlock Text="  ID: "/><TextBlock Text="{Binding Id}"/></StackPanel></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Text="只补全该婚配，不自动创建人物关系或合并记录。" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>
+                <Button x:Name="ConfirmButton" Content="确认补全" Click="Confirm_Click" Padding="14,4"/>
+            </StackPanel>
+        </StackPanel>
+        <ListBox x:Name="CandidateList">
+            <ListBox.ItemTemplate><DataTemplate><StackPanel><TextBlock Text="{Binding Description}"/><StackPanel Orientation="Horizontal"><TextBlock Text="记录 ID: "/><TextBlock Text="{Binding Id}"/></StackPanel></StackPanel></DataTemplate></ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</Window>

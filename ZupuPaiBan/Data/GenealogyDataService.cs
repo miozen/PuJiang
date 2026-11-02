@@ -329,6 +329,27 @@ public sealed class GenealogyDataService
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");
     }
 
+    public async Task CompleteUnknownUnionPartnerAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
+        string firstName, long generation, Guid newPartnerId, string newPartnerName, CancellationToken cancellationToken = default)
+    {
+        if (expected.PartnerTwoId is not null || participantId != expected.PartnerOneId || newPartnerId == expected.PartnerOneId)
+            throw new InvalidOperationException("仅可为另一方未详的婚配选择不同的同谱人物。");
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        var replacement = new FamilyUnion { Id = expected.Id, GenealogyId = genealogyId, PartnerOneId = expected.PartnerOneId,
+            PartnerTwoId = newPartnerId, Kind = expected.Kind, StartDateText = expected.StartDateText, EndDateText = expected.EndDateText, Note = expected.Note };
+        await new FamilyUnionValidator(_context).ValidateForCreateAsync(replacement, cancellationToken);
+        var count = await _context.FamilyUnions.Where(u => u.GenealogyId == genealogyId && u.Id == expected.Id &&
+            u.PartnerOneId == expected.PartnerOneId && u.PartnerTwoId == null && u.Kind == expected.Kind &&
+            u.StartDateText == expected.StartDateText && u.EndDateText == expected.EndDateText && u.Note == expected.Note &&
+            _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == expected.PartnerOneId && p.Name == firstName) &&
+            _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == newPartnerId && p.Name == newPartnerName) &&
+            _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == generation))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(u => u.PartnerOneId, replacement.PartnerOneId)
+                .SetProperty(u => u.PartnerTwoId, replacement.PartnerTwoId), cancellationToken);
+        if (count == 0) throw new StaleTargetLinkException("婚配或人物已变化，请重新选择。");
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task UpdateFamilyUnionDetailsAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
         string firstName, string? secondName, long unlinkGeneration, string? startDateText, string? endDateText, string? note,
         CancellationToken cancellationToken = default)

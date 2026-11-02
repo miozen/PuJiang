@@ -527,6 +527,54 @@ internal static class WpfDisplayedWorker
         await using (var verifyEdit = coordinator.CreateContext())
             if ((await verifyEdit.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id)).Note != "已编辑未详")
                 throw new InvalidOperationException("未详婚配编辑未保存。");
+        await CompleteUnionAsync(false);
+        await CompleteUnionAsync(true);
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        await using (var verifyComplete = coordinator.CreateContext())
+        {
+            var union = await verifyComplete.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id);
+            if (union.PartnerTwoId is null || union.Note != "已编辑未详" || union.StartDateText != "未详始年")
+                throw new InvalidOperationException("婚配补全重载后身份或资料不正确。");
+        }
+
+        async Task CompleteUnionAsync(bool confirm)
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<CompleteUnionPartnerDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                if (!confirm) { dialog.Close(); return; }
+                ((System.Windows.Controls.ListBox)dialog.FindName("CandidateList")).SelectedIndex = 0;
+                ((System.Windows.Controls.ComboBox)dialog.FindName("PartnerBox")).SelectedItem = genealogy.People.Single(p => p.Name == "关系对方");
+                var confirmTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+                confirmTimer.Tick += (_, _) =>
+                {
+                    var message = FindWindow(null, "确认补全");
+                    if (message == IntPtr.Zero) return;
+                    GetWindowThreadProcessId(message, out var pid);
+                    if (pid != (uint)Environment.ProcessId) return;
+                    confirmTimer.Stop();
+                    PostMessage(message, 0x0111, new IntPtr(6), IntPtr.Zero);
+                };
+                confirmTimer.Start();
+                ((System.Windows.Controls.Button)dialog.FindName("ConfirmButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                confirmTimer.Stop();
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("completeUnionPartnerButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("婚配补全未完成。"); }
+            if (!confirm)
+            {
+                await using var verifyCancel = coordinator.CreateContext();
+                if ((await verifyCancel.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id)).PartnerTwoId is not null)
+                    throw new InvalidOperationException("取消补全后婚配发生改变。");
+            }
+        }
         var removalTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         removalTimer.Tick += (_, _) =>
         {
@@ -568,6 +616,7 @@ internal static class WpfDisplayedWorker
                 check.IsChecked = false;
                 if (!partner.IsEnabled || partner.SelectedItem is not null) failure = new InvalidOperationException("切回选择人物时保留旧选择。");
                 check.IsChecked = true;
+                ((System.Windows.Controls.ComboBox)dialog.FindName("KindBox")).SelectedValue = ZupuPaiBan.Models.FamilyUnionKind.Unknown;
                 ((System.Windows.Controls.TextBox)dialog.FindName("StartDateBox")).Text = "未详始年";
                 ((System.Windows.Controls.TextBox)dialog.FindName("NoteBox")).Text = "未详备注";
                 if (save) ((System.Windows.Controls.Button)dialog.FindName("SaveButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));

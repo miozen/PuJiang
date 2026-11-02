@@ -498,6 +498,22 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show($"保存婚配资料失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
+    private async void CompleteUnionPartner_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var candidates = (await _genealogyViewModel!.GetTargetLinkRemovalCandidatesAsync())
+                .Where(c => c.Kind == TargetLinkRemovalKind.FamilyUnion && c.UnionSnapshot is { PartnerTwoId: null }).ToList();
+            if (candidates.Count == 0) { MessageBox.Show("当前人物没有另一方未详的婚配。", "提示"); return; }
+            var dialog = new CompleteUnionPartnerDialog(candidates, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.SelectedCandidate is not { } candidate || dialog.SelectedPartner is not { } partner) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.CompleteUnknownUnionPartnerAsync(candidate, partner); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"补全婚配对方失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async void TargetShortcut_RemoveLink_Click(object sender, RoutedEventArgs e)
     {
         try
