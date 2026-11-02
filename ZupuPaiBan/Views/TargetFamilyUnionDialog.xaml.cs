@@ -8,6 +8,9 @@ public partial class TargetFamilyUnionDialog : Window
 {
     public FamilyUnionKind Kind => (FamilyUnionKind)KindBox.SelectedValue;
     public Guid? PartnerTwoId => (PartnerTwoBox.SelectedItem as Person)?.Id;
+    public string? StartDateText => StartDateBox.Text.Length == 0 ? null : StartDateBox.Text;
+    public string? EndDateText => EndDateBox.Text.Length == 0 ? null : EndDateBox.Text;
+    public string? Note => NoteBox.Text.Length == 0 ? null : NoteBox.Text;
 
     public TargetFamilyUnionDialog(Person partnerOne, IReadOnlyCollection<Person> currentGenealogyPeople)
     {

@@ -25,11 +25,14 @@
                 </DataTemplate>
             </ComboBox.ItemTemplate>
         </ComboBox>
+        <TextBlock Text="始于（可选文字）："/><TextBox x:Name="StartDateBox" MaxLength="100" Margin="0,4,0,8"/>
+        <TextBlock Text="止于（可选文字）："/><TextBox x:Name="EndDateBox" MaxLength="100" Margin="0,4,0,8"/>
+        <TextBlock Text="备注（可选）："/><TextBox x:Name="NoteBox" MaxLength="2000" AcceptsReturn="True" TextWrapping="Wrap" Height="60" VerticalScrollBarVisibility="Auto" Margin="0,4,0,8"/>
         <TextBlock Foreground="#805020" TextWrapping="Wrap" Margin="0,0,0,12"
                    Text="保存只新增这一条无向婚配记录；不会自动创建配偶人物关系、合并人物或覆盖既有记录。"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>
-            <Button Content="新增婚配" IsDefault="True" Padding="14,4" Click="Save_Click"/>
+            <Button x:Name="SaveButton" Content="新增婚配" IsDefault="True" Padding="14,4" Click="Save_Click"/>
         </StackPanel>
     </StackPanel>
 </Window>

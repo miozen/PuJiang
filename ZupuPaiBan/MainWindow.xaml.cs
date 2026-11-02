@@ -387,7 +387,7 @@ public partial class MainWindow : Window
             var dialog = new TargetFamilyUnionDialog(person, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
             if (dialog.ShowDialog() != true || dialog.PartnerTwoId is not Guid partnerTwoId) return;
             genealogyPanel.IsEnabled = false;
-            try { await _genealogyViewModel.AddTargetFamilyUnionAsync(dialog.Kind, partnerTwoId); }
+            try { await _genealogyViewModel.AddTargetFamilyUnionAsync(dialog.Kind, partnerTwoId, dialog.StartDateText, dialog.EndDateText, dialog.Note); }
             finally { genealogyPanel.IsEnabled = true; }
         }
         catch (Exception ex) { MessageBox.Show($"新增婚配失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }

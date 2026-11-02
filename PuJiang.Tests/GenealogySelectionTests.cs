@@ -13,6 +13,43 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Union_details_persist_and_invalid_requests_leave_no_records()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        foreach (var name in new[] { "主体", "对方", "另一方" }) { vm.NewPersonName = name; await vm.AddPersonAsync(); }
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        var partner = vm.People.Single(p => p.Name == "对方").Id;
+        Guid foreignId;
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            foreignId = (await service.AddPersonAsync(new Person { GenealogyId = foreign.Id, Name = "外谱" })).Id;
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, partner, new string('始', 101)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, partner, null, new string('止', 101)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, partner, null, null, new string('注', 2001)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, foreignId, "始", "止", "备注"));
+        await using (var verifyEmpty = database.CreateContext()) Assert.Empty(await verifyEmpty.FamilyUnions.ToListAsync());
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, partner, "民国十年", "不详", "谱载备注");
+        await vm.SelectAsync(genealogy);
+        Assert.Contains(vm.TargetTree.SelectMany(node => node.Details), detail => detail.Contains("民国十年") && detail.Contains("不详") && detail.Contains("谱载备注"));
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, vm.People.Single(p => p.Name == "另一方").Id);
+        await using var verify = database.CreateContext();
+        var unions = await verify.FamilyUnions.ToListAsync();
+        Assert.Equal(2, unions.Count);
+        Assert.Contains(unions, u => u.StartDateText == "民国十年" && u.EndDateText == "不详" && u.Note == "谱载备注");
+        Assert.Contains(unions, u => u.StartDateText is null && u.EndDateText is null && u.Note is null);
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Relationship_notes_and_sources_persist_and_reject_invalid_requests()
     {
         await using var database = new TestDatabase();

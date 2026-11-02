@@ -538,7 +538,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
     /// Creates one explicit, direction-free family union for the selected person. The second partner must be
     /// a currently listed member of the same genealogy; no relationship record or automatic merge is inferred.
     /// </summary>
-    public async Task AddTargetFamilyUnionAsync(FamilyUnionKind kind, Guid partnerTwoId)
+    public async Task AddTargetFamilyUnionAsync(FamilyUnionKind kind, Guid partnerTwoId,
+        string? startDateText = null, string? endDateText = null, string? note = null)
     {
         using var operation = _operationCoordinator?.EnterOperation();
         var (genealogy, person) = GetCurrentSelectedPersonForEditing();
@@ -552,7 +553,10 @@ public partial class GenealogySelectionViewModel : ObservableObject
             GenealogyId = genealogy.Id,
             PartnerOneId = person.Id,
             PartnerTwoId = partnerTwoId,
-            Kind = kind
+            Kind = kind,
+            StartDateText = startDateText,
+            EndDateText = endDateText,
+            Note = note
         });
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
         if (await RefreshTargetTreeAsync(genealogy.Id, version, "婚配关系已新增"))

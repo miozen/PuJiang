@@ -251,6 +251,33 @@ internal static class WpfDisplayedWorker
             .Any(detail => detail.Contains("界面谱载备注") && detail.Contains("界面谱牒来源")))
             throw new InvalidOperationException("重载后关系清单未显示备注与来源。");
 
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        var unionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        unionTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<TargetFamilyUnionDialog>().SingleOrDefault();
+            if (dialog is null) return;
+            unionTimer.Stop();
+            var partner = (System.Windows.Controls.ComboBox)dialog.FindName("PartnerTwoBox");
+            partner.SelectedItem = partner.Items.Cast<ZupuPaiBan.Models.Person>().Single(p => p.Name == "关系对方");
+            ((System.Windows.Controls.TextBox)dialog.FindName("StartDateBox")).Text = "谱载始年";
+            ((System.Windows.Controls.TextBox)dialog.FindName("EndDateBox")).Text = "谱载止年";
+            ((System.Windows.Controls.TextBox)dialog.FindName("NoteBox")).Text = "婚配备注";
+            ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        };
+        unionTimer.Start();
+        typeof(MainWindow).GetMethod("TargetShortcut_AddFamilyUnion_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(main, [main, new RoutedEventArgs()]);
+        unionTimer.Stop();
+        var unionDeadline = Stopwatch.StartNew();
+        while (!panel.IsEnabled && unionDeadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (!panel.IsEnabled) throw new TimeoutException("新增婚配后界面未恢复。");
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        if (!genealogy.TargetTree.SelectMany(node => node.Details)
+            .Any(detail => detail.Contains("谱载始年") && detail.Contains("谱载止年") && detail.Contains("婚配备注")))
+            throw new InvalidOperationException("重载后婚配资料未显示。");
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();
