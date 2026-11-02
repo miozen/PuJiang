@@ -69,6 +69,24 @@ public sealed class GenealogyDataService
         return normalized;
     }
 
+    public async Task<GenealogyGraphInfo> GetGenealogyProfileAsync(Guid genealogyId, CancellationToken cancellationToken = default) =>
+        await _context.Genealogies.AsNoTracking().Where(g => g.Id == genealogyId)
+            .Select(g => new GenealogyGraphInfo(g.Id, g.Name, g.Surname, g.Description, g.CreatedAt))
+            .SingleOrDefaultAsync(cancellationToken) ?? throw new InvalidOperationException("族谱不存在，请重新选择。");
+
+    public async Task UpdateGenealogyProfileAsync(GenealogyGraphInfo expected, string? surname, string? description,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        if (surname?.Length > 100 || description?.Length > 2000)
+            throw new InvalidOperationException("姓氏不能超过 100 个字符，简介不能超过 2000 个字符。");
+        var count = await _context.Genealogies.Where(g => g.Id == expected.Id && g.Name == expected.Name &&
+                g.Surname == expected.Surname && g.Description == expected.Description)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(g => g.Surname, surname)
+                .SetProperty(g => g.Description, description), cancellationToken);
+        if (count == 0) throw new InvalidOperationException("族谱资料已变化或不存在，请重新选择。");
+    }
+
     public async Task CreateRootBranchAsync(Guid genealogyId, string? name, CancellationToken cancellationToken = default)
     {
         var normalized = name?.Trim();

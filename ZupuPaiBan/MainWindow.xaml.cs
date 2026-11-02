@@ -218,6 +218,20 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void EditGenealogyProfile_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var candidate = await _genealogyViewModel!.GetGenealogyProfileCandidateAsync();
+            var dialog = new GenealogyProfileDialog(candidate.Snapshot) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.SaveGenealogyProfileAsync(candidate, dialog.Surname, dialog.Description); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"保存族谱资料失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async void AddPerson_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;

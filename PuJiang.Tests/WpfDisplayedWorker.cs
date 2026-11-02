@@ -402,6 +402,53 @@ internal static class WpfDisplayedWorker
                 throw new InvalidOperationException("族谱重命名改变了原有图数据。");
         }
 
+        await EditGenealogyProfileAsync("", "", "张", "初始简介");
+        await genealogy.LoadAsync();
+        genealogySelector.SelectedItem = genealogy.Genealogies.Single(g => g.Id == originalGenealogyId);
+        var profileReloadDeadline = Stopwatch.StartNew();
+        while ((genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.People.Count != 2) && profileReloadDeadline.Elapsed < TimeSpan.FromSeconds(10))
+            await Task.Delay(20);
+        if (genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.People.Count != 2)
+            throw new TimeoutException("重载族谱资料后未恢复选择。");
+        await EditGenealogyProfileAsync("张", "初始简介", "赵", "更正简介");
+        await EditGenealogyProfileAsync("赵", "更正简介", "", "");
+        await using (var verifyProfile = coordinator.CreateContext())
+        {
+            var own = await verifyProfile.Genealogies.SingleAsync(g => g.Id == originalGenealogyId);
+            var other = await verifyProfile.Genealogies.SingleAsync(g => g.Id == duplicateId);
+            if (own.Surname is not null || own.Description is not null || other.Surname is not null || other.Description is not null ||
+                await verifyProfile.PersonRelationships.CountAsync(r => r.GenealogyId == originalGenealogyId) != 1 ||
+                await verifyProfile.FamilyUnions.CountAsync(u => u.GenealogyId == originalGenealogyId) != 1 ||
+                await verifyProfile.FamilyBranches.CountAsync(b => b.GenealogyId == originalGenealogyId) != 4)
+                throw new InvalidOperationException("族谱资料清空或隔离结果不正确。");
+        }
+
+        async Task EditGenealogyProfileAsync(string expectedSurname, string expectedDescription, string surname, string description)
+        {
+            Exception? failure = null;
+            var profileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            profileTimer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<GenealogyProfileDialog>().SingleOrDefault();
+                if (dialog is null) return;
+                profileTimer.Stop();
+                var surnameBox = (System.Windows.Controls.TextBox)dialog.FindName("SurnameBox");
+                var descriptionBox = (System.Windows.Controls.TextBox)dialog.FindName("DescriptionBox");
+                if (surnameBox.Text != expectedSurname || descriptionBox.Text != expectedDescription)
+                    failure = new InvalidOperationException("重开族谱资料未显示已保存内容。");
+                surnameBox.Text = surname; descriptionBox.Text = description;
+                ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                    .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            };
+            profileTimer.Start();
+            ((System.Windows.Controls.Button)main.FindName("editGenealogyProfileButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((profileTimer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (profileTimer.IsEnabled || !panel.IsEnabled) { profileTimer.Stop(); throw new TimeoutException("编辑族谱资料后界面未恢复。"); }
+            if (failure is not null) throw failure;
+        }
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();

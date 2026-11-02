@@ -13,6 +13,56 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Genealogy_profile_edits_are_scoped_preserve_data_and_reject_stale_values()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var first = vm.SelectedGenealogy!;
+        vm.NewPersonName = "不同姓人物"; await vm.AddPersonAsync();
+        var original = await vm.GetGenealogyProfileCandidateAsync();
+        Assert.Null(original.Snapshot.Surname);
+        Assert.Null(original.Snapshot.Description);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.SaveGenealogyProfileAsync(original, new string('姓', 101), "简介"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.SaveGenealogyProfileAsync(original, "姓", new string('介', 2001)));
+        await vm.SaveGenealogyProfileAsync(original, "张", "旧谱简介");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.SaveGenealogyProfileAsync(original, "覆盖", "旧候选"));
+        Assert.Equal(first.Id, vm.SelectedGenealogy!.Id);
+        Assert.Equal("不同姓人物", vm.People.Single().Name);
+        var current = await vm.GetGenealogyProfileCandidateAsync();
+        Assert.Equal("张", current.Snapshot.Surname);
+        Assert.Equal("旧谱简介", current.Snapshot.Description);
+        Guid secondId;
+        await using (var context = database.CreateContext())
+        {
+            var other = await new GenealogyDataService(context).CreateGenealogyAsync(new Genealogy { Name = "乙谱", Surname = "李", Description = "乙简介" });
+            secondId = other.Id;
+            var otherSnapshot = await new GenealogyDataService(context).GetGenealogyProfileAsync(secondId);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => vm.SaveGenealogyProfileAsync(current with { Snapshot = otherSnapshot }, "误写", null));
+            var temporary = await new GenealogyDataService(context).CreateGenealogyAsync(new Genealogy { Name = "临时谱" });
+            var deletedSnapshot = await new GenealogyDataService(context).GetGenealogyProfileAsync(temporary.Id);
+            await context.Genealogies.Where(g => g.Id == temporary.Id).ExecuteDeleteAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new GenealogyDataService(context).UpdateGenealogyProfileAsync(deletedSnapshot, "误写", null));
+        }
+        await vm.SaveGenealogyProfileAsync(current, "赵", "更正简介");
+        var updated = await vm.GetGenealogyProfileCandidateAsync();
+        await vm.SaveGenealogyProfileAsync(updated, null, null);
+        await using (var verify = database.CreateContext())
+        {
+            var own = await verify.Genealogies.SingleAsync(g => g.Id == first.Id);
+            var other = await verify.Genealogies.SingleAsync(g => g.Id == secondId);
+            Assert.Equal("甲谱", own.Name);
+            Assert.Null(own.Surname);
+            Assert.Null(own.Description);
+            Assert.Equal("李", other.Surname);
+            Assert.Equal("乙简介", other.Description);
+            Assert.Single(await verify.People.Where(p => p.GenealogyId == first.Id).ToListAsync());
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Genealogy_rename_uses_id_and_original_name_preserving_selection_and_data()
     {
         await using var database = new TestDatabase();
