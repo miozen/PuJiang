@@ -11,6 +11,7 @@ public sealed record BranchChoice(Guid Id, string Label);
 public sealed record GenealogyProfileCandidate(GenealogyGraphInfo Snapshot, int SelectionVersion);
 public sealed record GenealogyImportHistory(GenealogyGraphInfo Genealogy, IReadOnlyList<GenealogyImportRecord> Records);
 public sealed record BranchDeleteCandidate(Guid GenealogyId, GenealogyBranchData Branch, BranchChoice Choice, int SelectionVersion);
+public sealed record BranchMoveCandidate(Guid GenealogyId, GenealogyBranchData Source, GenealogyBranchData? Target, BranchChoice SourceChoice, BranchChoice? TargetChoice, int SelectionVersion);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -32,6 +33,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
     [ObservableProperty] private BranchChoice? _selectedParentBranch;
     [ObservableProperty] private string _newChildBranchName = string.Empty;
     [ObservableProperty] private BranchChoice? _branchToRename;
+    [ObservableProperty] private BranchChoice? _moveTargetBranch;
+    [ObservableProperty] private bool _moveToRoot;
     [ObservableProperty] private string _renamedBranchName = string.Empty;
     [ObservableProperty] private string _searchText = string.Empty;
     [ObservableProperty] private ObservableCollection<Person> _searchResults = new();
@@ -229,6 +232,31 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.GenealogyId) return;
         try { await SelectAsync(SelectedGenealogy); }
         catch (Exception ex) { if (SelectedGenealogy?.Id == candidate.GenealogyId) Status = $"房支已删除，但刷新失败：{ex.Message}"; }
+    }
+
+    public BranchMoveCandidate GetBranchMoveCandidate()
+    {
+        var source = GetBranchDeleteCandidate();
+        var choice = MoveToRoot ? null : MoveTargetBranch;
+        if (!MoveToRoot && (choice is null || !ParentBranchChoices.Any(item => ReferenceEquals(item, choice))))
+            throw new InvalidOperationException("请选择新上级或勾选移至顶层。");
+        var target = choice is null ? null : Branches.SingleOrDefault(item => item.Id == choice.Id)
+            ?? throw new InvalidOperationException("目标房支已失效。");
+        return new BranchMoveCandidate(source.GenealogyId, source.Branch, target, source.Choice, choice, source.SelectionVersion);
+    }
+
+    public async Task MoveBranchAsync(BranchMoveCandidate candidate)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.GenealogyId ||
+            !ReferenceEquals(BranchToRename, candidate.SourceChoice) ||
+            (candidate.TargetChoice is null ? !MoveToRoot : MoveToRoot || !ReferenceEquals(MoveTargetBranch, candidate.TargetChoice)))
+            throw new InvalidOperationException("选择已变化，请重新确认移动。");
+        await using var context = _createContext();
+        await new GenealogyDataService(context).MoveBranchAsync(candidate.GenealogyId, candidate.Source, candidate.Target);
+        if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.GenealogyId) return;
+        try { await SelectAsync(SelectedGenealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == candidate.GenealogyId) Status = $"房支已移动，但刷新失败：{ex.Message}"; }
     }
 
     private static List<BranchChoice> CreateBranchChoices(IReadOnlyList<GenealogyBranchData> branches)

@@ -146,6 +146,12 @@
                     <Button x:Name="deleteBranchButton" Content="删除空房支" Click="DeleteBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
+                    <TextBlock Text="移动所选房支到：" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="moveBranchTargetSelector" Width="280" ItemsSource="{Binding ParentBranchChoices}" SelectedItem="{Binding MoveTargetBranch}" DisplayMemberPath="Label"/>
+                    <CheckBox x:Name="moveBranchToRoot" Content="顶层" IsChecked="{Binding MoveToRoot}" Margin="5,0" VerticalAlignment="Center"/>
+                    <Button x:Name="moveBranchButton" Content="移动房支" Click="MoveBranch_Click" Padding="8,2"/>
+                </WrapPanel>
+                <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="搜索当前族谱姓名：" VerticalAlignment="Center"/>
                     <TextBox x:Name="personSearchText" Width="150" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"/>
                     <ComboBox x:Name="personSearchResults" Width="250" Margin="5,0,0,0" ItemsSource="{Binding SearchResults}" SelectedItem="{Binding SelectedSearchResult}">

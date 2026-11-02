@@ -13,6 +13,53 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Branch_move_preserves_subtree_and_rejects_invalid_destinations()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewBranchName = "甲"; await vm.CreateRootBranchAsync();
+        var a = vm.Branches.Single();
+        vm.NewBranchName = "乙"; await vm.CreateRootBranchAsync();
+        var b = vm.Branches.Single(x => x.Name == "乙");
+        vm.SelectedParentBranch = vm.ParentBranchChoices.Single(x => x.Id == a.Id);
+        vm.NewChildBranchName = "子"; await vm.CreateChildBranchAsync();
+        var child = vm.Branches.Single(x => x.Name == "子");
+        vm.NewPersonName = "人物"; await vm.AddPersonAsync();
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown, null, null, null, null, null, true, child.Id);
+        vm.BranchToRename = vm.ParentBranchChoices.Single(x => x.Id == a.Id);
+        vm.MoveTargetBranch = vm.ParentBranchChoices.Single(x => x.Id == child.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.MoveBranchAsync(vm.GetBranchMoveCandidate()));
+        vm.MoveTargetBranch = vm.ParentBranchChoices.Single(x => x.Id == b.Id);
+        var candidate = vm.GetBranchMoveCandidate();
+        await vm.MoveBranchAsync(candidate);
+        Assert.Contains(vm.ParentBranchChoices, x => x.Id == child.Id && x.Label.Contains("乙 / 甲 / 子"));
+        Assert.Equal(child.Id, vm.People.Single().BranchId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.MoveBranchAsync(candidate));
+        vm.BranchToRename = vm.ParentBranchChoices.Single(x => x.Id == a.Id);
+        vm.MoveToRoot = true;
+        await vm.MoveBranchAsync(vm.GetBranchMoveCandidate());
+        Assert.Null(vm.Branches.Single(x => x.Id == a.Id).ParentBranchId);
+        await vm.SelectAsync(genealogy);
+        Assert.Contains(vm.ParentBranchChoices, x => x.Id == child.Id && x.Label.Contains("甲 / 子"));
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var current = vm.Branches.Single(x => x.Id == a.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(Guid.NewGuid(), current, b));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current with { Name = "旧名称" }, b));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current, b with { Name = "旧目标" }));
+        await service.CreateChildBranchAsync(genealogy.Id, b.Id, "甲");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current, b));
+        var duplicate = await context.FamilyBranches.AsNoTracking().SingleAsync(x => x.GenealogyId == genealogy.Id && x.ParentBranchId == b.Id && x.Name == "甲");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id,
+            new GenealogyBranchData(duplicate.Id, duplicate.ParentBranchId, duplicate.Name, duplicate.SortOrder), null));
+        Assert.Null((await context.FamilyBranches.AsNoTracking().SingleAsync(x => x.Id == a.Id)).ParentBranchId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Import_history_is_scoped_read_only_and_reports_read_failures()
     {
         await using var database = new TestDatabase();

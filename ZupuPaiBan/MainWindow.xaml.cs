@@ -287,6 +287,18 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void MoveBranch_Click(object sender, RoutedEventArgs e)
+    {
+        BranchMoveCandidate candidate;
+        try { candidate = _genealogyViewModel!.GetBranchMoveCandidate(); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (MessageBox.Show($"确定将“{candidate.SourceChoice.Label}”移动到“{candidate.TargetChoice?.Label ?? "顶层"}”吗？子房支和人物归属将保留。", "确认移动房支", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel.MoveBranchAsync(candidate); }
+        catch (Exception ex) { MessageBox.Show($"移动房支失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void RenamePerson_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;

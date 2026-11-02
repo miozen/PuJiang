@@ -137,6 +137,31 @@ public sealed class GenealogyDataService
         if (count == 0) throw new InvalidOperationException("房支不存在、已失效或同级已有该名称。");
     }
 
+    public async Task MoveBranchAsync(Guid genealogyId, GenealogyBranchData source, GenealogyBranchData? target, CancellationToken cancellationToken = default)
+    {
+        var targetId = target?.Id;
+        var targetName = target?.Name;
+        var targetParent = target?.ParentBranchId;
+        var targetOrder = target?.SortOrder;
+        var count = await _context.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH RECURSIVE ancestors(Id, ParentBranchId) AS (
+                SELECT Id, ParentBranchId FROM FamilyBranches WHERE GenealogyId = {genealogyId} AND Id = {targetId}
+                UNION
+                SELECT b.Id, b.ParentBranchId FROM FamilyBranches b JOIN ancestors a ON b.Id = a.ParentBranchId WHERE b.GenealogyId = {genealogyId}
+            )
+            UPDATE FamilyBranches SET ParentBranchId = {targetId}
+            WHERE GenealogyId = {genealogyId} AND Id = {source.Id}
+              AND Name = {source.Name} AND ParentBranchId IS {source.ParentBranchId} AND SortOrder = {source.SortOrder}
+              AND ParentBranchId IS NOT {targetId}
+              AND ({targetId} IS NULL OR EXISTS (SELECT 1 FROM FamilyBranches t WHERE t.GenealogyId = {genealogyId}
+                AND t.Id = {targetId} AND t.Name = {targetName} AND t.ParentBranchId IS {targetParent} AND t.SortOrder = {targetOrder}))
+              AND NOT EXISTS (SELECT 1 FROM ancestors WHERE Id = {source.Id})
+              AND NOT EXISTS (SELECT 1 FROM FamilyBranches sibling WHERE sibling.GenealogyId = {genealogyId}
+                AND sibling.ParentBranchId IS {targetId} AND sibling.Name = {source.Name} AND sibling.Id <> {source.Id})
+            """, cancellationToken);
+        if (count == 0) throw new InvalidOperationException("房支或目标已变化，或目标会造成循环或同级重名，请重新选择。");
+    }
+
     public async Task DeleteEmptyBranchAsync(Guid genealogyId, Guid branchId, string expectedName, Guid? expectedParentId, int expectedSortOrder,
         CancellationToken cancellationToken = default)
     {

@@ -123,6 +123,40 @@ internal static class WpfDisplayedWorker
         if (genealogy.Branches.Any(b => b.Id == emptyBranch) || genealogy.People.Single().BranchId != thirdBranch)
             throw new InvalidOperationException("确认删除空房支后结果不正确。");
 
+        await MoveBranchAsync(firstBranch, secondBranch);
+        if (!genealogy.ParentBranchChoices.Any(b => b.Id == thirdBranch && b.Label.Contains("次房 / 新长房 / 新次支 / 三支")) || genealogy.People.Single().BranchId != thirdBranch)
+            throw new InvalidOperationException("移动后子树或人物归属不正确。");
+        await MoveBranchAsync(firstBranch, null);
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        if (!genealogy.ParentBranchChoices.Any(b => b.Id == thirdBranch && b.Label.Contains("新长房 / 新次支 / 三支")) || genealogy.People.Single().BranchId != thirdBranch)
+            throw new InvalidOperationException("移动到顶层并重载后结果不正确。");
+
+        async Task MoveBranchAsync(Guid branchId, Guid? parentId)
+        {
+            ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == branchId);
+            ((System.Windows.Controls.CheckBox)main.FindName("moveBranchToRoot")).IsChecked = parentId is null;
+            if (parentId is Guid id)
+                ((System.Windows.Controls.ComboBox)main.FindName("moveBranchTargetSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == id);
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = FindWindow(null, "确认移动房支");
+                if (dialog == IntPtr.Zero) return;
+                GetWindowThreadProcessId(dialog, out var ownerPid);
+                if (ownerPid != (uint)Environment.ProcessId) return;
+                timer.Stop();
+                PostMessage(dialog, 0x0111, new IntPtr(6), IntPtr.Zero);
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("moveBranchButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            timer.Stop();
+            var until = Stopwatch.StartNew();
+            while (!panel.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (!panel.IsEnabled || genealogy.Branches.Single(b => b.Id == branchId).ParentBranchId != parentId)
+                throw new InvalidOperationException("界面未完成房支移动。");
+        }
+
         async Task ConfirmDeleteBranchAsync(Guid branchId, bool confirm)
         {
             ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == branchId);
