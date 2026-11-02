@@ -350,6 +350,31 @@ public sealed class GenealogyDataService
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task CorrectFamilyUnionKindAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
+        string firstName, string? secondName, long generation, FamilyUnionKind newKind, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        if (!Enum.IsDefined(newKind) || newKind == expected.Kind)
+            throw new InvalidOperationException("请选择不同的有效婚配类型。");
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        var replacement = new FamilyUnion { Id = expected.Id, GenealogyId = genealogyId, PartnerOneId = expected.PartnerOneId,
+            PartnerTwoId = expected.PartnerTwoId, Kind = newKind, StartDateText = expected.StartDateText,
+            EndDateText = expected.EndDateText, Note = expected.Note };
+        await new FamilyUnionValidator(_context).ValidateForCreateAsync(replacement, cancellationToken);
+        if (replacement.PartnerOneId != expected.PartnerOneId || replacement.PartnerTwoId != expected.PartnerTwoId)
+            throw new InvalidOperationException("婚配双方顺序无效，请重新核查记录。");
+        var count = await _context.FamilyUnions.Where(u => u.GenealogyId == genealogyId && u.Id == expected.Id &&
+            (u.PartnerOneId == participantId || u.PartnerTwoId == participantId) && u.PartnerOneId == expected.PartnerOneId &&
+            u.PartnerTwoId == expected.PartnerTwoId && u.Kind == expected.Kind && u.StartDateText == expected.StartDateText &&
+            u.EndDateText == expected.EndDateText && u.Note == expected.Note &&
+            _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == u.PartnerOneId && p.Name == firstName) &&
+            (u.PartnerTwoId == null || _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == u.PartnerTwoId && p.Name == secondName)) &&
+            _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == generation))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(u => u.Kind, newKind), cancellationToken);
+        if (count == 0) throw new StaleTargetLinkException("婚配或人物已变化，请重新选择。");
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task UpdateFamilyUnionDetailsAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
         string firstName, string? secondName, long unlinkGeneration, string? startDateText, string? endDateText, string? note,
         CancellationToken cancellationToken = default)

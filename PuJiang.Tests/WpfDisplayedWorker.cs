@@ -527,6 +527,55 @@ internal static class WpfDisplayedWorker
         await using (var verifyEdit = coordinator.CreateContext())
             if ((await verifyEdit.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id)).Note != "已编辑未详")
                 throw new InvalidOperationException("未详婚配编辑未保存。");
+        await CorrectUnionKindAsync(false);
+        await CorrectUnionKindAsync(true);
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        await using (var verifyKind = coordinator.CreateContext())
+        {
+            var saved = await verifyKind.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id);
+            if (saved.Kind != ZupuPaiBan.Models.FamilyUnionKind.Partnership || saved.PartnerTwoId is not null || saved.Note != "已编辑未详")
+                throw new InvalidOperationException("婚配类型更正后资料不正确。");
+        }
+
+        async Task CorrectUnionKindAsync(bool confirm)
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<UnionKindCorrectionDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                if (!confirm) { dialog.Close(); return; }
+                var list = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+                list.SelectedItem = list.Items.Cast<TargetLinkRemovalCandidate>().Single(c => c.Id == unknown.Id);
+                ((System.Windows.Controls.ComboBox)dialog.FindName("KindBox")).SelectedValue = ZupuPaiBan.Models.FamilyUnionKind.Partnership;
+                var confirmationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+                confirmationTimer.Tick += (_, _) =>
+                {
+                    var message = FindWindow(null, "确认更正婚配类型");
+                    if (message == IntPtr.Zero) return;
+                    GetWindowThreadProcessId(message, out var pid);
+                    if (pid != (uint)Environment.ProcessId) return;
+                    confirmationTimer.Stop();
+                    PostMessage(message, 0x0111, new IntPtr(6), IntPtr.Zero);
+                };
+                confirmationTimer.Start();
+                ((System.Windows.Controls.Button)dialog.FindName("ConfirmButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                confirmationTimer.Stop();
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("correctUnionKindButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("婚配类型更正未完成。"); }
+            if (!confirm)
+            {
+                await using var verifyCancel = coordinator.CreateContext();
+                if ((await verifyCancel.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id)).Kind != ZupuPaiBan.Models.FamilyUnionKind.Unknown)
+                    throw new InvalidOperationException("取消后婚配类型发生改变。");
+            }
+        }
         await CompleteUnionAsync(false);
         await CompleteUnionAsync(true);
         await genealogy.SelectAsync(genealogy.SelectedGenealogy);

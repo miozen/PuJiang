@@ -819,6 +819,23 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (await RefreshTargetTreeAsync(genealogy.Id, version, "婚配对方已补全")) Status = "婚配对方已补全。";
     }
 
+    public async Task CorrectFamilyUnionKindAsync(TargetLinkRemovalCandidate candidate, FamilyUnionKind newKind)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.GenealogyId != SelectedGenealogy?.Id || candidate.ParticipantId != SelectedPerson?.Id ||
+            candidate.SelectionVersion != _selectionVersion || candidate.PersonSelectionVersion != _candidatePersonSelectionVersion ||
+            candidate.Kind != TargetLinkRemovalKind.FamilyUnion || candidate.UnionSnapshot is not { } union ||
+            candidate.RelationshipSnapshot is not null || union.Id != candidate.Id)
+            throw new InvalidOperationException("当前选择已变化，请重新选择婚配。");
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).CorrectFamilyUnionKindAsync(genealogy.Id, union, person.Id,
+            candidate.FirstName, candidate.SecondName, candidate.UnlinkGeneration, newKind);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, "婚配类型已更正")) Status = "婚配类型已更正。";
+    }
+
     public async Task UpdateTargetFamilyUnionDetailsAsync(TargetLinkRemovalCandidate candidate,
         string? startDateText, string? endDateText, string? note)
     {

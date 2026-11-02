@@ -255,6 +255,7 @@
                             <Button x:Name="correctParentKindButton" Content="更正父母关系类型" Click="CorrectParentKind_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="新增婚配" Click="TargetShortcut_AddFamilyUnion_Click" Margin="0,0,0,4" Padding="6,2"/>
                             <Button x:Name="editFamilyUnionDetailsButton" Content="编辑婚配资料" Click="EditFamilyUnionDetails_Click" Margin="0,0,5,4" Padding="6,2"/>
+                            <Button x:Name="correctUnionKindButton" Content="更正婚配类型" Click="CorrectUnionKind_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button x:Name="completeUnionPartnerButton" Content="补全婚配对方" Click="CompleteUnionPartner_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="解除关系/婚配" Click="TargetShortcut_RemoveLink_Click" Margin="0,0,0,4" Padding="6,2"/>
                         </WrapPanel>

@@ -498,6 +498,22 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show($"保存婚配资料失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
+    private async void CorrectUnionKind_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var candidates = (await _genealogyViewModel!.GetTargetLinkRemovalCandidatesAsync())
+                .Where(c => c.Kind == TargetLinkRemovalKind.FamilyUnion).ToList();
+            if (candidates.Count == 0) { MessageBox.Show("当前人物没有可更正的婚配。", "提示"); return; }
+            var dialog = new UnionKindCorrectionDialog(candidates) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.SelectedCandidate is not { } candidate || dialog.NewKind is not { } kind) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.CorrectFamilyUnionKindAsync(candidate, kind); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"更正婚配类型失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async void CompleteUnionPartner_Click(object sender, RoutedEventArgs e)
     {
         try

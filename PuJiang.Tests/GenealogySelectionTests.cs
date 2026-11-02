@@ -15,6 +15,61 @@ public class GenealogySelectionTests
     [InlineData(false)]
     [InlineData(true)]
     [Trait("Category", "Integration")]
+    public async Task Union_kind_correction_preserves_data_and_rejects_conflicts(bool unknownPartner)
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.NewPersonName = "对方"; await vm.AddPersonAsync();
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        var subject = vm.SelectedPerson.Id;
+        Guid? partner = unknownPartner ? null : vm.People.Single(p => p.Name == "对方").Id;
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Marriage, partner, "始", "止", "备注", unknownPartner);
+        var original = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectFamilyUnionKindAsync(original, FamilyUnionKind.Marriage));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectFamilyUnionKindAsync(original, (FamilyUnionKind)99));
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.CorrectFamilyUnionKindAsync(Guid.NewGuid(), original.UnionSnapshot!, subject,
+                original.FirstName, original.SecondName, original.UnlinkGeneration, FamilyUnionKind.Partnership));
+            await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = subject, PartnerTwoId = partner, Kind = FamilyUnionKind.Partnership });
+        }
+        var duplicates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        var conflict = duplicates.Single(c => c.Id == original.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectFamilyUnionKindAsync(conflict, FamilyUnionKind.Partnership));
+        await vm.RemoveTargetLinkAsync(duplicates.Single(c => c.Id != original.Id));
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => vm.CorrectFamilyUnionKindAsync(original, FamilyUnionKind.Unknown));
+        await using (var context = database.CreateContext())
+            await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailUnionKind BEFORE UPDATE ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'test'); END");
+        var failureCandidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await Assert.ThrowsAnyAsync<Exception>(() => vm.CorrectFamilyUnionKindAsync(failureCandidate, FamilyUnionKind.Unknown));
+        await using (var context = database.CreateContext())
+        {
+            Assert.Equal(FamilyUnionKind.Marriage, (await context.FamilyUnions.AsNoTracking().SingleAsync()).Kind);
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER FailUnionKind");
+        }
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        vm.SelectedPerson = null;
+        vm.SelectedPerson = vm.People.Single(p => p.Id == subject);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectFamilyUnionKindAsync(candidate, FamilyUnionKind.Unknown));
+        await vm.CorrectFamilyUnionKindAsync((await vm.GetTargetLinkRemovalCandidatesAsync()).Single(), FamilyUnionKind.Unknown);
+        await using var verify = database.CreateContext();
+        var saved = await verify.FamilyUnions.AsNoTracking().SingleAsync();
+        Assert.Equal(original.Id, saved.Id); Assert.Equal(original.UnionSnapshot!.PartnerOneId, saved.PartnerOneId);
+        Assert.Equal(original.UnionSnapshot.PartnerTwoId, saved.PartnerTwoId);
+        Assert.Equal(FamilyUnionKind.Unknown, saved.Kind); Assert.Equal("始", saved.StartDateText);
+        Assert.Equal("止", saved.EndDateText); Assert.Equal("备注", saved.Note);
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
     public async Task Complete_unknown_union_preserves_identity_and_rejects_invalid_changes(bool reverseOrder)
     {
         await using var database = new TestDatabase();
