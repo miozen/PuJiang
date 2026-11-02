@@ -358,18 +358,16 @@ public partial class MainWindow : Window
 
     private async void DeleteTargetPerson_Click(object sender, RoutedEventArgs e)
     {
-        var person = _genealogyViewModel?.SelectedPerson;
-        if (person == null)
+        try
         {
-            MessageBox.Show("请先选择人物。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
+            var preview = await _genealogyViewModel!.GetPersonDeletePreviewAsync();
+            var dialog = new PersonDeletePreviewDialog(preview) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.DeletePersonFromPreviewAsync(preview); }
+            finally { genealogyPanel.IsEnabled = true; }
         }
-        if (MessageBox.Show($"确定删除人物“{person.Name}”吗？此操作无法撤销；有关联关系的人物不能删除。",
-                "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-        genealogyPanel.IsEnabled = false;
-        try { await _genealogyViewModel!.DeleteUnrelatedPersonAsync(); }
         catch (Exception ex) { MessageBox.Show($"删除人物失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
-        finally { genealogyPanel.IsEnabled = true; }
     }
 
     private async void SavePersonProfile_Click(object sender, RoutedEventArgs e)

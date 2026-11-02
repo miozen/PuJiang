@@ -13,6 +13,49 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Person_delete_preview_blocks_links_and_stale_or_switched_selection()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var firstGenealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.NewPersonName = "对方"; await vm.AddPersonAsync();
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        var subject = vm.SelectedPerson.Id;
+        var other = vm.People.Single(p => p.Name == "对方").Id;
+        var empty = await vm.GetPersonDeletePreviewAsync();
+        Assert.Empty(empty.Links);
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = firstGenealogy.Id, PersonId = subject, RelatedPersonId = other, Kind = PersonRelationshipKind.Spouse });
+            await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = firstGenealogy.Id, PartnerOneId = subject, PartnerTwoId = other, Kind = FamilyUnionKind.Marriage });
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.DeletePersonFromPreviewAsync(empty));
+        var linked = await vm.GetPersonDeletePreviewAsync();
+        Assert.Equal(2, linked.Links.Count);
+        Assert.Contains(linked.Links, link => link.Kind == TargetLinkRemovalKind.Relationship);
+        Assert.Contains(linked.Links, link => link.Kind == TargetLinkRemovalKind.FamilyUnion);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.DeletePersonFromPreviewAsync(linked));
+        var relation = linked.Links.Single(link => link.Kind == TargetLinkRemovalKind.Relationship);
+        await vm.RemoveTargetLinkAsync(relation);
+        await vm.RemoveTargetLinkAsync((await vm.GetTargetLinkRemovalCandidatesAsync()).Single());
+        var fresh = await vm.GetPersonDeletePreviewAsync();
+        Assert.Empty(fresh.Links);
+        vm.NewName = "乙谱"; await vm.CreateAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.DeletePersonFromPreviewAsync(fresh));
+        await vm.SelectAsync(vm.Genealogies.Single(g => g.Id == firstGenealogy.Id));
+        vm.SelectedPerson = vm.People.Single(p => p.Id == subject);
+        await vm.DeletePersonFromPreviewAsync(await vm.GetPersonDeletePreviewAsync());
+        await using var verify = database.CreateContext();
+        Assert.False(await verify.People.AnyAsync(p => p.Id == subject));
+        Assert.True(await verify.People.AnyAsync(p => p.Id == other));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Delete_branch_reassigns_contents_and_rolls_back_on_failure()
     {
         await using var database = new TestDatabase();

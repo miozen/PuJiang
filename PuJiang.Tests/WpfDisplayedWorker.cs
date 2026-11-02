@@ -64,6 +64,44 @@ internal static class WpfDisplayedWorker
         await genealogy.CreateAsync();
         genealogy.NewPersonName = "搜索验收人物";
         await genealogy.AddPersonAsync();
+        var originalPerson = genealogy.People.Single().Id;
+        genealogy.NewPersonName = "临时删除人物";
+        await genealogy.AddPersonAsync();
+        var temporaryPerson = genealogy.People.Single(p => p.Name == "临时删除人物").Id;
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == temporaryPerson);
+        await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.Spouse, originalPerson, null, null);
+        await ShowPersonDeletePreviewAsync(expectBlocked: true, confirm: false);
+        var link = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await genealogy.RemoveTargetLinkAsync(link);
+        await ShowPersonDeletePreviewAsync(expectBlocked: false, confirm: false);
+        if (!genealogy.People.Any(p => p.Id == temporaryPerson)) throw new InvalidOperationException("取消删除后人物消失。");
+        await ShowPersonDeletePreviewAsync(expectBlocked: false, confirm: true);
+        if (genealogy.People.Any(p => p.Id == temporaryPerson)) throw new InvalidOperationException("确认删除后人物仍存在。");
+
+        async Task ShowPersonDeletePreviewAsync(bool expectBlocked, bool confirm)
+        {
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<PersonDeletePreviewDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                var button = (System.Windows.Controls.Button)dialog.FindName("DeleteButton");
+                var list = (System.Windows.Controls.ListBox)dialog.FindName("LinkList");
+                if (button.IsEnabled == expectBlocked || (list.Items.Count > 0) != expectBlocked)
+                    failure = new InvalidOperationException("删除预览的关联或确认状态错误。");
+                if (confirm) button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                else dialog.Close();
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("previewPersonDeleteButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var deadline = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && deadline.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(20);
+            timer.Stop();
+            if (failure is not null) throw failure;
+            if (!panel.IsEnabled || main.OwnedWindows.OfType<PersonDeletePreviewDialog>().Any(w => w.IsVisible)) throw new TimeoutException("删除预览未完成。");
+        }
         var search = (System.Windows.Controls.TextBox)main.FindName("personSearchText");
         var results = (System.Windows.Controls.ComboBox)main.FindName("personSearchResults");
         var locate = (System.Windows.Controls.Button)main.FindName("locatePersonButton");

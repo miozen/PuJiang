@@ -449,6 +449,16 @@ public sealed class GenealogyDataService
             throw new InvalidOperationException("人物不存在、已不属于当前族谱，或仍有关联关系，无法删除。");
     }
 
+    public async Task DeleteUnrelatedPersonConfirmedAsync(Guid genealogyId, Guid personId, string expectedName, long generation, CancellationToken cancellationToken = default)
+    {
+        var count = await _context.People.Where(p => p.GenealogyId == genealogyId && p.Id == personId && p.Name == expectedName)
+            .Where(p => !_context.PersonRelationships.Any(r => r.GenealogyId == genealogyId && (r.PersonId == p.Id || r.RelatedPersonId == p.Id)))
+            .Where(p => !_context.FamilyUnions.Any(u => u.GenealogyId == genealogyId && (u.PartnerOneId == p.Id || u.PartnerTwoId == p.Id)))
+            .Where(p => _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == generation))
+            .ExecuteDeleteAsync(cancellationToken);
+        if (count == 0) throw new InvalidOperationException("人物或关联已变化，请重新预览。");
+    }
+
     public async Task<PersonRelationship> AddRelationshipAsync(PersonRelationship relationship, CancellationToken cancellationToken = default)
     {
         await new PersonRelationshipValidator(_context).ValidateForCreateAsync(relationship, cancellationToken);

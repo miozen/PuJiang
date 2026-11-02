@@ -13,6 +13,7 @@ public sealed record GenealogyImportHistory(GenealogyGraphInfo Genealogy, IReadO
 public sealed record BranchDeleteCandidate(Guid GenealogyId, GenealogyBranchData Branch, BranchChoice Choice, int SelectionVersion);
 public sealed record BranchMoveCandidate(Guid GenealogyId, GenealogyBranchData Source, GenealogyBranchData? Target, BranchChoice SourceChoice, BranchChoice? TargetChoice, int SelectionVersion);
 public sealed record BranchReassignmentCandidate(NonEmptyBranchSnapshot Snapshot, BranchChoice Choice, int SelectionVersion);
+public sealed record PersonDeletePreview(Guid GenealogyId, Guid PersonId, string PersonName, int SelectionVersion, int PersonSelectionVersion, long Generation, IReadOnlyList<TargetLinkRemovalCandidate> Links);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -536,6 +537,34 @@ public partial class GenealogySelectionViewModel : ObservableObject
             EditedSex, EditedBirthDate, EditedDeathDate, EditedBiography);
         if (version == _selectionVersion && SelectedGenealogy?.Id == genealogy.Id)
             await SelectAsync(genealogy);
+    }
+
+    public async Task<PersonDeletePreview> GetPersonDeletePreviewAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        var version = _selectionVersion;
+        var personVersion = _candidatePersonSelectionVersion;
+        var snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
+        var links = await GetTargetLinkRemovalCandidatesAsync();
+        var current = snapshot.People.SingleOrDefault(p => p.Id == person.Id) ?? throw new InvalidOperationException("人物已不存在。");
+        if (version != _selectionVersion || personVersion != _candidatePersonSelectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id ||
+            links.Any(link => link.UnlinkGeneration != snapshot.UnlinkGeneration))
+            throw new InvalidOperationException("选择或数据已变化，请重新预览。");
+        return new PersonDeletePreview(genealogy.Id, person.Id, current.Name, version, personVersion, snapshot.UnlinkGeneration, links);
+    }
+
+    public async Task DeletePersonFromPreviewAsync(PersonDeletePreview preview)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (preview.Links.Count != 0 || preview.SelectionVersion != _selectionVersion || preview.PersonSelectionVersion != _candidatePersonSelectionVersion ||
+            SelectedGenealogy?.Id != preview.GenealogyId || SelectedPerson?.Id != preview.PersonId)
+            throw new InvalidOperationException("选择或关联已变化，请重新预览。");
+        await using var context = _createContext();
+        await new GenealogyDataService(context).DeleteUnrelatedPersonConfirmedAsync(preview.GenealogyId, preview.PersonId, preview.PersonName, preview.Generation);
+        if (preview.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != preview.GenealogyId) return;
+        try { await SelectAsync(SelectedGenealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == preview.GenealogyId) Status = $"人物已删除，但刷新失败：{ex.Message}"; }
     }
 
     public async Task DeleteUnrelatedPersonAsync()
