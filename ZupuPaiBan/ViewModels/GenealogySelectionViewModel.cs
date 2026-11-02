@@ -19,6 +19,30 @@ public partial class GenealogySelectionViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<Genealogy> _genealogies = new();
     [ObservableProperty] private Genealogy? _selectedGenealogy;
     [ObservableProperty] private ObservableCollection<Person> _people = new();
+    [ObservableProperty] private string _searchText = string.Empty;
+    [ObservableProperty] private ObservableCollection<Person> _searchResults = new();
+    [ObservableProperty] private Person? _selectedSearchResult;
+
+    partial void OnSearchTextChanged(string value) => UpdateSearchResults();
+    partial void OnPeopleChanged(ObservableCollection<Person> value) => UpdateSearchResults();
+
+    private void UpdateSearchResults()
+    {
+        SelectedSearchResult = null;
+        var query = SearchText.Trim();
+        SearchResults = new ObservableCollection<Person>(query.Length == 0 || SelectedGenealogy is null
+            ? Array.Empty<Person>()
+            : People.Where(p => p.GenealogyId == SelectedGenealogy.Id && p.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    public TargetMemberTreeNode GetSearchResultNode(Person result)
+    {
+        if (SelectedGenealogy is null || !SearchResults.Any(p => ReferenceEquals(p, result)) ||
+            result.GenealogyId != SelectedGenealogy.Id)
+            throw new InvalidOperationException("搜索结果已失效，请重新搜索。");
+        return TargetTree.SingleOrDefault(node => node.PersonId == result.Id)
+            ?? throw new InvalidOperationException("人物已变化，请重新加载族谱。");
+    }
     [ObservableProperty] private ObservableCollection<TargetMemberTreeNode> _targetTree = new();
     [ObservableProperty] private ObservableCollection<Person> _biologicalChildren = new();
     [ObservableProperty] private Person? _selectedBiologicalChild;
@@ -144,6 +168,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
         BiologicalChildren.Clear();
         ChildrenStatus = "请选择人物查看生物子女";
         People.Clear();
+        UpdateSearchResults();
         TargetTree.Clear();
         if (genealogy == null)
         {

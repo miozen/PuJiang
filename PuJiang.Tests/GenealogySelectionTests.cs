@@ -13,6 +13,43 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Search_finds_current_genealogy_namesakes_and_rejects_stale_results()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var first = vm.SelectedGenealogy!;
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            await service.AddPersonAsync(new Person { GenealogyId = first.Id, Name = "张同名" });
+            await service.AddPersonAsync(new Person { GenealogyId = first.Id, Name = "张同名" });
+        }
+        await vm.SelectAsync(first);
+        vm.SearchText = " 同名 ";
+        Assert.Equal(2, vm.SearchResults.Count);
+        var stale = vm.SearchResults[0];
+        Assert.Equal(stale.Id, vm.GetSearchResultNode(stale).PersonId);
+        vm.SearchText = "没有匹配";
+        Assert.Empty(vm.SearchResults);
+        Assert.Throws<InvalidOperationException>(() => vm.GetSearchResultNode(stale));
+        vm.SearchText = "同名";
+        stale = vm.SearchResults[0];
+        vm.NewName = "乙谱";
+        await vm.CreateAsync();
+        Assert.Empty(vm.SearchResults);
+        Assert.Throws<InvalidOperationException>(() => vm.GetSearchResultNode(stale));
+        vm.NewPersonName = "张同名";
+        await vm.AddPersonAsync();
+        Assert.Single(vm.SearchResults);
+        Assert.Equal(vm.SelectedGenealogy!.Id, vm.SearchResults[0].GenealogyId);
+        vm.SearchText = " ";
+        Assert.Empty(vm.SearchResults);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Target_shortcuts_resolve_selected_person_by_id_and_reject_missing_or_foreign_selection()
     {
         await using var database = new TestDatabase();

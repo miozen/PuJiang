@@ -286,6 +286,23 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private void LocatePerson_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var result = _genealogyViewModel?.SelectedSearchResult
+                ?? throw new InvalidOperationException("请先选择搜索结果。");
+            var node = _genealogyViewModel!.GetSearchResultNode(result);
+            targetTree.UpdateLayout();
+            if (targetTree.ItemContainerGenerator.ContainerFromItem(node) is not TreeViewItem item)
+                throw new InvalidOperationException("无法定位人物，请重新加载族谱。");
+            item.IsSelected = true;
+            item.BringIntoView();
+            item.Focus();
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "人物定位", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
     private async void TargetPerson_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_genealogyViewModel == null) return;

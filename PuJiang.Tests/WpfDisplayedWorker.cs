@@ -58,6 +58,25 @@ internal static class WpfDisplayedWorker
         while (!main.IsEnabled && deadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
         if (!main.IsEnabled) throw new TimeoutException("主窗口未完成初始化。");
 
+        var panel = (System.Windows.Controls.GroupBox)main.FindName("genealogyPanel");
+        var genealogy = (GenealogySelectionViewModel)panel.DataContext;
+        genealogy.NewName = "搜索验收谱";
+        await genealogy.CreateAsync();
+        genealogy.NewPersonName = "搜索验收人物";
+        await genealogy.AddPersonAsync();
+        var search = (System.Windows.Controls.TextBox)main.FindName("personSearchText");
+        var results = (System.Windows.Controls.ComboBox)main.FindName("personSearchResults");
+        var locate = (System.Windows.Controls.Button)main.FindName("locatePersonButton");
+        var tree = (System.Windows.Controls.TreeView)main.FindName("targetTree");
+        search.Text = "验收人物";
+        if (results.Items.Count != 1) throw new InvalidOperationException("姓名搜索未显示结果。");
+        results.SelectedIndex = 0;
+        main.UpdateLayout();
+        locate.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (tree.SelectedItem is not TargetMemberTreeNode selected || selected.PersonId != genealogy.People.Single().Id ||
+            genealogy.SelectedPerson?.Id != selected.PersonId)
+            throw new InvalidOperationException("搜索定位未选中目标人物。");
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();
