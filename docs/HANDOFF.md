@@ -7,12 +7,12 @@
 - **Remote Sync：** 本轮开始时本地和实际远端 `dev` 均为 `5561142`；GitHub Actions run `41365972192` 为 `success`。后续仍须核对实际远端。
 - **Current Phase：** P0 — 开发基础与数据模型。
 - **Current Task：** P0 按谱代数候选切换评审；自动合并和生产恢复继续关闭。
-- **Last Completed：** 已独立评审候选切换条件，结论是尚不具备直接切换条件；策略标识、同一读事务、单条删除 guard、切换/回退及验收要求见[架构](ARCHITECTURE.md)。生产解除候选仍为全库代数。详见[V1 实现设计](SCOPED_UNLINK_GENERATION_V1_DESIGN.md)。
+- **Last Completed：** CI 增加纯 Markdown 文档变更的路径过滤，混合非文档改动仍运行；按谱候选独立评审结论见[架构](ARCHITECTURE.md)。生产解除候选仍为全库代数。详见[V1 实现设计](SCOPED_UNLINK_GENERATION_V1_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
-- **Validation Performed：** 本轮审阅生产候选读取/删除、按谱 V1 SQL 与隔离验收；`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-restore --no-build --filter "(FullyQualifiedName~ScopedGenerationPrototypeTests|FullyQualifiedName~ScopedUnlinkGenerationV1IntegrationTests)&Category!=Performance&Category!=UI"` 55/55 通过。日常测试沿用前轮 281/281；本轮未重跑 UI 或日常全套。未访问正式用户数据库，未启动生产恢复。
+- **Validation Performed：** 本轮对照 GitHub Actions 文档审阅路径过滤和 diff；未运行应用测试。此前按谱隔离测试 55/55、日常测试 281/281；未访问正式用户数据库，未启动生产恢复。
 - **Validation Pending：** 本轮提交后的 CI；按谱候选读取/解除正式切换尚未实施或获批；完整备份包、生产恢复、完整图读取性能及预检清理本身失败或进程终止仍未验证。
 - **Known Issues / Blockers：** 全库代数造成无关变更也需重新确认；不能防护第三方有意篡改代数或替换数据库；未来重建受保护表的 Migration 必须显式重建触发器；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 核对本轮 CI；继续 P0，细化可审阅的按谱候选策略标识、同一读事务和单条删除 guard、切换/回退及隔离验收方案；未经明确授权不得切换生产候选，生产仍用全库代数，自动合并和生产恢复关闭。
+- **Exact Next Action：** 核对本轮 CI 配置变更的远端执行；继续 P0，细化可审阅的按谱候选策略标识、同一读事务和单条删除 guard、切换/回退及隔离验收方案；未经明确授权不得切换生产候选，生产仍用全库代数，自动合并和生产恢复关闭。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力
