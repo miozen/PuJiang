@@ -105,9 +105,18 @@
                     <TextBox Width="160" Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}"/>
                     <Button Content="创建族谱" Click="CreateGenealogy_Click" Margin="5,0,15,0" Padding="8,2"/>
                     <TextBlock Text="当前族谱：" VerticalAlignment="Center"/>
-                    <ComboBox x:Name="genealogySelector" Width="180" ItemsSource="{Binding Genealogies}"
-                              DisplayMemberPath="Name" SelectedItem="{Binding SelectedGenealogy}"
-                              SelectionChanged="GenealogySelector_SelectionChanged"/>
+                    <ComboBox x:Name="genealogySelector" Width="460" ItemsSource="{Binding Genealogies}"
+                              SelectedItem="{Binding SelectedGenealogy}" SelectionChanged="GenealogySelector_SelectionChanged">
+                        <ComboBox.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal">
+                            <TextBlock Width="120" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                            <TextBlock Text=" ID: "/><TextBlock Text="{Binding Id}"/>
+                        </StackPanel></DataTemplate></ComboBox.ItemTemplate>
+                    </ComboBox>
+                </WrapPanel>
+                <WrapPanel Margin="0,5,0,0">
+                    <TextBlock Text="当前族谱新名称：" VerticalAlignment="Center"/>
+                    <TextBox x:Name="renameGenealogyName" Width="160" MaxLength="200" Text="{Binding RenamedGenealogyName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button x:Name="renameGenealogyButton" Content="重命名族谱" Click="RenameGenealogy_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="人物姓名：" VerticalAlignment="Center"/>

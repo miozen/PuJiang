@@ -21,6 +21,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     [ObservableProperty] private ObservableCollection<Genealogy> _genealogies = new();
     [ObservableProperty] private Genealogy? _selectedGenealogy;
+    [ObservableProperty] private string _renamedGenealogyName = string.Empty;
+    partial void OnSelectedGenealogyChanged(Genealogy? value) => RenamedGenealogyName = value?.Name ?? string.Empty;
     [ObservableProperty] private ObservableCollection<Person> _people = new();
     [ObservableProperty] private ObservableCollection<GenealogyBranchData> _branches = new();
     [ObservableProperty] private string _newBranchName = string.Empty;
@@ -278,6 +280,21 @@ public partial class GenealogySelectionViewModel : ObservableObject
         NewName = string.Empty;
         SelectedGenealogy = Genealogies.Single(g => g.Id == genealogy.Id);
         await SelectAsync(SelectedGenealogy);
+    }
+
+    public async Task RenameGenealogyAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var selected = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var version = _selectionVersion;
+        var originalName = selected.Name;
+        await using var context = _createContext();
+        var name = await new GenealogyDataService(context).RenameGenealogyAsync(selected.Id, originalName, RenamedGenealogyName);
+        foreach (var item in Genealogies.Where(item => item.Id == selected.Id)) item.Name = name;
+        if (version != _selectionVersion || SelectedGenealogy?.Id != selected.Id) return;
+        SelectedGenealogy.Name = name;
+        RenamedGenealogyName = name;
+        Status = $"当前族谱：{name}，{People.Count} 位人物";
     }
 
     public async Task SelectAsync(Genealogy? genealogy)

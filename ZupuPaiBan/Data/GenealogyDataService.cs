@@ -57,6 +57,18 @@ public sealed class GenealogyDataService
         return genealogy;
     }
 
+    public async Task<string> RenameGenealogyAsync(Guid genealogyId, string expectedName, string? name,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = name?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 200)
+            throw new InvalidOperationException("族谱名称须为 1 至 200 个字符。");
+        var count = await _context.Genealogies.Where(g => g.Id == genealogyId && g.Name == expectedName)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(g => g.Name, normalized), cancellationToken);
+        if (count == 0) throw new InvalidOperationException("族谱已变化或不存在，请重新选择。");
+        return normalized;
+    }
+
     public async Task CreateRootBranchAsync(Guid genealogyId, string? name, CancellationToken cancellationToken = default)
     {
         var normalized = name?.Trim();

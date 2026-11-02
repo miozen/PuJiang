@@ -210,6 +210,14 @@ public partial class MainWindow : Window
         catch (Exception ex) { _genealogyViewModel.Status = $"加载人物失败：{ex.Message}"; }
     }
 
+    private async void RenameGenealogy_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.RenameGenealogyAsync(); }
+        catch (Exception ex) { MessageBox.Show($"重命名族谱失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void AddPerson_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;

@@ -13,6 +13,56 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Genealogy_rename_uses_id_and_original_name_preserving_selection_and_data()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        Guid firstId, secondId;
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var first = await service.CreateGenealogyAsync(new Genealogy { Name = "同名谱", Surname = "甲", Description = "保留" });
+            var second = await service.CreateGenealogyAsync(new Genealogy { Name = "同名谱", Surname = "乙" });
+            firstId = first.Id; secondId = second.Id;
+            await service.AddPersonAsync(new Person { GenealogyId = firstId, Name = "甲人物" });
+            await service.AddPersonAsync(new Person { GenealogyId = secondId, Name = "乙人物" });
+        }
+        var vm = new GenealogySelectionViewModel(database.CreateContext);
+        await vm.LoadAsync();
+        await vm.SelectAsync(vm.Genealogies.Single(g => g.Id == firstId));
+        vm.RenamedGenealogyName = " ";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RenameGenealogyAsync());
+        vm.RenamedGenealogyName = new string('谱', 201);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RenameGenealogyAsync());
+        vm.RenamedGenealogyName = "新名称";
+        await vm.RenameGenealogyAsync();
+        Assert.Equal(firstId, vm.SelectedGenealogy!.Id);
+        Assert.Equal("新名称", vm.SelectedGenealogy.Name);
+        Assert.Equal("甲人物", vm.People.Single().Name);
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            Assert.Equal("同名谱", (await context.Genealogies.SingleAsync(g => g.Id == secondId)).Name);
+            await service.RenameGenealogyAsync(firstId, "新名称", "外部更名");
+        }
+        vm.RenamedGenealogyName = "陈旧提交";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RenameGenealogyAsync());
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameGenealogyAsync(Guid.NewGuid(), "不存在", "误写"));
+            var first = await context.Genealogies.SingleAsync(g => g.Id == firstId);
+            Assert.Equal("外部更名", first.Name);
+            Assert.Equal("甲", first.Surname);
+            Assert.Equal("保留", first.Description);
+            Assert.Equal(2, await context.People.CountAsync());
+            await service.RenameGenealogyAsync(firstId, "外部更名", "同名谱");
+            Assert.Equal(2, await context.Genealogies.CountAsync(g => g.Name == "同名谱"));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Existing_union_details_preserve_identity_and_reject_stale_foreign_and_invalid_requests()
     {
         await using var database = new TestDatabase();

@@ -356,6 +356,52 @@ internal static class WpfDisplayedWorker
             if (failure is not null) throw failure;
         }
 
+        var originalGenealogyId = genealogy.SelectedGenealogy!.Id;
+        Guid duplicateId;
+        await using (var duplicateContext = coordinator.CreateContext())
+        {
+            var duplicate = await new GenealogyDataService(duplicateContext).CreateGenealogyAsync(
+                new ZupuPaiBan.Models.Genealogy { Name = "搜索验收谱" });
+            duplicateId = duplicate.Id;
+        }
+        await genealogy.LoadAsync();
+        var genealogySelector = (System.Windows.Controls.ComboBox)main.FindName("genealogySelector");
+        if (genealogySelector.Items.Cast<ZupuPaiBan.Models.Genealogy>().Count(g => g.Name == "搜索验收谱") != 2 ||
+            genealogySelector.ItemTemplate is null)
+            throw new InvalidOperationException("同名族谱未作为独立项显示。");
+        var itemTemplate = (System.Windows.Controls.StackPanel)genealogySelector.ItemTemplate.LoadContent();
+        if (System.Windows.Data.BindingOperations.GetBinding((System.Windows.Controls.TextBlock)itemTemplate.Children[2],
+                System.Windows.Controls.TextBlock.TextProperty)?.Path.Path != "Id")
+            throw new InvalidOperationException("族谱选择项未显示稳定 ID。");
+        genealogySelector.SelectedItem = genealogy.Genealogies.Single(g => g.Id == originalGenealogyId);
+        var selectDeadline = Stopwatch.StartNew();
+        while ((genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.People.Count != 2) && selectDeadline.Elapsed < TimeSpan.FromSeconds(10))
+            await Task.Delay(20);
+        if (genealogy.People.Count != 2) throw new TimeoutException("选择族谱后未载入人物。");
+        ((System.Windows.Controls.TextBox)main.FindName("renameGenealogyName")).Text = "搜索验收谱已更名";
+        ((System.Windows.Controls.Button)main.FindName("renameGenealogyButton"))
+            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        var renameDeadline = Stopwatch.StartNew();
+        while (!panel.IsEnabled && renameDeadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (!panel.IsEnabled || genealogy.SelectedGenealogy?.Id != originalGenealogyId ||
+            genealogy.SelectedGenealogy.Name != "搜索验收谱已更名" || genealogy.People.Count != 2 ||
+            genealogy.Genealogies.Single(g => g.Id == duplicateId).Name != "搜索验收谱")
+            throw new InvalidOperationException("族谱重命名未保持目标选择或影响了同名族谱。");
+        await genealogy.LoadAsync();
+        genealogySelector.SelectedItem = genealogy.Genealogies.Single(g => g.Id == originalGenealogyId);
+        var reloadDeadline = Stopwatch.StartNew();
+        while ((genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.People.Count != 2) && reloadDeadline.Elapsed < TimeSpan.FromSeconds(10))
+            await Task.Delay(20);
+        if (genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.SelectedGenealogy.Name != "搜索验收谱已更名" || genealogy.People.Count != 2)
+            throw new InvalidOperationException("重载后族谱选择或人物不正确。");
+        await using (var verifyRename = coordinator.CreateContext())
+        {
+            if (await verifyRename.PersonRelationships.CountAsync(r => r.GenealogyId == originalGenealogyId) != 1 ||
+                await verifyRename.FamilyUnions.CountAsync(u => u.GenealogyId == originalGenealogyId) != 1 ||
+                await verifyRename.FamilyBranches.CountAsync(b => b.GenealogyId == originalGenealogyId) != 4)
+                throw new InvalidOperationException("族谱重命名改变了原有图数据。");
+        }
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();
