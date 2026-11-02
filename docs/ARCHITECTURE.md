@@ -114,7 +114,6 @@
 
 ## Windows 构建、测试与发布
 
-- 在 Windows 原生环境使用 .NET 10 SDK 执行 `dotnet restore PuJiang.slnx`、`dotnet build PuJiang.slnx --no-restore --configuration Release`，以及日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance"`。
-- GitHub Actions 位于 `.github/workflows/ci.yml`，使用 `windows-latest` 和相同入口；远端尚未验证前不得宣称 CI 已通过。
+- Windows 的本地构建、日常测试和独立远端 CI 验证按[开发验证规范](OPERATIONS.md#本地验证与远端-ci)执行；CI 的实际配置见 `.github/workflows/ci.yml`。
 - 自动化测试以测试专用临时 SQLite 路径运行；不得启动会写入真实用户文档目录数据库的应用验证。
 - 正式发布目标是 `win-x64` self-contained；安装包、签名和自动更新仍待 P4。正式发布前需验证干净 Windows 环境的安装、首次迁移、离线运行和打印/PDF 输出。

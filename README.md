@@ -46,7 +46,7 @@ ZupuPaiBan/
 ```powershell
 dotnet restore PuJiang.slnx
 dotnet build PuJiang.slnx --no-restore --configuration Release
-dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance"
+dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --configuration Release --filter "Category!=Performance&Category!=UI"
 ```
 
 开发或人工验收启动时必须使用独立测试数据目录，操作步骤见 [开发、数据安全与发布规范](docs/OPERATIONS.md#数据与日志目录)。程序正常启动默认使用用户本地数据目录，而不是程序安装目录。

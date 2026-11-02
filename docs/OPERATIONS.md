@@ -1,18 +1,22 @@
 # 开发、数据安全与发布规范
 
-## 本地入口
+## 本地验证与远端 CI
 
-在 Windows 与 .NET SDK 10.0.402 上执行：
+采用本地验证优先、远端 CI 独立验收。代码修改的最终本地验证在 Windows 原生环境使用满足 `global.json` 的 .NET SDK，在仓库根目录按当前 [.github/workflows/ci.yml](../.github/workflows/ci.yml) 执行与 CI 等效的 Release 解决方案构建和日常测试：
 
 ```powershell
 dotnet restore PuJiang.slnx
-dotnet tool restore
 dotnet build PuJiang.slnx --no-restore --configuration Release
-dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance&Category!=UI"
-dotnet publish ZupuPaiBan/ZupuPaiBan.csproj -c Release -r win-x64 --self-contained true
+dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --configuration Release --filter "Category!=Performance&Category!=UI" --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
 ```
 
-CI 使用相同 restore/build/test 入口。`Performance` 与显示窗口的 `UI` 测试须分别使用 `--filter "Category=Performance"` 和 `--filter "Category=UI"` 显式运行；人工 UI 验收另行记录。
+首次使用、新电脑、还原产物缺失或失效，以及依赖、项目文件、目标框架、SDK、NuGet 源或影响还原的配置发生变化时，先重新执行 `dotnet restore`；仅在已有有效还原产物与当前配置相符时可跳过重复还原。`--no-build` 仅用于当前源码和相同 Release 配置已成功完成解决方案构建之后，不得复用陈旧构建。`dotnet tool restore` 仅在需要仓库本地工具时执行；`dotnet publish` 属于发布专项，不是每轮日常验证。
+
+本地构建或测试失败时先定位并修复，再重新运行受影响验证；若环境或其他阻塞使验证无法完成，记录实际失败与未验证范围，不得宣称任务完成。纯文档或其他不影响程序的修改按实际范围检查文档和 Git diff，不要求应用构建测试。
+
+本地验证通过后，可依据既有 Git 授权提交并继续工作，无需每轮等待远端。GitHub Actions 继续独立运行；阶段验收、PR 合并和重要里程碑必须确认对应提交的远端 CI 已通过。远端失败须优先定位环境差异或真实回归，不得删除测试、放宽断言或忽略失败以获得通过。对于纯文档变更，工作流可能按路径过滤跳过，应报告为未触发/未验证，不得标为远端通过；若该提交恰是阶段或 PR 验收对象，须先明确并验证该验收适用的代码提交与远端检查，不能把被跳过的检查当作通过。
+
+每次报告分别标明本地通过、远端通过、远端运行中或未验证；发生失败时直接报告失败、原因及受影响提交。`Performance` 和 `UI` 测试须分别使用 `--filter "Category=Performance"` 和 `--filter "Category=UI"` 显式运行；人工 UI 验收另行记录。本地或远端日常测试均不能替代这些专项验收。
 
 ## 跨电脑接力
 
@@ -34,10 +38,10 @@ CI 使用相同 restore/build/test 入口。`Performance` 与显示窗口的 `UI
 
 4. 验证实际同步：`git status --short --branch`、`git rev-parse HEAD`、`git rev-parse origin/dev`；必要时用 `git ls-remote origin refs/heads/dev` 核对实际远端。如果获取失败、本地有独有提交或哈希不一致，先报告差异；本地 `origin/dev` 是上次获取的引用，不等于实时远端。
 5. 按 [AI 开发协议](../AGENTS.md) 依次阅读 [接力状态](HANDOFF.md)、[当前计划](CURRENT_PLAN.md)、与任务有关的 [架构契约](ARCHITECTURE.md) 及 [决策契约](DECISIONS.md)。检查源码、测试与接力是否一致，再执行 `HANDOFF.md` 的 **Exact Next Action**；当前状态以这些文件和 Git 核实结果为准。
-6. 在仓库根目录执行 `dotnet restore PuJiang.slnx`、`dotnet build PuJiang.slnx --no-restore --configuration Release`、`dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance&Category!=UI"`。UI 和 Performance 测试须显式单独执行；不要把跳过或未运行的测试及人工 UI 验收报告为通过。迁移工具检查需要时再执行 `dotnet tool restore`；Windows 日常测试中的进程级用例需要 `dotnet` 和 Windows PowerShell 可执行文件。
+6. 按[本地验证与远端 CI](#本地验证与远端-ci)在新电脑还原、构建和测试；UI、Performance 与人工 UI 验收分别记录。迁移工具检查需要时再执行 `dotnet tool restore`；Windows 日常测试中的进程级用例需要 `dotnet` 和 Windows PowerShell 可执行文件。
 7. Git 只同步已提交的文件；`.gitignore` 排除 `artifacts/`、常见数据库、日志和构建产物，但并不保证忽略所有附件或任意位置的测试数据，暂存前必须检查。正式用户数据位于仓库外，新电脑不会通过源码同步自动获得本机数据库、附件或配置。真实数据的迁移和恢复须单独安排；当前数据库专用备份包不含附件、配置，且正式恢复尚未实现。开发启动必须使用新的独立测试目录，详见下节。
 
-每次检查点的提交、推送和实际远端结果必须分开核实；验收通过后的同步按 [AI 开发协议](../AGENTS.md#handoff-与-git-安全) 和用户的当前指令执行。
+每次检查点分别记录提交、推送及实际远端验证状态；远端运行中不必阻塞日常后续工作，阶段验收、PR 合并和重要里程碑仍须满足上述远端通过门槛。同步按 [AI 开发协议](../AGENTS.md#handoff-与-git-安全) 和用户的当前指令执行。
 
 迁移工具固定在仓库的 `dotnet-tools.json`。在 Release 构建后，可用下列无连接检查验证当前模型与快照一致，且不会创建或访问用户数据库：
 
