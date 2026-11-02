@@ -212,6 +212,28 @@ public sealed class GenealogyDataService
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的婚配，可能已被更改或解除。");
     }
 
+    public async Task UpdateFamilyUnionDetailsAsync(Guid genealogyId, GenealogyUnionData expected, Guid participantId,
+        string firstName, string? secondName, long unlinkGeneration, string? startDateText, string? endDateText, string? note,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        if (startDateText?.Length > 100 || endDateText?.Length > 100 || note?.Length > 2000)
+            throw new InvalidOperationException("婚配资料超过允许长度。");
+        var count = await _context.FamilyUnions
+            .Where(union => union.GenealogyId == genealogyId && union.Id == expected.Id &&
+                (union.PartnerOneId == participantId || union.PartnerTwoId == participantId) &&
+                union.PartnerOneId == expected.PartnerOneId && union.PartnerTwoId == expected.PartnerTwoId &&
+                union.Kind == expected.Kind && union.StartDateText == expected.StartDateText &&
+                union.EndDateText == expected.EndDateText && union.Note == expected.Note &&
+                _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == union.PartnerOneId && p.Name == firstName) &&
+                (union.PartnerTwoId == null || _context.People.Any(p => p.GenealogyId == genealogyId &&
+                    p.Id == union.PartnerTwoId && p.Name == secondName)) &&
+                _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == unlinkGeneration))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(u => u.StartDateText, startDateText)
+                .SetProperty(u => u.EndDateText, endDateText).SetProperty(u => u.Note, note), cancellationToken);
+        if (count == 0) throw new StaleTargetLinkException("婚配已变化或不属于当前人物，请重新选择。");
+    }
+
     public async Task<Person> AddPersonAsync(Person person, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(person);

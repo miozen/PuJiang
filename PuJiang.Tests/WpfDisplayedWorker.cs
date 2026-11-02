@@ -317,6 +317,45 @@ internal static class WpfDisplayedWorker
             .Any(detail => detail.Contains("谱载始年") && detail.Contains("谱载止年") && detail.Contains("婚配备注")))
             throw new InvalidOperationException("重载后婚配资料未显示。");
 
+        await EditUnionDetailsAsync("谱载始年", "谱载止年", "婚配备注", "更正始年", "更正止年", "更正婚配备注");
+        await EditUnionDetailsAsync("更正始年", "更正止年", "更正婚配备注", "", "", "");
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        await using (var verifyUnion = coordinator.CreateContext())
+        {
+            var union = await verifyUnion.FamilyUnions.SingleAsync();
+            if (union.StartDateText is not null || union.EndDateText is not null || union.Note is not null)
+                throw new InvalidOperationException("婚配资料清空未保存。");
+        }
+
+        async Task EditUnionDetailsAsync(string expectedStart, string expectedEnd, string expectedNote, string start, string end, string note)
+        {
+            genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<TargetFamilyUnionDetailsDialog>().SingleOrDefault();
+                if (dialog is null) return;
+                timer.Stop();
+                ((System.Windows.Controls.ListBox)dialog.FindName("CandidateList")).SelectedIndex = 0;
+                var startBox = (System.Windows.Controls.TextBox)dialog.FindName("StartDateBox");
+                var endBox = (System.Windows.Controls.TextBox)dialog.FindName("EndDateBox");
+                var noteBox = (System.Windows.Controls.TextBox)dialog.FindName("NoteBox");
+                if (startBox.Text != expectedStart || endBox.Text != expectedEnd || noteBox.Text != expectedNote)
+                    failure = new InvalidOperationException("婚配编辑窗口未显示原值。");
+                startBox.Text = start; endBox.Text = end; noteBox.Text = note;
+                ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                    .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("editFamilyUnionDetailsButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("编辑婚配资料后界面未恢复。"); }
+            if (failure is not null) throw failure;
+        }
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();

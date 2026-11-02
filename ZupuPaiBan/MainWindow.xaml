@@ -234,6 +234,7 @@
                             <Button Content="新增人物关系" Click="TargetShortcut_AddRelationship_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button x:Name="editRelationshipDetailsButton" Content="编辑关系资料" Click="EditRelationshipDetails_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="新增婚配" Click="TargetShortcut_AddFamilyUnion_Click" Margin="0,0,0,4" Padding="6,2"/>
+                            <Button x:Name="editFamilyUnionDetailsButton" Content="编辑婚配资料" Click="EditFamilyUnionDetails_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="解除关系/婚配" Click="TargetShortcut_RemoveLink_Click" Margin="0,0,0,4" Padding="6,2"/>
                         </WrapPanel>
                     <TreeView x:Name="targetTree" ItemsSource="{Binding TargetTree}" SelectedItemChanged="TargetTree_SelectedItemChanged"
