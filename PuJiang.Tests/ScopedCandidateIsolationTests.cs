@@ -120,12 +120,14 @@ public class ScopedCandidateIsolationTests
                 drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 if (active == 0) drained.SetResult();
                 wait = drained.Task;
-                started();
             }
             try
             {
+                started();
                 await wait.WaitAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (transition is not null) await transition();
+                cancellationToken.ThrowIfCancellationRequested();
                 lock (sync) { Strategy = target; Session = Guid.NewGuid(); switching = false; drained = null; }
             }
             catch
@@ -135,14 +137,22 @@ public class ScopedCandidateIsolationTests
             }
         }
 
-        public void Recover()
+        public async Task RecoverAsync(Func<Task<bool>> verifyAndRestore)
         {
             lock (sync)
             {
                 if (!faulted || switching || active != 0) throw new InvalidOperationException("gate not drained");
-                Session = Guid.NewGuid();
-                drained = null;
-                faulted = false;
+                switching = true;
+            }
+            try
+            {
+                if (!await verifyAndRestore()) throw new InvalidOperationException("recovery not verified");
+                lock (sync) { Session = Guid.NewGuid(); drained = null; faulted = false; switching = false; }
+            }
+            catch
+            {
+                lock (sync) { switching = false; faulted = true; }
+                throw;
             }
         }
     }
@@ -332,7 +342,7 @@ public class ScopedCandidateIsolationTests
                 cancellation.Cancel();
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => switching);
                 Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
-                Assert.Throws<InvalidOperationException>(() => gate.Recover());
+                await Assert.ThrowsAsync<InvalidOperationException>(() => gate.RecoverAsync(() => Task.FromResult(true)));
             }
         }
         finally { release.TrySetResult(); }
@@ -340,11 +350,77 @@ public class ScopedCandidateIsolationTests
         if (!cancel) await Assert.ThrowsAsync<IOException>(() => switching.WaitAsync(TimeSpan.FromSeconds(15)));
         Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
         Assert.Equal("ScopedV1", gate.Strategy);
-        gate.Recover();
+        await gate.RecoverAsync(() => Task.FromResult(true));
         Assert.NotEqual(candidate.Token.Session, gate.Session);
         Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(seed, candidate, strategy, session, data.A.Id)));
         var fresh = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, false);
         Assert.Equal(1, await gate.RunAsync((strategy, session) => DeleteAsync(seed, fresh, strategy, session, data.A.Id)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task Partial_switch_failure_or_cancellation_requires_verified_reconciliation_before_open(bool cancel)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var data = await SeedAsync(context);
+        var gate = new PolicyGate();
+        var candidate = await CaptureAsync(context, data.A.Id, data.First.Id, gate.Session, false);
+        using var cancellation = new CancellationTokenSource();
+        var externalMode = "ScopedV1";
+        var switchTask = gate.SwitchAsync("GlobalV1", () => { }, cancellation.Token, () =>
+        {
+            externalMode = "GlobalV1"; // Simulated effect occurred before outcome became uncertain.
+            if (cancel) { cancellation.Cancel(); return Task.CompletedTask; }
+            throw new IOException("部分切换后失败");
+        });
+        if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => switchTask);
+        else await Assert.ThrowsAsync<IOException>(() => switchTask);
+        Assert.Equal("ScopedV1", gate.Strategy);
+        Assert.Equal("GlobalV1", externalMode);
+        Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => gate.RecoverAsync(() => Task.FromResult(externalMode == "ScopedV1")));
+        Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+        await Assert.ThrowsAsync<IOException>(() => gate.RecoverAsync(() => Task.FromException<bool>(new IOException("校验失败"))));
+        Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+        await gate.RecoverAsync(() => { externalMode = "ScopedV1"; return Task.FromResult(externalMode == gate.Strategy); });
+        Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(context, candidate, strategy, session, data.A.Id)));
+        var fresh = await CaptureAsync(context, data.A.Id, data.First.Id, gate.Session, false);
+        Assert.Equal(1, await gate.RunAsync((strategy, session) => DeleteAsync(context, fresh, strategy, session, data.A.Id)));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Cancellation_before_transition_after_drain_does_not_run_callback_and_requires_recovery()
+    {
+        var gate = new PolicyGate();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var invoked = false;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gate.SwitchAsync("GlobalV1", () => { }, cancellation.Token,
+            () => { invoked = true; return Task.CompletedTask; }));
+        Assert.False(invoked);
+        Assert.Equal("ScopedV1", gate.Strategy);
+        Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+        await gate.RecoverAsync(() => Task.FromResult(true));
+        Assert.Equal(1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Cancellation_after_completed_switch_does_not_undo_committed_strategy()
+    {
+        var gate = new PolicyGate();
+        var oldSession = gate.Session;
+        using var cancellation = new CancellationTokenSource();
+        await gate.SwitchAsync("GlobalV1", () => { }, cancellation.Token, () => Task.CompletedTask);
+        cancellation.Cancel();
+        Assert.Equal("GlobalV1", gate.Strategy);
+        Assert.NotEqual(oldSession, gate.Session);
+        Assert.Equal(1, await gate.RunAsync((strategy, _) => Task.FromResult(strategy == "GlobalV1" ? 1 : 0)));
     }
 
     [Theory]
