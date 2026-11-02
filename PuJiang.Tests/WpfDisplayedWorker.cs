@@ -77,6 +77,40 @@ internal static class WpfDisplayedWorker
             genealogy.SelectedPerson?.Id != selected.PersonId)
             throw new InvalidOperationException("搜索定位未选中目标人物。");
 
+        await EditRecordedValuesAsync("", "", "七世", "长");
+        await EditRecordedValuesAsync("七世", "长", "八世", "次");
+        await EditRecordedValuesAsync("八世", "次", "", "");
+        if (genealogy.People.Single().RecordedGeneration is not null || genealogy.People.Single().RecordedBirthOrder is not null)
+            throw new InvalidOperationException("清空谱载字段未保存。");
+
+        async Task EditRecordedValuesAsync(string expectedGeneration, string expectedOrder, string generation, string order)
+        {
+            Exception? failure = null;
+            var editTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            editTimer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<TargetPersonEditDialog>().SingleOrDefault();
+                if (dialog is null) return;
+                editTimer.Stop();
+                var generationBox = (System.Windows.Controls.TextBox)dialog.FindName("RecordedGenerationBox");
+                var orderBox = (System.Windows.Controls.TextBox)dialog.FindName("RecordedBirthOrderBox");
+                if (generationBox.Text != expectedGeneration || orderBox.Text != expectedOrder)
+                    failure = new InvalidOperationException("重开档案未显示已保存的谱载值。");
+                generationBox.Text = generation;
+                orderBox.Text = order;
+                ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                    .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            };
+            editTimer.Start();
+            var edit = typeof(MainWindow).GetMethod("EditTreePersonAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            await (Task)edit.Invoke(main, [genealogy.TargetTree.Single()])!;
+            editTimer.Stop();
+            if (failure is not null) throw failure;
+            if (genealogy.People.Single().RecordedGeneration != (generation.Length == 0 ? null : generation) ||
+                genealogy.People.Single().RecordedBirthOrder != (order.Length == 0 ? null : order))
+                throw new InvalidOperationException("谱载字段未通过人物编辑窗口保存。");
+        }
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();

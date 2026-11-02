@@ -204,6 +204,28 @@ public sealed class GenealogyDataService
         if (count == 0) throw new InvalidOperationException("当前族谱中不存在该人物。");
     }
 
+    public async Task UpdatePersonBasicProfileWithRecordedValuesAsync(Guid genealogyId, Guid personId, string? name, PersonSex sex,
+        string? birthDate, string? deathDate, string? biography, string? recordedGeneration, string? recordedBirthOrder,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = name?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 200)
+            throw new InvalidOperationException("人物姓名须为 1 至 200 个字符。");
+        if (!Enum.IsDefined(sex)) throw new InvalidOperationException("性别选项无效。");
+        if (birthDate?.Length > 100 || deathDate?.Length > 100)
+            throw new InvalidOperationException("生卒日期文字不能超过 100 个字符。");
+        if (biography?.Length > 4000) throw new InvalidOperationException("生平不能超过 4000 个字符。");
+        if (recordedGeneration?.Length > 100 || recordedBirthOrder?.Length > 100)
+            throw new InvalidOperationException("谱载世代和排行不能超过 100 个字符。");
+        var count = await _context.People.Where(p => p.GenealogyId == genealogyId && p.Id == personId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(p => p.Name, normalized)
+                .SetProperty(p => p.Sex, sex).SetProperty(p => p.BirthDateText, birthDate)
+                .SetProperty(p => p.DeathDateText, deathDate).SetProperty(p => p.Biography, biography)
+                .SetProperty(p => p.RecordedGeneration, recordedGeneration)
+                .SetProperty(p => p.RecordedBirthOrder, recordedBirthOrder), cancellationToken);
+        if (count == 0) throw new InvalidOperationException("当前族谱中不存在该人物。");
+    }
+
     /// <summary>仅删除当前族谱中没有任何关系或婚配记录的人物。</summary>
     public async Task DeleteUnrelatedPersonAsync(Guid genealogyId, Guid personId, CancellationToken cancellationToken = default)
     {

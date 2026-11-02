@@ -412,8 +412,8 @@ public partial class MainWindow : Window
             genealogyPanel.IsEnabled = false;
             try
             {
-                await _genealogyViewModel.SaveTreePersonProfileAsync(node, dialog.PersonName, dialog.Sex,
-                    dialog.BirthDate, dialog.DeathDate, dialog.Biography);
+                await _genealogyViewModel.SaveTreePersonProfileWithRecordedValuesAsync(node, dialog.PersonName, dialog.Sex,
+                    dialog.BirthDate, dialog.DeathDate, dialog.Biography, dialog.RecordedGeneration, dialog.RecordedBirthOrder);
             }
             finally { genealogyPanel.IsEnabled = true; }
         }

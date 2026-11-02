@@ -123,6 +123,24 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
     }
 
+    public async Task SaveTreePersonProfileWithRecordedValuesAsync(TargetMemberTreeNode node, string? name, PersonSex sex,
+        string? birthDate, string? deathDate, string? biography, string? recordedGeneration, string? recordedBirthOrder)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var person = GetTreePerson(node);
+        var genealogy = SelectedGenealogy!;
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).UpdatePersonBasicProfileWithRecordedValuesAsync(genealogy.Id, person.Id,
+            name, sex, birthDate, deathDate, biography, recordedGeneration, recordedBirthOrder);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id) return;
+        try { await SelectAsync(genealogy); }
+        catch (Exception ex)
+        {
+            if (SelectedGenealogy?.Id == genealogy.Id) Status = $"档案已保存，但目标谱系刷新失败：{ex.Message}";
+        }
+    }
+
     public GenealogySelectionViewModel(Func<ZupuDbContext> createContext, TargetContextCoordinator? operationCoordinator = null)
     {
         _createContext = createContext;

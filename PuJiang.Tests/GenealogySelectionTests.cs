@@ -13,6 +13,43 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Recorded_values_are_scoped_validated_and_preserve_derived_values()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        Person person;
+        await using (var context = database.CreateContext())
+            person = await new GenealogyDataService(context).AddPersonAsync(new Person
+            { GenealogyId = genealogy.Id, Name = "人物", DerivedGeneration = 8, DerivedBirthOrder = 2, Biography = "保留" });
+        await vm.SelectAsync(genealogy);
+        var node = vm.TargetTree.Single();
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(node, "人物", PersonSex.Unknown, null, null, "保留", "第七世", "长");
+        Assert.Equal("第七世", vm.People.Single().RecordedGeneration);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.SaveTreePersonProfileWithRecordedValuesAsync(
+            vm.TargetTree.Single(), "人物", PersonSex.Unknown, null, null, "改动", new string('世', 101), "次"));
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var otherGenealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdatePersonBasicProfileWithRecordedValuesAsync(
+                otherGenealogy.Id, person.Id, "跨谱", PersonSex.Unknown, null, null, null, "八", "次"));
+            var saved = await context.People.SingleAsync();
+            Assert.Equal("第七世", saved.RecordedGeneration);
+            Assert.Equal("长", saved.RecordedBirthOrder);
+            Assert.Equal(8, saved.DerivedGeneration);
+            Assert.Equal(2, saved.DerivedBirthOrder);
+            Assert.Equal("保留", saved.Biography);
+        }
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown, null, null, "保留", null, null);
+        Assert.Null(vm.People.Single().RecordedGeneration);
+        Assert.Null(vm.People.Single().RecordedBirthOrder);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Search_finds_current_genealogy_namesakes_and_rejects_stale_results()
     {
         await using var database = new TestDatabase();
