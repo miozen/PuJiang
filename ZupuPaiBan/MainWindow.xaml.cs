@@ -439,10 +439,12 @@ public partial class MainWindow : Window
         try
         {
             var person = _genealogyViewModel!.GetSelectedPersonForEditing();
+            var selection = _genealogyViewModel.CapturePersonSelection();
             var dialog = new TargetFamilyUnionDialog(person, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
-            if (dialog.ShowDialog() != true || dialog.PartnerTwoId is not Guid partnerTwoId) return;
+            if (dialog.ShowDialog() != true) return;
+            _genealogyViewModel.ValidatePersonSelection(selection);
             genealogyPanel.IsEnabled = false;
-            try { await _genealogyViewModel.AddTargetFamilyUnionAsync(dialog.Kind, partnerTwoId, dialog.StartDateText, dialog.EndDateText, dialog.Note); }
+            try { await _genealogyViewModel.AddTargetFamilyUnionAsync(dialog.Kind, dialog.PartnerTwoId, dialog.StartDateText, dialog.EndDateText, dialog.Note, dialog.UnknownPartner); }
             finally { genealogyPanel.IsEnabled = true; }
         }
         catch (Exception ex) { MessageBox.Show($"新增婚配失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }

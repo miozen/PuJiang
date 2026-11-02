@@ -501,6 +501,88 @@ internal static class WpfDisplayedWorker
                 throw new InvalidOperationException("婚配资料清空未保存。");
         }
 
+        await AddUnknownUnionAsync(false);
+        await AddUnknownUnionAsync(true);
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        var unknown = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.UnionSnapshot is { PartnerTwoId: null });
+        if (unknown.UnionSnapshot!.StartDateText != "未详始年" || unknown.UnionSnapshot.Note != "未详备注")
+            throw new InvalidOperationException("未详婚配重载后资料不正确。");
+        var unknownEditTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        unknownEditTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<TargetFamilyUnionDetailsDialog>().FirstOrDefault(w => w.IsVisible);
+            if (dialog is null) return;
+            unknownEditTimer.Stop();
+            var list = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+            list.SelectedItem = list.Items.Cast<TargetLinkRemovalCandidate>().Single(c => c.Id == unknown.Id);
+            ((System.Windows.Controls.TextBox)dialog.FindName("NoteBox")).Text = "已编辑未详";
+            ((System.Windows.Controls.Button)dialog.FindName("SaveButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        };
+        unknownEditTimer.Start();
+        ((System.Windows.Controls.Button)main.FindName("editFamilyUnionDetailsButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        var editUnknownWait = Stopwatch.StartNew();
+        while ((unknownEditTimer.IsEnabled || !panel.IsEnabled) && editUnknownWait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (unknownEditTimer.IsEnabled || !panel.IsEnabled) { unknownEditTimer.Stop(); throw new TimeoutException("未详婚配编辑未完成。"); }
+        await using (var verifyEdit = coordinator.CreateContext())
+            if ((await verifyEdit.FamilyUnions.AsNoTracking().SingleAsync(u => u.Id == unknown.Id)).Note != "已编辑未详")
+                throw new InvalidOperationException("未详婚配编辑未保存。");
+        var removalTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        removalTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<TargetLinkRemovalDialog>().FirstOrDefault(w => w.IsVisible);
+            if (dialog is null) return;
+            removalTimer.Stop();
+            var list = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+            list.SelectedItem = list.Items.Cast<TargetLinkRemovalCandidate>().Single(c => c.Id == unknown.Id);
+            ((System.Windows.Controls.CheckBox)dialog.FindName("ConfirmationBox")).IsChecked = true;
+            ((System.Windows.Controls.Button)dialog.FindName("RemoveButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        };
+        removalTimer.Start();
+        typeof(MainWindow).GetMethod("TargetShortcut_RemoveLink_Click", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs()]);
+        var removeUnknownWait = Stopwatch.StartNew();
+        while ((removalTimer.IsEnabled || !panel.IsEnabled) && removeUnknownWait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (removalTimer.IsEnabled || !panel.IsEnabled) { removalTimer.Stop(); throw new TimeoutException("未详婚配解除未完成。"); }
+        await using (var verifyUnknown = coordinator.CreateContext())
+            if (await verifyUnknown.FamilyUnions.AnyAsync(u => u.Id == unknown.Id)) throw new InvalidOperationException("未详婚配未解除。");
+
+        async Task AddUnknownUnionAsync(bool save)
+        {
+            genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<TargetFamilyUnionDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                var partner = (System.Windows.Controls.ComboBox)dialog.FindName("PartnerTwoBox");
+                var check = (System.Windows.Controls.CheckBox)dialog.FindName("UnknownPartnerCheck");
+                if (check.IsChecked == true || !partner.IsEnabled || partner.SelectedItem is not null)
+                    failure = new InvalidOperationException("新增婚配默认状态不正确。");
+                var saveButton = (System.Windows.Controls.Button)dialog.FindName("SaveButton");
+                if (saveButton.IsEnabled) failure = new InvalidOperationException("未选择对方时未阻止保存。");
+                partner.SelectedIndex = 0;
+                check.IsChecked = true;
+                if (partner.IsEnabled || partner.SelectedItem is not null) failure = new InvalidOperationException("切换未详未清除对方。");
+                check.IsChecked = false;
+                if (!partner.IsEnabled || partner.SelectedItem is not null) failure = new InvalidOperationException("切回选择人物时保留旧选择。");
+                check.IsChecked = true;
+                ((System.Windows.Controls.TextBox)dialog.FindName("StartDateBox")).Text = "未详始年";
+                ((System.Windows.Controls.TextBox)dialog.FindName("NoteBox")).Text = "未详备注";
+                if (save) ((System.Windows.Controls.Button)dialog.FindName("SaveButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                else dialog.Close();
+            };
+            timer.Start();
+            typeof(MainWindow).GetMethod("TargetShortcut_AddFamilyUnion_Click", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs()]);
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("新增未详婚配未完成。"); }
+            if (failure is not null) throw failure;
+            if (!save && (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Any(c => c.UnionSnapshot is { PartnerTwoId: null }))
+                throw new InvalidOperationException("取消后仍写入未详婚配。");
+        }
+
         async Task EditUnionDetailsAsync(string expectedStart, string expectedEnd, string expectedNote, string start, string end, string note)
         {
             genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");

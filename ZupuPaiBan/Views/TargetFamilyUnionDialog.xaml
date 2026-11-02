@@ -14,7 +14,8 @@
             <ComboBoxItem Content="类型未详" Tag="{x:Static models:FamilyUnionKind.Unknown}"/>
         </ComboBox>
         <TextBlock Text="婚配第二方（仅当前族谱）："/>
-        <ComboBox x:Name="PartnerTwoBox" Margin="0,4,0,12">
+        <CheckBox x:Name="UnknownPartnerCheck" Content="另一方未详" Margin="0,4,0,4" Checked="UnknownPartner_Changed" Unchecked="UnknownPartner_Changed"/>
+        <ComboBox x:Name="PartnerTwoBox" Margin="0,4,0,12" SelectionChanged="PartnerTwo_SelectionChanged">
             <ComboBox.ItemTemplate>
                 <DataTemplate>
                     <StackPanel Orientation="Horizontal">
@@ -32,7 +33,7 @@
                    Text="保存只新增这一条无向婚配记录；不会自动创建配偶人物关系、合并人物或覆盖既有记录。"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>
-            <Button x:Name="SaveButton" Content="新增婚配" IsDefault="True" Padding="14,4" Click="Save_Click"/>
+            <Button x:Name="SaveButton" Content="新增婚配" IsDefault="True" IsEnabled="False" Padding="14,4" Click="Save_Click"/>
         </StackPanel>
     </StackPanel>
 </Window>

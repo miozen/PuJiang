@@ -13,6 +13,52 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Unknown_partner_union_requires_explicit_choice_preserves_data_and_rejects_failures()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.SelectedPerson = vm.People.Single();
+        var subject = vm.SelectedPerson.Id;
+        var selection = vm.CapturePersonSelection();
+        vm.SelectedPerson = null;
+        vm.SelectedPerson = vm.People.Single();
+        Assert.Throws<InvalidOperationException>(() => vm.ValidatePersonSelection(selection));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Unknown, null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Unknown, subject, unknownPartner: true));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Unknown, Guid.NewGuid()));
+        await using (var context = database.CreateContext())
+            await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailUnknownUnion BEFORE INSERT ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'test'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Unknown, null, unknownPartner: true));
+        await using (var context = database.CreateContext())
+        {
+            Assert.Empty(await context.FamilyUnions.ToListAsync());
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER FailUnknownUnion");
+        }
+        await vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Unknown, null, "始", "止", "备注", unknownPartner: true);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetFamilyUnionAsync(FamilyUnionKind.Unknown, null, unknownPartner: true));
+        await using (var context = database.CreateContext())
+        {
+            var saved = await context.FamilyUnions.SingleAsync();
+            Assert.Equal(genealogy.Id, saved.GenealogyId);
+            Assert.Equal(subject, saved.PartnerOneId);
+            Assert.Null(saved.PartnerTwoId);
+            Assert.Equal("始", saved.StartDateText); Assert.Equal("止", saved.EndDateText); Assert.Equal("备注", saved.Note);
+            Assert.Empty(await context.PersonRelationships.ToListAsync());
+            Assert.Single(await context.People.ToListAsync());
+        }
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await vm.UpdateTargetFamilyUnionDetailsAsync(candidate, "更新", null, "保留");
+        await vm.RemoveTargetLinkAsync((await vm.GetTargetLinkRemovalCandidatesAsync()).Single());
+        await using var verify = database.CreateContext();
+        Assert.Empty(await verify.FamilyUnions.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Parent_kind_correction_preserves_identity_and_rejects_invalid_or_stale_changes()
     {
         await using var database = new TestDatabase();

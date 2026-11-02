@@ -14,6 +14,7 @@ public sealed record BranchDeleteCandidate(Guid GenealogyId, GenealogyBranchData
 public sealed record BranchMoveCandidate(Guid GenealogyId, GenealogyBranchData Source, GenealogyBranchData? Target, BranchChoice SourceChoice, BranchChoice? TargetChoice, int SelectionVersion);
 public sealed record BranchReassignmentCandidate(NonEmptyBranchSnapshot Snapshot, BranchChoice Choice, int SelectionVersion);
 public sealed record PersonDeletePreview(Guid GenealogyId, Guid PersonId, string PersonName, int SelectionVersion, int PersonSelectionVersion, long Generation, IReadOnlyList<TargetLinkRemovalCandidate> Links);
+public sealed record PersonSelectionToken(Guid GenealogyId, Guid PersonId, int SelectionVersion, int PersonSelectionVersion);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -115,6 +116,20 @@ public partial class GenealogySelectionViewModel : ObservableObject
 
     /// <summary>Returns the selected person only after proving it still belongs to the current target genealogy.</summary>
     public Person GetSelectedPersonForEditing() => GetCurrentSelectedPersonForEditing().Person;
+
+    public PersonSelectionToken CapturePersonSelection()
+    {
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        return new PersonSelectionToken(genealogy.Id, person.Id, _selectionVersion, _candidatePersonSelectionVersion);
+    }
+
+    public void ValidatePersonSelection(PersonSelectionToken token)
+    {
+        if (token.GenealogyId != SelectedGenealogy?.Id || token.PersonId != SelectedPerson?.Id ||
+            token.SelectionVersion != _selectionVersion || token.PersonSelectionVersion != _candidatePersonSelectionVersion)
+            throw new InvalidOperationException("当前选择已变化，请重新选择。");
+        _ = GetCurrentSelectedPersonForEditing();
+    }
 
     /// <summary>Supplies edit dialogs with a snapshot bounded to the current target genealogy.</summary>
     public IReadOnlyList<Person> GetCurrentPeopleForEditing()
@@ -678,15 +693,16 @@ public partial class GenealogySelectionViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Creates one explicit, direction-free family union for the selected person. The second partner must be
-    /// a currently listed member of the same genealogy; no relationship record or automatic merge is inferred.
+    /// Creates one explicit family union; an unknown second partner requires explicit caller intent.
     /// </summary>
-    public async Task AddTargetFamilyUnionAsync(FamilyUnionKind kind, Guid partnerTwoId,
-        string? startDateText = null, string? endDateText = null, string? note = null)
+    public async Task AddTargetFamilyUnionAsync(FamilyUnionKind kind, Guid? partnerTwoId,
+        string? startDateText = null, string? endDateText = null, string? note = null, bool unknownPartner = false)
     {
         using var operation = _operationCoordinator?.EnterOperation();
         var (genealogy, person) = GetCurrentSelectedPersonForEditing();
-        if (!GetCurrentPeopleForEditing().Any(candidate => candidate.Id == partnerTwoId))
+        if (unknownPartner != (partnerTwoId is null))
+            throw new InvalidOperationException("请明确选择婚配对方或选择另一方未详。");
+        if (partnerTwoId is Guid partnerId && !GetCurrentPeopleForEditing().Any(candidate => candidate.Id == partnerId))
             throw new InvalidOperationException("婚配对方必须是当前族谱中的人物。");
 
         var version = _selectionVersion;
