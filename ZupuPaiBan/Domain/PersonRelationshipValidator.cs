@@ -67,7 +67,20 @@ public sealed class PersonRelationshipValidator
         }
     }
 
-    private async Task<bool> HasAncestorAsync(Guid startPersonId, Guid soughtPersonId, Guid genealogyId, CancellationToken cancellationToken)
+    public async Task ValidateParentCorrectionAsync(PersonRelationship relationship, CancellationToken cancellationToken = default)
+    {
+        if (!ParentKinds.Contains(relationship.Kind) || relationship.RelatedPersonId is not Guid related || related == relationship.PersonId)
+            throw new InvalidOperationException("只能更正有双方的父母关系类型。");
+        if (await _context.People.CountAsync(p => p.GenealogyId == relationship.GenealogyId && (p.Id == relationship.PersonId || p.Id == related), cancellationToken) != 2)
+            throw new InvalidOperationException("关系人物不存在或不属于当前族谱。");
+        if (await _context.PersonRelationships.AnyAsync(r => r.Id != relationship.Id && r.GenealogyId == relationship.GenealogyId &&
+                r.PersonId == relationship.PersonId && r.RelatedPersonId == related && r.Kind == relationship.Kind, cancellationToken))
+            throw new InvalidOperationException("目标类型的关系已经存在。");
+        if (await HasAncestorAsync(related, relationship.PersonId, relationship.GenealogyId, cancellationToken, relationship.Id))
+            throw new InvalidOperationException("父母关系会形成循环谱系。");
+    }
+
+    private async Task<bool> HasAncestorAsync(Guid startPersonId, Guid soughtPersonId, Guid genealogyId, CancellationToken cancellationToken, Guid? excludedId = null)
     {
         var visited = new HashSet<Guid>();
         var frontier = new Queue<Guid>();
@@ -80,7 +93,7 @@ public sealed class PersonRelationshipValidator
             if (current == soughtPersonId) return true;
 
             var parents = await _context.PersonRelationships
-                .Where(r => r.GenealogyId == genealogyId &&
+                .Where(r => r.GenealogyId == genealogyId && r.Id != excludedId &&
                             r.PersonId == current &&
                             ParentKinds.Contains(r.Kind) &&
                             r.RelatedPersonId != null)

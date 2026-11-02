@@ -768,6 +768,23 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (await RefreshTargetTreeAsync(genealogy.Id, version, "关系资料已保存")) Status = "关系资料已保存。";
     }
 
+    public async Task CorrectParentRelationshipKindAsync(TargetLinkRemovalCandidate candidate, PersonRelationshipKind newKind)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.GenealogyId != SelectedGenealogy?.Id || candidate.ParticipantId != SelectedPerson?.Id ||
+            candidate.SelectionVersion != _selectionVersion || candidate.PersonSelectionVersion != _candidatePersonSelectionVersion ||
+            candidate.Kind != TargetLinkRemovalKind.Relationship || candidate.RelationshipSnapshot is not { } relationship ||
+            candidate.UnionSnapshot is not null || relationship.Id != candidate.Id)
+            throw new InvalidOperationException("当前选择已变化，请重新选择关系。");
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).CorrectParentRelationshipKindAsync(genealogy.Id, relationship, person.Id,
+            candidate.FirstName, candidate.SecondName, candidate.UnlinkGeneration, newKind);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, "父母关系类型已更正")) Status = "父母关系类型已更正。";
+    }
+
     public async Task UpdateTargetFamilyUnionDetailsAsync(TargetLinkRemovalCandidate candidate,
         string? startDateText, string? endDateText, string? note)
     {

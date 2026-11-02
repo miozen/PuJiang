@@ -13,6 +13,59 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Parent_kind_correction_preserves_identity_and_rejects_invalid_or_stale_changes()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.NewPersonName = "父母"; await vm.AddPersonAsync();
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        var subject = vm.SelectedPerson.Id;
+        var parent = vm.People.Single(p => p.Name == "父母").Id;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, parent, "备注", "来源");
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectParentRelationshipKindAsync(candidate, PersonRelationshipKind.Spouse));
+        await vm.CorrectParentRelationshipKindAsync(candidate, PersonRelationshipKind.AdoptiveParent);
+        await Assert.ThrowsAsync<StaleTargetLinkException>(() => vm.CorrectParentRelationshipKindAsync(candidate, PersonRelationshipKind.HeirParent));
+        var current = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        Assert.Equal(candidate.Id, current.Id);
+        Assert.Equal("备注", current.RelationshipSnapshot!.Note);
+        Assert.Equal("来源", current.RelationshipSnapshot.SourceCitation);
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.CorrectParentRelationshipKindAsync(Guid.NewGuid(), current.RelationshipSnapshot, subject, current.FirstName, current.SecondName, current.UnlinkGeneration, PersonRelationshipKind.HeirParent));
+            await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = subject, RelatedPersonId = parent, Kind = PersonRelationshipKind.HeirParent });
+        }
+        var duplicates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        var adoptive = duplicates.Single(c => c.Id == candidate.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectParentRelationshipKindAsync(adoptive, PersonRelationshipKind.HeirParent));
+        await vm.RemoveTargetLinkAsync(duplicates.Single(c => c.Id != candidate.Id));
+        await using (var context = database.CreateContext())
+        {
+            await context.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO PersonRelationships (Id,GenealogyId,PersonId,RelatedPersonId,Kind,IsPreferredForLineage) VALUES ({Guid.NewGuid()},{genealogy.Id},{parent},{subject},{(int)PersonRelationshipKind.HeirParent},{false})");
+        }
+        var cycle = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Id == candidate.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CorrectParentRelationshipKindAsync(cycle, PersonRelationshipKind.BiologicalParent));
+        await using (var context = database.CreateContext())
+        {
+            await context.PersonRelationships.Where(r => r.PersonId == parent).ExecuteDeleteAsync();
+            await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailKindUpdate BEFORE UPDATE ON PersonRelationships BEGIN SELECT RAISE(ABORT, 'test'); END");
+        }
+        var beforeFailure = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await Assert.ThrowsAnyAsync<Exception>(() => vm.CorrectParentRelationshipKindAsync(beforeFailure, PersonRelationshipKind.HeirParent));
+        await using var verify = database.CreateContext();
+        var saved = await verify.PersonRelationships.AsNoTracking().SingleAsync();
+        Assert.Equal(PersonRelationshipKind.AdoptiveParent, saved.Kind);
+        Assert.Equal("备注", saved.Note);
+        Assert.Equal("来源", saved.SourceCitation);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Person_delete_preview_blocks_links_and_stale_or_switched_selection()
     {
         await using var database = new TestDatabase();

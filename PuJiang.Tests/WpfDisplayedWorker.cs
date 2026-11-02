@@ -380,6 +380,51 @@ internal static class WpfDisplayedWorker
             .Any(detail => detail.Contains("界面谱载备注") && detail.Contains("界面谱牒来源")))
             throw new InvalidOperationException("重载后关系清单未显示备注与来源。");
 
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        var beforeCorrection = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await CorrectParentKindAsync(false);
+        if ((await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single().RelationshipSnapshot!.Kind != ZupuPaiBan.Models.PersonRelationshipKind.BiologicalParent)
+            throw new InvalidOperationException("取消更正后类型发生变化。");
+        await CorrectParentKindAsync(true);
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        var corrected = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single();
+        if (corrected.Id != beforeCorrection.Id || corrected.RelationshipSnapshot!.Kind != ZupuPaiBan.Models.PersonRelationshipKind.AdoptiveParent ||
+            corrected.RelationshipSnapshot.Note != "界面谱载备注" || corrected.RelationshipSnapshot.SourceCitation != "界面谱牒来源")
+            throw new InvalidOperationException("更正或重载后关系身份及资料不正确。");
+
+        async Task CorrectParentKindAsync(bool confirm)
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<ParentRelationshipCorrectionDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                if (!confirm) { dialog.Close(); return; }
+                ((System.Windows.Controls.ListBox)dialog.FindName("CandidateList")).SelectedIndex = 0;
+                ((System.Windows.Controls.ComboBox)dialog.FindName("KindBox")).SelectedValue = ZupuPaiBan.Models.PersonRelationshipKind.AdoptiveParent;
+                var confirmationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+                confirmationTimer.Tick += (_, _) =>
+                {
+                    var message = FindWindow(null, "确认更正");
+                    if (message == IntPtr.Zero) return;
+                    GetWindowThreadProcessId(message, out var pid);
+                    if (pid != (uint)Environment.ProcessId) return;
+                    confirmationTimer.Stop();
+                    PostMessage(message, 0x0111, new IntPtr(6), IntPtr.Zero);
+                };
+                confirmationTimer.Start();
+                ((System.Windows.Controls.Button)dialog.FindName("ConfirmButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                confirmationTimer.Stop();
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("correctParentKindButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("更正关系窗口未完成。"); }
+        }
+
         await EditRelationshipDetailsAsync("界面谱载备注", "界面谱牒来源", "更正备注", "更正来源");
         await EditRelationshipDetailsAsync("更正备注", "更正来源", "", "");
         await genealogy.SelectAsync(genealogy.SelectedGenealogy);

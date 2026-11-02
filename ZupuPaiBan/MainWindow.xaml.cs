@@ -464,6 +464,22 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show($"保存关系资料失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
+    private async void CorrectParentKind_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var candidates = (await _genealogyViewModel!.GetTargetLinkRemovalCandidatesAsync())
+                .Where(c => c.RelationshipSnapshot?.Kind is PersonRelationshipKind.BiologicalParent or PersonRelationshipKind.AdoptiveParent or PersonRelationshipKind.HeirParent).ToList();
+            if (candidates.Count == 0) { MessageBox.Show("当前人物没有可更正类型的父母关系。", "提示"); return; }
+            var dialog = new ParentRelationshipCorrectionDialog(candidates) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.SelectedCandidate is not { } candidate || dialog.NewKind is not { } kind) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.CorrectParentRelationshipKindAsync(candidate, kind); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"更正关系类型失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async void EditFamilyUnionDetails_Click(object sender, RoutedEventArgs e)
     {
         try

@@ -235,6 +235,28 @@ public sealed class GenealogyDataService
         if (count == 0) throw new InvalidOperationException("当前族谱中不存在指定的生物父母关系。");
     }
 
+    public async Task CorrectParentRelationshipKindAsync(Guid genealogyId, GenealogyRelationshipData expected, Guid participantId,
+        string firstName, string? secondName, long generation, PersonRelationshipKind newKind, CancellationToken cancellationToken = default)
+    {
+        static bool ParentKind(PersonRelationshipKind kind) => kind is PersonRelationshipKind.BiologicalParent or PersonRelationshipKind.AdoptiveParent or PersonRelationshipKind.HeirParent;
+        if (!ParentKind(expected.Kind) || !ParentKind(newKind) || newKind == expected.Kind || expected.RelatedPersonId is null)
+            throw new InvalidOperationException("只能更正为另一种父母关系类型。");
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        await new PersonRelationshipValidator(_context).ValidateParentCorrectionAsync(new PersonRelationship {
+            Id = expected.Id, GenealogyId = genealogyId, PersonId = expected.PersonId, RelatedPersonId = expected.RelatedPersonId, Kind = newKind
+        }, cancellationToken);
+        var count = await _context.PersonRelationships.Where(r => r.GenealogyId == genealogyId && r.Id == expected.Id &&
+            (r.PersonId == participantId || r.RelatedPersonId == participantId) && r.PersonId == expected.PersonId &&
+            r.RelatedPersonId == expected.RelatedPersonId && r.Kind == expected.Kind && r.IsPreferredForLineage == expected.IsPreferredForLineage &&
+            r.Note == expected.Note && r.SourceCitation == expected.SourceCitation &&
+            _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == r.PersonId && p.Name == firstName) &&
+            _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == r.RelatedPersonId && p.Name == secondName) &&
+            _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == generation))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.Kind, newKind), cancellationToken);
+        if (count == 0) throw new StaleTargetLinkException("关系或人物已变化，请重新选择。");
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Deletes exactly one relationship only when it still belongs to the specified genealogy and includes the
     /// currently selected participant and all fields still match the confirmed snapshot. This is one scoped SQL
