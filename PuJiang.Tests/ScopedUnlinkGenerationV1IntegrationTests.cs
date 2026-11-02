@@ -106,6 +106,57 @@ public sealed class ScopedUnlinkGenerationV1IntegrationTests
         await context.Database.CloseConnectionAsync();
     }
 
+    [Theory]
+    [InlineData("PersonRelationships")]
+    [InlineData("FamilyUnions")]
+    [Trait("Category", "Integration")]
+    public async Task Rebuilding_link_table_requires_reinstallation_of_both_guards(string table)
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "重装关系谱" });
+        var first = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "甲" });
+        var second = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "乙" });
+        await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = first.Id,
+            RelatedPersonId = second.Id, Kind = PersonRelationshipKind.Spouse });
+        await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = first.Id,
+            PartnerTwoId = second.Id, Kind = FamilyUnionKind.Marriage });
+        var scopedBefore = await ScopedValueAsync(context, genealogy.Id);
+        var globalBefore = await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync();
+        await context.Database.OpenConnectionAsync();
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF");
+            var tableSql = await context.Database.SqlQueryRaw<string>("SELECT sql AS Value FROM sqlite_master WHERE type = 'table' AND name = @name", new SqliteParameter("@name", table)).SingleAsync();
+            var replacement = tableSql.Replace($"\"{table}\"", "\"ScopedLinkRebuilt\"", StringComparison.Ordinal);
+            Assert.NotEqual(tableSql, replacement);
+            await using (var tx = await context.Database.BeginTransactionAsync())
+            {
+                await context.Database.ExecuteSqlRawAsync(replacement);
+                await context.Database.ExecuteSqlRawAsync($"INSERT INTO ScopedLinkRebuilt SELECT * FROM \"{table}\"");
+                await context.Database.ExecuteSqlRawAsync($"DROP TABLE \"{table}\"");
+                await context.Database.ExecuteSqlRawAsync($"ALTER TABLE ScopedLinkRebuilt RENAME TO \"{table}\"");
+                await tx.CommitAsync();
+            }
+            await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON");
+            Assert.Empty(await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).ToListAsync());
+            Assert.Empty(await context.Database.SqlQueryRaw<long>(ScopedUnlinkGenerationV1.DatabaseGuardSql).ToListAsync());
+            await using (var tx = await context.Database.BeginTransactionAsync())
+            {
+                foreach (var sql in ScopedUnlinkGenerationV1.ReinstallTableTriggerSql(table))
+                    await context.Database.ExecuteSqlRawAsync(sql);
+                await context.Database.ExecuteSqlRawAsync(ScopedUnlinkGenerationV1.InstallValidationSql);
+                await tx.CommitAsync();
+            }
+            await context.Database.ExecuteSqlRawAsync($"UPDATE \"{table}\" SET Note = '重装后'");
+            Assert.Equal(scopedBefore + 1, await ScopedValueAsync(context, genealogy.Id));
+            Assert.Equal(globalBefore + 1, await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync());
+        }
+        finally { await context.Database.CloseConnectionAsync(); }
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Migration_lock_timeout_is_reported_without_installing_scoped_schema()
