@@ -223,6 +223,34 @@ internal static class WpfDisplayedWorker
                 throw new InvalidOperationException("谱载字段未通过人物编辑窗口保存。");
         }
 
+        genealogy.NewPersonName = "关系对方";
+        await genealogy.AddPersonAsync();
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        var relationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        relationTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<TargetRelationshipDialog>().SingleOrDefault();
+            if (dialog is null) return;
+            relationTimer.Stop();
+            var related = (System.Windows.Controls.ComboBox)dialog.FindName("RelatedPersonBox");
+            related.SelectedItem = related.Items.Cast<ZupuPaiBan.Models.Person>().Single(p => p.Name == "关系对方");
+            ((System.Windows.Controls.TextBox)dialog.FindName("NoteBox")).Text = "界面谱载备注";
+            ((System.Windows.Controls.TextBox)dialog.FindName("SourceCitationBox")).Text = "界面谱牒来源";
+            ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        };
+        relationTimer.Start();
+        typeof(MainWindow).GetMethod("TargetShortcut_AddRelationship_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(main, [main, new RoutedEventArgs()]);
+        relationTimer.Stop();
+        var relationDeadline = Stopwatch.StartNew();
+        while (!panel.IsEnabled && relationDeadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (!panel.IsEnabled) throw new TimeoutException("新增关系后界面未恢复。");
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        if (!genealogy.TargetTree.SelectMany(node => node.Details)
+            .Any(detail => detail.Contains("界面谱载备注") && detail.Contains("界面谱牒来源")))
+            throw new InvalidOperationException("重载后关系清单未显示备注与来源。");
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();

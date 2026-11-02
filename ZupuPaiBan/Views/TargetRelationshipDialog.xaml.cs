@@ -11,6 +11,8 @@ public partial class TargetRelationshipDialog : Window
     public Guid? RelatedPersonId => Kind == PersonRelationshipKind.LostAncestry
         ? null
         : (RelatedPersonBox.SelectedItem as Person)?.Id;
+    public string? Note => NoteBox.Text.Length == 0 ? null : NoteBox.Text;
+    public string? SourceCitation => SourceCitationBox.Text.Length == 0 ? null : SourceCitationBox.Text;
 
     public TargetRelationshipDialog(Person subject, IReadOnlyCollection<Person> currentGenealogyPeople)
     {

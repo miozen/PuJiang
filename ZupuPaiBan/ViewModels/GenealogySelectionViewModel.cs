@@ -506,7 +506,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
     /// Creates one explicit relationship for the selected target-model person. Both UI candidates and the
     /// persistence validator are genealogy-scoped; this method never infers, merges, or replaces a relation.
     /// </summary>
-    public async Task AddTargetRelationshipAsync(PersonRelationshipKind kind, Guid? relatedPersonId)
+    public async Task AddTargetRelationshipAsync(PersonRelationshipKind kind, Guid? relatedPersonId,
+        string? note = null, string? sourceCitation = null)
     {
         using var operation = _operationCoordinator?.EnterOperation();
         var (genealogy, person) = GetCurrentSelectedPersonForEditing();
@@ -522,7 +523,9 @@ public partial class GenealogySelectionViewModel : ObservableObject
             GenealogyId = genealogy.Id,
             PersonId = person.Id,
             RelatedPersonId = relatedPersonId,
-            Kind = kind
+            Kind = kind,
+            Note = note,
+            SourceCitation = sourceCitation
         });
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
         if (kind == PersonRelationshipKind.BiologicalParent)

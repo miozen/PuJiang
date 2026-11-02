@@ -373,7 +373,7 @@ public partial class MainWindow : Window
             var dialog = new TargetRelationshipDialog(person, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
             if (dialog.ShowDialog() != true) return;
             genealogyPanel.IsEnabled = false;
-            try { await _genealogyViewModel.AddTargetRelationshipAsync(dialog.Kind, dialog.RelatedPersonId); }
+            try { await _genealogyViewModel.AddTargetRelationshipAsync(dialog.Kind, dialog.RelatedPersonId, dialog.Note, dialog.SourceCitation); }
             finally { genealogyPanel.IsEnabled = true; }
         }
         catch (Exception ex) { MessageBox.Show($"新增人物关系失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }

@@ -13,6 +13,48 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Relationship_notes_and_sources_persist_and_reject_invalid_requests()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.NewPersonName = "父母"; await vm.AddPersonAsync();
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        var parentId = vm.People.Single(p => p.Name == "父母").Id;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, parentId, new string('注', 2001), "来源"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, parentId, "备注", new string('源', 1001)));
+        Guid foreignId;
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            foreignId = (await service.AddPersonAsync(new Person { GenealogyId = foreign.Id, Name = "外谱人物" })).Id;
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, foreignId, "备注", "来源"));
+        await using (var verifyEmpty = database.CreateContext()) Assert.Empty(await verifyEmpty.PersonRelationships.ToListAsync());
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, parentId, "谱载备注", "旧谱卷一");
+        await using (var verify = database.CreateContext())
+        {
+            var relation = await verify.PersonRelationships.SingleAsync();
+            Assert.Equal("谱载备注", relation.Note);
+            Assert.Equal("旧谱卷一", relation.SourceCitation);
+            Assert.Equal(genealogy.Id, relation.GenealogyId);
+        }
+        await vm.SelectAsync(genealogy);
+        Assert.Contains(vm.TargetTree.SelectMany(node => node.Details), detail => detail.Contains("谱载备注") && detail.Contains("旧谱卷一"));
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.LostAncestry, null);
+        await using var final = database.CreateContext();
+        var empty = await final.PersonRelationships.SingleAsync(r => r.Kind == PersonRelationshipKind.LostAncestry);
+        Assert.Null(empty.Note);
+        Assert.Null(empty.SourceCitation);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Empty_branch_deletion_protects_people_children_and_stale_or_foreign_targets()
     {
         await using var database = new TestDatabase();
