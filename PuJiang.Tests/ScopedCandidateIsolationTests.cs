@@ -14,7 +14,7 @@ public class ScopedCandidateIsolationTests
 {
     private sealed record Token(string Strategy, Guid Session, Guid GenealogyId, long Generation);
     private sealed record Candidate(Token Token, Guid Participant, PersonRelationship? Relationship,
-        FamilyUnion? Union, string FirstName, string SecondName);
+        FamilyUnion? Union, string FirstName, string? SecondName);
     private sealed class DeleteCounter : DbCommandInterceptor
     {
         public int Deletes { get; private set; }
@@ -38,9 +38,9 @@ public class ScopedCandidateIsolationTests
         var relationship = union ? null : await context.PersonRelationships.AsNoTracking().SingleAsync(r => r.GenealogyId == genealogyId);
         var family = union ? await context.FamilyUnions.AsNoTracking().SingleAsync(u => u.GenealogyId == genealogyId) : null;
         var first = relationship?.PersonId ?? family!.PartnerOneId;
-        var second = relationship?.RelatedPersonId ?? family!.PartnerTwoId;
+        var second = relationship is not null ? relationship.RelatedPersonId : family!.PartnerTwoId;
         var result = new Candidate(new Token("ScopedV1", session, genealogyId, generation), participant,
-            relationship, family, people[first], people[second!.Value]);
+            relationship, family, people[first], second is Guid id ? people[id] : null);
         await transaction.CommitAsync();
         return result;
     }
@@ -82,6 +82,163 @@ public class ScopedCandidateIsolationTests
         await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = a.Id, PartnerOneId = first.Id,
             PartnerTwoId = second.Id, Kind = FamilyUnionKind.Marriage });
         return (a, b, first, second);
+    }
+
+    // A test-only gate; no production switch or recovery capability is introduced.
+    private sealed class PolicyGate
+    {
+        private readonly object sync = new();
+        private TaskCompletionSource? drained;
+        private int active;
+        private bool switching;
+        public Guid Session { get; private set; } = Guid.NewGuid();
+        public string Strategy { get; private set; } = "ScopedV1";
+
+        public async Task<int> RunAsync(Func<string, Guid, Task<int>> operation)
+        {
+            string strategy;
+            Guid session;
+            lock (sync)
+            {
+                if (switching) return -1;
+                active++;
+                strategy = Strategy;
+                session = Session;
+            }
+            try { return await operation(strategy, session); }
+            finally { lock (sync) { if (--active == 0) drained?.TrySetResult(); } }
+        }
+
+        public async Task SwitchAsync(string target, Action started)
+        {
+            Task wait;
+            lock (sync)
+            {
+                if (switching) throw new InvalidOperationException("switch in progress");
+                switching = true;
+                drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (active == 0) drained.SetResult();
+                wait = drained.Task;
+                started();
+            }
+            await wait;
+            lock (sync) { Strategy = target; Session = Guid.NewGuid(); switching = false; drained = null; }
+        }
+    }
+
+    private sealed class PauseDelete(bool fail = false) : DbCommandInterceptor
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.TrimStart().StartsWith("DELETE", StringComparison.OrdinalIgnoreCase))
+            {
+                Entered.TrySetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+                if (fail) throw new IOException("模拟在途删除失败");
+            }
+            return result;
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [Trait("Category", "Integration")]
+    public async Task Null_other_person_is_preserved_and_stale_name_fails_closed(bool union, bool stale)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var context = db.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "失考谱" });
+        var person = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "甲" });
+        if (union) await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = person.Id, Kind = FamilyUnionKind.Marriage });
+        else await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = person.Id, Kind = PersonRelationshipKind.LostAncestry });
+        var session = Guid.NewGuid();
+        var candidate = await CaptureAsync(context, genealogy.Id, person.Id, session, union);
+        Assert.Null(candidate.SecondName);
+        if (stale) await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {"改名"} WHERE Id = {person.Id}");
+        Assert.Equal(stale ? 0 : 1, await DeleteAsync(context, candidate, "ScopedV1", session, genealogy.Id));
+        Assert.Equal(stale ? 1 : 0, union ? await context.FamilyUnions.CountAsync() : await context.PersonRelationships.CountAsync());
+        Assert.Equal(1, await context.People.CountAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task Test_only_switch_drains_inflight_delete_and_invalidates_old_session(bool union)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var seed = db.CreateContext();
+        var data = await SeedAsync(seed);
+        var gate = new PolicyGate();
+        var candidate = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, union);
+        var pause = new PauseDelete();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>().UseSqlite($"Data Source={db.DatabasePath};Pooling=False").AddInterceptors(pause).Options;
+        await using var deleting = new ZupuDbContext(options);
+        var inflight = gate.RunAsync((strategy, session) => DeleteAsync(deleting, candidate, strategy, session, data.A.Id));
+        await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var switching = gate.SwitchAsync("GlobalV1", started.SetResult);
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(switching.IsCompleted);
+            Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(99)));
+        }
+        finally { pause.Release.TrySetResult(); }
+        Assert.Equal(1, await inflight.WaitAsync(TimeSpan.FromSeconds(15)));
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal("GlobalV1", gate.Strategy);
+        Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(seed, candidate, strategy, session, data.A.Id)));
+        await gate.SwitchAsync("ScopedV1", () => { });
+        Assert.NotEqual(candidate.Token.Session, gate.Session);
+        Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(seed, candidate, strategy, session, data.A.Id)));
+        await using var verify = db.CreateContext();
+        Assert.Equal(union ? 0 : 1, await verify.FamilyUnions.CountAsync());
+        Assert.Equal(union ? 1 : 0, await verify.PersonRelationships.CountAsync());
+        Assert.Equal(2, await verify.People.CountAsync());
+        var fresh = await CaptureAsync(verify, data.A.Id, data.First.Id, gate.Session, !union);
+        Assert.Equal(1, await gate.RunAsync((strategy, session) => DeleteAsync(verify, fresh, strategy, session, data.A.Id)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task Test_only_switch_drains_failed_delete_without_changing_records_or_generations(bool union)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var seed = db.CreateContext();
+        var data = await SeedAsync(seed);
+        var gate = new PolicyGate();
+        var candidate = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, union);
+        var global = await seed.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync();
+        var pause = new PauseDelete(fail: true);
+        var options = new DbContextOptionsBuilder<ZupuDbContext>().UseSqlite($"Data Source={db.DatabasePath};Pooling=False").AddInterceptors(pause).Options;
+        await using var deleting = new ZupuDbContext(options);
+        var inflight = gate.RunAsync((strategy, session) => DeleteAsync(deleting, candidate, strategy, session, data.A.Id));
+        await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var switching = gate.SwitchAsync("GlobalV1", started.SetResult);
+        try { await started.Task.WaitAsync(TimeSpan.FromSeconds(10)); Assert.False(switching.IsCompleted); }
+        finally { pause.Release.TrySetResult(); }
+        await Assert.ThrowsAsync<IOException>(() => inflight.WaitAsync(TimeSpan.FromSeconds(15)));
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
+        await gate.SwitchAsync("ScopedV1", () => { });
+        Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(seed, candidate, strategy, session, data.A.Id)));
+        Assert.Equal(candidate.Token.Generation, await seed.Database.SqlQueryRaw<long>(ScopedUnlinkGenerationV1.GuardSql(), GenealogyParameter(data.A.Id)).SingleAsync());
+        Assert.Equal(global, await seed.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync());
+        Assert.Single(await seed.PersonRelationships.AsNoTracking().ToListAsync());
+        Assert.Single(await seed.FamilyUnions.AsNoTracking().ToListAsync());
     }
 
     [Theory]
