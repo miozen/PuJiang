@@ -7,6 +7,8 @@ using ZupuPaiBan.Services;
 
 namespace ZupuPaiBan.ViewModels;
 
+public sealed record BranchChoice(Guid Id, string Label);
+
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
 {
@@ -21,6 +23,11 @@ public partial class GenealogySelectionViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<Person> _people = new();
     [ObservableProperty] private ObservableCollection<GenealogyBranchData> _branches = new();
     [ObservableProperty] private string _newBranchName = string.Empty;
+    [ObservableProperty] private ObservableCollection<BranchChoice> _parentBranchChoices = new();
+    [ObservableProperty] private BranchChoice? _selectedParentBranch;
+    [ObservableProperty] private string _newChildBranchName = string.Empty;
+    [ObservableProperty] private BranchChoice? _branchToRename;
+    [ObservableProperty] private string _renamedBranchName = string.Empty;
     [ObservableProperty] private string _searchText = string.Empty;
     [ObservableProperty] private ObservableCollection<Person> _searchResults = new();
     [ObservableProperty] private Person? _selectedSearchResult;
@@ -160,6 +167,60 @@ public partial class GenealogySelectionViewModel : ObservableObject
         catch (Exception ex) { if (SelectedGenealogy?.Id == genealogy.Id) Status = $"房支已创建，但刷新失败：{ex.Message}"; }
     }
 
+    public async Task CreateChildBranchAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var parent = SelectedParentBranch;
+        if (parent is null || !ParentBranchChoices.Any(choice => ReferenceEquals(choice, parent)))
+            throw new InvalidOperationException("请选择当前族谱中的上级房支。");
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).CreateChildBranchAsync(genealogy.Id, parent.Id, NewChildBranchName);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id) return;
+        NewChildBranchName = string.Empty;
+        try { await SelectAsync(genealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == genealogy.Id) Status = $"子房支已创建，但刷新失败：{ex.Message}"; }
+    }
+
+    public async Task RenameBranchAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var branch = BranchToRename;
+        if (branch is null || !ParentBranchChoices.Any(choice => ReferenceEquals(choice, branch)))
+            throw new InvalidOperationException("请选择当前族谱中的房支。");
+        var snapshot = Branches.SingleOrDefault(item => item.Id == branch.Id)
+            ?? throw new InvalidOperationException("房支已失效，请重新选择。");
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).RenameBranchAsync(genealogy.Id, branch.Id, snapshot.Name, snapshot.ParentBranchId, RenamedBranchName);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id) return;
+        RenamedBranchName = string.Empty;
+        try { await SelectAsync(genealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == genealogy.Id) Status = $"房支已重命名，但刷新失败：{ex.Message}"; }
+    }
+
+    private static List<BranchChoice> CreateBranchChoices(IReadOnlyList<GenealogyBranchData> branches)
+    {
+        var byId = branches.ToDictionary(b => b.Id);
+        return branches.Select(branch =>
+        {
+            var names = new List<string>();
+            var seen = new HashSet<Guid>();
+            var current = branch;
+            while (true)
+            {
+                if (!seen.Add(current.Id)) throw new InvalidOperationException("房支层级存在循环。");
+                names.Add(current.Name);
+                if (current.ParentBranchId is not Guid parent) break;
+                if (!byId.TryGetValue(parent, out current!)) throw new InvalidOperationException("房支上级不存在。");
+            }
+            names.Reverse();
+            return new BranchChoice(branch.Id, $"{string.Join(" / ", names)}（ID: {branch.Id}）");
+        }).OrderBy(choice => choice.Label, StringComparer.Ordinal).ToList();
+    }
+
     public GenealogySelectionViewModel(Func<ZupuDbContext> createContext, TargetContextCoordinator? operationCoordinator = null)
     {
         _createContext = createContext;
@@ -206,6 +267,9 @@ public partial class GenealogySelectionViewModel : ObservableObject
         ChildrenStatus = "请选择人物查看生物子女";
         People.Clear();
         Branches.Clear();
+        SelectedParentBranch = null;
+        BranchToRename = null;
+        ParentBranchChoices.Clear();
         UpdateSearchResults();
         TargetTree.Clear();
         if (genealogy == null)
@@ -229,9 +293,11 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
         var tree = TargetMemberTreeProjection.Create(snapshot);
         var people = CreatePeople(snapshot, genealogy.Id);
+        var branchChoices = CreateBranchChoices(snapshot.Branches);
         if (version != _selectionVersion) return;
         People = new ObservableCollection<Person>(people);
         Branches = new ObservableCollection<GenealogyBranchData>(snapshot.Branches);
+        ParentBranchChoices = new ObservableCollection<BranchChoice>(branchChoices);
         TargetTree = new ObservableCollection<TargetMemberTreeNode>(tree);
         Status = $"当前族谱：{genealogy.Name}，{people.Count} 位人物";
     }

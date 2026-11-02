@@ -4,15 +4,15 @@
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
-- **Remote Sync：** 本轮开始实测本地与实际远端 `dev` 均为 `a6adaa4`；后续以实际远端核对为准。
+- **Remote Sync：** 房支功能提交 `1379541` 已推送至 `origin/dev`；后续以实际远端核对为准。
 - **Current Phase：** P1 — 完整族谱管理。
 - **Current Task：** P1 族谱管理；自动合并、生产恢复和按谱候选切换继续关闭。
-- **Last Completed：** 当前族谱支持创建顶层房支，人物编辑支持查看、分配、更换及清除同谱房支，含已有嵌套房支；具体范围见 [P1 计划](CURRENT_PLAN.md#p1--完整族谱管理)。
+- **Last Completed：** 当前族谱支持选择顶层或子房支重命名，保留层级和人物归属并刷新路径；具体范围见 [P1 计划](CURRENT_PLAN.md#p1--完整族谱管理)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
-- **Validation Performed：** Release 解决方案构建通过（0 错误，23 条既有告警）；日常回归 316/316，隔离 WPF 定向验收 1/1，通过真实界面创建、分配、更换（含嵌套）、重开和清除；隔离 SQLite 覆盖重名、无效、跨谱及过期房支拒绝和档案保留。未访问正式用户数据。`a6adaa4` 远端 CI 已通过。
-- **Validation Pending：** 房支功能对应提交的远端 CI 须核实；人工视觉验收和 Performance 专项未执行；生产恢复与完整备份包未完成，真实数据正式使用前须专项验收。候选切换和相关深层专项暂停，不作为自动下一任务。
+- **Validation Performed：** Release 解决方案构建通过（0 错误，31 条既有告警）；日常回归 318/318、隔离 SQLite 和 WPF 定向测试 2/2 通过，覆盖顶层与子房支更名、后代路径、人物归属、同级冲突和过期数据拒绝；未访问正式用户数据。`1379541` 远端 CI 已通过。
+- **Validation Pending：** 子房支创建和房支重命名对应提交的远端 CI 须核实；人工视觉验收和 Performance 专项未执行；生产恢复与完整备份包未完成，真实数据正式使用前须专项验收。候选切换和相关深层专项暂停，不作为自动下一任务。
 - **Known Issues / Blockers：** 全库代数造成无关变更也需重新确认；不能防护第三方有意篡改代数或替换数据库；未来重建受保护表的 Migration 必须显式重建触发器；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
-- **Exact Next Action：** 评估 [P1 计划](CURRENT_PLAN.md#p1--完整族谱管理)中的剩余功能，确定下一项可操作交付；按 D-014 不自动恢复 P0 门闸、按谱切换及极端并发专项，生产仍用全库代数。
+- **Exact Next Action：** 评估 [P1 计划](CURRENT_PLAN.md#p1--完整族谱管理)剩余功能并确定下一项可操作交付；按 D-014 不自动恢复 P0 门闸、按谱切换及极端并发专项，生产仍用全库代数。
 - **Cross-machine Ready：** 提交并推送后，须按本文件开头的 Git 状态与实际远端核实。
 
 ## 下一台电脑接力

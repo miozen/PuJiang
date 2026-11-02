@@ -120,6 +120,20 @@
                     <Button x:Name="createBranchButton" Content="创建顶层房支" Click="CreateBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
+                    <TextBlock Text="上级房支：" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="parentBranchSelector" Width="280" ItemsSource="{Binding ParentBranchChoices}" SelectedItem="{Binding SelectedParentBranch}" DisplayMemberPath="Label"/>
+                    <TextBlock Text="子房支名称：" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="childBranchName" Width="140" MaxLength="200" Text="{Binding NewChildBranchName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button x:Name="createChildBranchButton" Content="创建子房支" Click="CreateChildBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
+                </WrapPanel>
+                <WrapPanel Margin="0,5,0,0">
+                    <TextBlock Text="选择房支：" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="renameBranchSelector" Width="280" ItemsSource="{Binding ParentBranchChoices}" SelectedItem="{Binding BranchToRename}" DisplayMemberPath="Label"/>
+                    <TextBlock Text="新名称：" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                    <TextBox x:Name="renameBranchName" Width="140" MaxLength="200" Text="{Binding RenamedBranchName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button x:Name="renameBranchButton" Content="重命名房支" Click="RenameBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
+                </WrapPanel>
+                <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="搜索当前族谱姓名：" VerticalAlignment="Center"/>
                     <TextBox x:Name="personSearchText" Width="150" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"/>
                     <ComboBox x:Name="personSearchResults" Width="250" Margin="5,0,0,0" ItemsSource="{Binding SearchResults}" SelectedItem="{Binding SelectedSearchResult}">

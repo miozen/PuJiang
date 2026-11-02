@@ -73,6 +73,40 @@ public sealed class GenealogyDataService
         if (count == 0) throw new InvalidOperationException("族谱不存在或已有同名顶层房支。");
     }
 
+    public async Task CreateChildBranchAsync(Guid genealogyId, Guid parentId, string? name, CancellationToken cancellationToken = default)
+    {
+        var normalized = name?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 200)
+            throw new InvalidOperationException("房支名称须为 1 至 200 个字符。");
+        var id = Guid.NewGuid();
+        var count = await _context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO FamilyBranches (Id, GenealogyId, ParentBranchId, Name, SortOrder)
+            SELECT {id}, {genealogyId}, {parentId}, {normalized}, 0
+            WHERE EXISTS (SELECT 1 FROM FamilyBranches WHERE Id = {parentId} AND GenealogyId = {genealogyId})
+              AND NOT EXISTS (SELECT 1 FROM FamilyBranches WHERE GenealogyId = {genealogyId}
+                              AND ParentBranchId = {parentId} AND Name = {normalized})
+            """, cancellationToken);
+        if (count == 0) throw new InvalidOperationException("上级房支不存在、已失效或已有同名子房支。");
+    }
+
+    public async Task RenameBranchAsync(Guid genealogyId, Guid branchId, string expectedName, Guid? expectedParentId,
+        string? name, CancellationToken cancellationToken = default)
+    {
+        var normalized = name?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 200)
+            throw new InvalidOperationException("房支名称须为 1 至 200 个字符。");
+        var count = await _context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE FamilyBranches SET Name = {normalized}
+            WHERE GenealogyId = {genealogyId} AND Id = {branchId}
+              AND Name = {expectedName} AND ParentBranchId IS {expectedParentId}
+              AND NOT EXISTS (SELECT 1 FROM FamilyBranches AS sibling
+                  WHERE sibling.GenealogyId = FamilyBranches.GenealogyId
+                    AND sibling.ParentBranchId IS FamilyBranches.ParentBranchId
+                    AND sibling.Id <> FamilyBranches.Id AND sibling.Name = {normalized})
+            """, cancellationToken);
+        if (count == 0) throw new InvalidOperationException("房支不存在、已失效或同级已有该名称。");
+    }
+
     public Task<List<Person>> GetPeopleAsync(Guid genealogyId, CancellationToken cancellationToken = default) =>
         _context.People.Where(p => p.GenealogyId == genealogyId)
             .OrderBy(p => p.Name).ToListAsync(cancellationToken);

@@ -226,6 +226,22 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void CreateChildBranch_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.CreateChildBranchAsync(); }
+        catch (Exception ex) { MessageBox.Show($"创建子房支失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
+    private async void RenameBranch_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.RenameBranchAsync(); }
+        catch (Exception ex) { MessageBox.Show($"重命名房支失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void RenamePerson_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;

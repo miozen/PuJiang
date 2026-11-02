@@ -95,17 +95,51 @@ internal static class WpfDisplayedWorker
         }
         var firstBranch = genealogy.Branches.Single(b => b.Name == "长房").Id;
         var secondBranch = genealogy.Branches.Single(b => b.Name == "次房").Id;
-        var nestedBranch = new ZupuPaiBan.Models.FamilyBranch { GenealogyId = genealogy.SelectedGenealogy!.Id, ParentBranchId = firstBranch, Name = "次支" };
-        await using (var context = coordinator.CreateContext())
-        {
-            context.FamilyBranches.Add(nestedBranch);
-            await context.SaveChangesAsync();
-        }
+        await CreateChildAsync(firstBranch, "次支");
+        var nestedBranch = genealogy.Branches.Single(b => b.Name == "次支").Id;
+        await CreateChildAsync(nestedBranch, "三支");
+        var thirdBranch = genealogy.Branches.Single(b => b.Name == "三支").Id;
         await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        if (!genealogy.ParentBranchChoices.Any(b => b.Id == thirdBranch && b.Label.Contains("长房 / 次支 / 三支")))
+            throw new InvalidOperationException("重新加载后子房支层级不正确。");
         await EditBranchAsync(null, firstBranch);
-        await EditBranchAsync(firstBranch, nestedBranch.Id);
-        await EditBranchAsync(nestedBranch.Id, secondBranch);
+        await EditBranchAsync(firstBranch, thirdBranch);
+        await EditBranchAsync(thirdBranch, secondBranch);
         await EditBranchAsync(secondBranch, null);
+        await EditBranchAsync(null, thirdBranch);
+        await RenameBranchAsync(firstBranch, "新长房");
+        await RenameBranchAsync(nestedBranch, "新次支");
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        if (!genealogy.ParentBranchChoices.Any(b => b.Id == thirdBranch && b.Label.Contains("新长房 / 新次支 / 三支")) ||
+            genealogy.People.Single().BranchId != thirdBranch)
+            throw new InvalidOperationException("重命名后层级路径或人物归属不正确。");
+        var reopened = new TargetPersonEditDialog(genealogy.People.Single(), genealogy.Branches.ToList());
+        if (reopened.BranchId != thirdBranch) throw new InvalidOperationException("重开人物档案后房支归属不正确。");
+
+        async Task RenameBranchAsync(Guid branchId, string name)
+        {
+            ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == branchId);
+            ((System.Windows.Controls.TextBox)main.FindName("renameBranchName")).Text = name;
+            ((System.Windows.Controls.Button)main.FindName("renameBranchButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while (!panel.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (!panel.IsEnabled || !genealogy.Branches.Any(b => b.Id == branchId && b.Name == name))
+                throw new InvalidOperationException("界面未完成房支重命名。");
+        }
+
+        async Task CreateChildAsync(Guid parentId, string name)
+        {
+            var selector = (System.Windows.Controls.ComboBox)main.FindName("parentBranchSelector");
+            selector.SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == parentId);
+            ((System.Windows.Controls.TextBox)main.FindName("childBranchName")).Text = name;
+            ((System.Windows.Controls.Button)main.FindName("createChildBranchButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while (!panel.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (!panel.IsEnabled || !genealogy.Branches.Any(b => b.Name == name && b.ParentBranchId == parentId))
+                throw new InvalidOperationException("界面未创建子房支。");
+        }
 
         async Task EditBranchAsync(Guid? expected, Guid? target)
         {

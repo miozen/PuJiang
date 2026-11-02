@@ -13,6 +13,104 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Renaming_branches_preserves_hierarchy_and_rejects_conflicts_and_foreign_targets()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "人物";
+        await vm.AddPersonAsync();
+        vm.NewBranchName = "长房";
+        await vm.CreateRootBranchAsync();
+        var root = vm.Branches.Single().Id;
+        vm.NewBranchName = "次房";
+        await vm.CreateRootBranchAsync();
+        vm.SelectedParentBranch = vm.ParentBranchChoices.Single(b => b.Id == root);
+        vm.NewChildBranchName = "一支";
+        await vm.CreateChildBranchAsync();
+        var child = vm.Branches.Single(b => b.Name == "一支").Id;
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, "七世", "长", updateBranch: true, branchId: child);
+        vm.BranchToRename = vm.ParentBranchChoices.Single(b => b.Id == root);
+        vm.RenamedBranchName = "次房";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RenameBranchAsync());
+        vm.RenamedBranchName = " ";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RenameBranchAsync());
+        vm.RenamedBranchName = "新长房";
+        await vm.RenameBranchAsync();
+        Assert.Contains(vm.ParentBranchChoices, b => b.Id == child && b.Label.Contains("新长房 / 一支"));
+        Assert.Equal(child, vm.People.Single().BranchId);
+        var stale = vm.ParentBranchChoices.Single(b => b.Id == child);
+        vm.BranchToRename = stale;
+        vm.RenamedBranchName = "新一支";
+        await vm.RenameBranchAsync();
+        Assert.Equal(child, vm.People.Single().BranchId);
+        Assert.Contains(vm.ParentBranchChoices, b => b.Id == child && b.Label.Contains("新长房 / 新一支"));
+        vm.BranchToRename = stale;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RenameBranchAsync());
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        await service.CreateChildBranchAsync(genealogy.Id, root, "二支");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameBranchAsync(genealogy.Id, child, "新一支", root, "二支"));
+        var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameBranchAsync(foreign.Id, child, "新一支", root, "误改"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameBranchAsync(genealogy.Id, Guid.NewGuid(), "新一支", root, "误改"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameBranchAsync(genealogy.Id, child, "新一支", root, new string('房', 201)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameBranchAsync(genealogy.Id, child, "旧名称", root, "误改"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RenameBranchAsync(genealogy.Id, child, "新一支", null, "误改"));
+        var saved = await context.FamilyBranches.SingleAsync(b => b.Id == child);
+        Assert.Equal(root, saved.ParentBranchId);
+        Assert.Equal("新一支", saved.Name);
+        Assert.Equal(child, (await context.People.SingleAsync()).BranchId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Child_branches_require_current_parent_and_reject_duplicate_or_stale_parent()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var first = vm.SelectedGenealogy!;
+        vm.NewBranchName = "长房";
+        await vm.CreateRootBranchAsync();
+        var root = vm.ParentBranchChoices.Single();
+        vm.SelectedParentBranch = root;
+        vm.NewChildBranchName = "次支";
+        await vm.CreateChildBranchAsync();
+        var child = vm.ParentBranchChoices.Single(b => b.Label.Contains("长房 / 次支"));
+        vm.SelectedParentBranch = child;
+        vm.NewChildBranchName = "三支";
+        await vm.CreateChildBranchAsync();
+        Assert.Contains(vm.ParentBranchChoices, b => b.Label.Contains("长房 / 次支 / 三支"));
+        vm.SelectedParentBranch = vm.ParentBranchChoices.Single(b => b.Id == root.Id);
+        vm.NewChildBranchName = "次支";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CreateChildBranchAsync());
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            await service.CreateRootBranchAsync(foreign.Id, "外谱" );
+            var foreignRoot = await context.FamilyBranches.SingleAsync(b => b.GenealogyId == foreign.Id);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateChildBranchAsync(first.Id, foreignRoot.Id, "误创建"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateChildBranchAsync(first.Id, Guid.NewGuid(), "误创建"));
+            await context.FamilyBranches.Where(b => b.Id == foreignRoot.Id).ExecuteDeleteAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateChildBranchAsync(foreign.Id, foreignRoot.Id, "误创建"));
+            Assert.Equal(3, await context.FamilyBranches.CountAsync(b => b.GenealogyId == first.Id));
+        }
+        var stale = vm.SelectedParentBranch!;
+        await vm.SelectAsync(first);
+        vm.SelectedParentBranch = stale;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CreateChildBranchAsync());
+        await using var verify = database.CreateContext();
+        Assert.Equal(3, await verify.FamilyBranches.CountAsync(b => b.GenealogyId == first.Id));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Root_branch_creation_and_assignment_reject_invalid_scope_and_preserve_profile()
     {
         await using var database = new TestDatabase();
