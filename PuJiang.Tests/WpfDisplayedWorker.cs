@@ -83,6 +83,55 @@ internal static class WpfDisplayedWorker
         if (genealogy.People.Single().RecordedGeneration is not null || genealogy.People.Single().RecordedBirthOrder is not null)
             throw new InvalidOperationException("清空谱载字段未保存。");
 
+        foreach (var name in new[] { "长房", "次房" })
+        {
+            ((System.Windows.Controls.TextBox)main.FindName("newBranchName")).Text = name;
+            ((System.Windows.Controls.Button)main.FindName("createBranchButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while (!panel.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (!panel.IsEnabled || !genealogy.Branches.Any(b => b.Name == name))
+                throw new InvalidOperationException("界面未创建顶层房支。");
+        }
+        var firstBranch = genealogy.Branches.Single(b => b.Name == "长房").Id;
+        var secondBranch = genealogy.Branches.Single(b => b.Name == "次房").Id;
+        var nestedBranch = new ZupuPaiBan.Models.FamilyBranch { GenealogyId = genealogy.SelectedGenealogy!.Id, ParentBranchId = firstBranch, Name = "次支" };
+        await using (var context = coordinator.CreateContext())
+        {
+            context.FamilyBranches.Add(nestedBranch);
+            await context.SaveChangesAsync();
+        }
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        await EditBranchAsync(null, firstBranch);
+        await EditBranchAsync(firstBranch, nestedBranch.Id);
+        await EditBranchAsync(nestedBranch.Id, secondBranch);
+        await EditBranchAsync(secondBranch, null);
+
+        async Task EditBranchAsync(Guid? expected, Guid? target)
+        {
+            Exception? failure = null;
+            var editTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            editTimer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<TargetPersonEditDialog>().SingleOrDefault();
+                if (dialog is null) return;
+                editTimer.Stop();
+                var box = (System.Windows.Controls.ComboBox)dialog.FindName("BranchBox");
+                if (dialog.BranchId != expected) failure = new InvalidOperationException("重开档案时房支不正确。");
+                if (!box.Items.Cast<object>().Any(item => item.GetType().GetProperty("Label")!.GetValue(item)!.ToString()!.Contains("长房 / 次支")))
+                    failure = new InvalidOperationException("嵌套房支未显示层级路径。");
+                box.SelectedItem = box.Items.Cast<object>().Single(item => (Guid?)item.GetType().GetProperty("Id")!.GetValue(item) == target);
+                ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                    .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            };
+            editTimer.Start();
+            var edit = typeof(MainWindow).GetMethod("EditTreePersonAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            await (Task)edit.Invoke(main, [genealogy.TargetTree.Single()])!;
+            editTimer.Stop();
+            if (failure is not null) throw failure;
+            if (genealogy.People.Single().BranchId != target) throw new InvalidOperationException("房支归属未保存。");
+        }
+
         async Task EditRecordedValuesAsync(string expectedGeneration, string expectedOrder, string generation, string order)
         {
             Exception? failure = null;

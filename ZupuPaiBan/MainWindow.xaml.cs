@@ -218,6 +218,14 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void CreateBranch_Click(object sender, RoutedEventArgs e)
+    {
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel!.CreateRootBranchAsync(); }
+        catch (Exception ex) { MessageBox.Show($"创建房支失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void RenamePerson_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;
@@ -407,13 +415,14 @@ public partial class MainWindow : Window
         try
         {
             var person = _genealogyViewModel!.GetTreePerson(node);
-            var dialog = new TargetPersonEditDialog(person) { Owner = this };
+            var dialog = new TargetPersonEditDialog(person, _genealogyViewModel.Branches.ToList()) { Owner = this };
             if (dialog.ShowDialog() != true) return;
             genealogyPanel.IsEnabled = false;
             try
             {
                 await _genealogyViewModel.SaveTreePersonProfileWithRecordedValuesAsync(node, dialog.PersonName, dialog.Sex,
-                    dialog.BirthDate, dialog.DeathDate, dialog.Biography, dialog.RecordedGeneration, dialog.RecordedBirthOrder);
+                    dialog.BirthDate, dialog.DeathDate, dialog.Biography, dialog.RecordedGeneration, dialog.RecordedBirthOrder,
+                    updateBranch: true, branchId: dialog.BranchId);
             }
             finally { genealogyPanel.IsEnabled = true; }
         }

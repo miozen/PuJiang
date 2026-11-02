@@ -19,6 +19,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<Genealogy> _genealogies = new();
     [ObservableProperty] private Genealogy? _selectedGenealogy;
     [ObservableProperty] private ObservableCollection<Person> _people = new();
+    [ObservableProperty] private ObservableCollection<GenealogyBranchData> _branches = new();
+    [ObservableProperty] private string _newBranchName = string.Empty;
     [ObservableProperty] private string _searchText = string.Empty;
     [ObservableProperty] private ObservableCollection<Person> _searchResults = new();
     [ObservableProperty] private Person? _selectedSearchResult;
@@ -124,21 +126,38 @@ public partial class GenealogySelectionViewModel : ObservableObject
     }
 
     public async Task SaveTreePersonProfileWithRecordedValuesAsync(TargetMemberTreeNode node, string? name, PersonSex sex,
-        string? birthDate, string? deathDate, string? biography, string? recordedGeneration, string? recordedBirthOrder)
+        string? birthDate, string? deathDate, string? biography, string? recordedGeneration, string? recordedBirthOrder,
+        bool updateBranch = false, Guid? branchId = null)
     {
         using var operation = _operationCoordinator?.EnterOperation();
         var person = GetTreePerson(node);
         var genealogy = SelectedGenealogy!;
+        if (updateBranch && branchId is Guid id && !Branches.Any(b => b.Id == id))
+            throw new InvalidOperationException("所选房支已失效，请重新选择。");
         var version = _selectionVersion;
         await using var context = _createContext();
         await new GenealogyDataService(context).UpdatePersonBasicProfileWithRecordedValuesAsync(genealogy.Id, person.Id,
-            name, sex, birthDate, deathDate, biography, recordedGeneration, recordedBirthOrder);
+            name, sex, birthDate, deathDate, biography, recordedGeneration, recordedBirthOrder,
+            updateBranch: updateBranch, branchId: branchId);
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id) return;
         try { await SelectAsync(genealogy); }
         catch (Exception ex)
         {
             if (SelectedGenealogy?.Id == genealogy.Id) Status = $"档案已保存，但目标谱系刷新失败：{ex.Message}";
         }
+    }
+
+    public async Task CreateRootBranchAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).CreateRootBranchAsync(genealogy.Id, NewBranchName);
+        NewBranchName = string.Empty;
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id) return;
+        try { await SelectAsync(genealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == genealogy.Id) Status = $"房支已创建，但刷新失败：{ex.Message}"; }
     }
 
     public GenealogySelectionViewModel(Func<ZupuDbContext> createContext, TargetContextCoordinator? operationCoordinator = null)
@@ -186,6 +205,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
         BiologicalChildren.Clear();
         ChildrenStatus = "请选择人物查看生物子女";
         People.Clear();
+        Branches.Clear();
         UpdateSearchResults();
         TargetTree.Clear();
         if (genealogy == null)
@@ -211,6 +231,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
         var people = CreatePeople(snapshot, genealogy.Id);
         if (version != _selectionVersion) return;
         People = new ObservableCollection<Person>(people);
+        Branches = new ObservableCollection<GenealogyBranchData>(snapshot.Branches);
         TargetTree = new ObservableCollection<TargetMemberTreeNode>(tree);
         Status = $"当前族谱：{genealogy.Name}，{people.Count} 位人物";
     }

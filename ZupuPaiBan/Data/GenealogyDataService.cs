@@ -57,6 +57,22 @@ public sealed class GenealogyDataService
         return genealogy;
     }
 
+    public async Task CreateRootBranchAsync(Guid genealogyId, string? name, CancellationToken cancellationToken = default)
+    {
+        var normalized = name?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 200)
+            throw new InvalidOperationException("房支名称须为 1 至 200 个字符。");
+        var id = Guid.NewGuid();
+        var count = await _context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO FamilyBranches (Id, GenealogyId, ParentBranchId, Name, SortOrder)
+            SELECT {id}, {genealogyId}, NULL, {normalized}, 0
+            WHERE EXISTS (SELECT 1 FROM Genealogies WHERE Id = {genealogyId})
+              AND NOT EXISTS (SELECT 1 FROM FamilyBranches WHERE GenealogyId = {genealogyId}
+                              AND ParentBranchId IS NULL AND Name = {normalized})
+            """, cancellationToken);
+        if (count == 0) throw new InvalidOperationException("族谱不存在或已有同名顶层房支。");
+    }
+
     public Task<List<Person>> GetPeopleAsync(Guid genealogyId, CancellationToken cancellationToken = default) =>
         _context.People.Where(p => p.GenealogyId == genealogyId)
             .OrderBy(p => p.Name).ToListAsync(cancellationToken);
@@ -206,7 +222,7 @@ public sealed class GenealogyDataService
 
     public async Task UpdatePersonBasicProfileWithRecordedValuesAsync(Guid genealogyId, Guid personId, string? name, PersonSex sex,
         string? birthDate, string? deathDate, string? biography, string? recordedGeneration, string? recordedBirthOrder,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool updateBranch = false, Guid? branchId = null)
     {
         var normalized = name?.Trim();
         if (string.IsNullOrEmpty(normalized) || normalized.Length > 200)
@@ -217,13 +233,21 @@ public sealed class GenealogyDataService
         if (biography?.Length > 4000) throw new InvalidOperationException("生平不能超过 4000 个字符。");
         if (recordedGeneration?.Length > 100 || recordedBirthOrder?.Length > 100)
             throw new InvalidOperationException("谱载世代和排行不能超过 100 个字符。");
-        var count = await _context.People.Where(p => p.GenealogyId == genealogyId && p.Id == personId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(p => p.Name, normalized)
+        var people = _context.People.Where(p => p.GenealogyId == genealogyId && p.Id == personId);
+        if (updateBranch && branchId is Guid id)
+            people = people.Where(p => _context.FamilyBranches.Any(b => b.GenealogyId == genealogyId && b.Id == id));
+        var count = updateBranch
+            ? await people.ExecuteUpdateAsync(setters => setters.SetProperty(p => p.Name, normalized)
+                .SetProperty(p => p.Sex, sex).SetProperty(p => p.BirthDateText, birthDate)
+                .SetProperty(p => p.DeathDateText, deathDate).SetProperty(p => p.Biography, biography)
+                .SetProperty(p => p.RecordedGeneration, recordedGeneration)
+                .SetProperty(p => p.RecordedBirthOrder, recordedBirthOrder).SetProperty(p => p.BranchId, branchId), cancellationToken)
+            : await people.ExecuteUpdateAsync(setters => setters.SetProperty(p => p.Name, normalized)
                 .SetProperty(p => p.Sex, sex).SetProperty(p => p.BirthDateText, birthDate)
                 .SetProperty(p => p.DeathDateText, deathDate).SetProperty(p => p.Biography, biography)
                 .SetProperty(p => p.RecordedGeneration, recordedGeneration)
                 .SetProperty(p => p.RecordedBirthOrder, recordedBirthOrder), cancellationToken);
-        if (count == 0) throw new InvalidOperationException("当前族谱中不存在该人物。");
+        if (count == 0) throw new InvalidOperationException("人物或所选房支不存在于当前族谱，请重新选择。");
     }
 
     /// <summary>仅删除当前族谱中没有任何关系或婚配记录的人物。</summary>

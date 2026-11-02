@@ -13,6 +13,65 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Root_branch_creation_and_assignment_reject_invalid_scope_and_preserve_profile()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "人物";
+        await vm.AddPersonAsync();
+        vm.NewBranchName = "长房";
+        await vm.CreateRootBranchAsync();
+        var branch = Assert.Single(vm.Branches);
+        await using (var setup = database.CreateContext())
+        {
+            setup.FamilyBranches.Add(new FamilyBranch { GenealogyId = genealogy.Id, ParentBranchId = branch.Id, Name = "次支" });
+            await setup.SaveChangesAsync();
+        }
+        await vm.SelectAsync(genealogy);
+        var nested = vm.Branches.Single(b => b.Name == "次支");
+        vm.NewBranchName = "长房";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CreateRootBranchAsync());
+        vm.NewBranchName = " ";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.CreateRootBranchAsync());
+        var personId = vm.People.Single().Id;
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, "七世", "长", updateBranch: true, branchId: branch.Id);
+        Assert.Equal(branch.Id, vm.People.Single().BranchId);
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, "七世", "长", updateBranch: true, branchId: nested.Id);
+        Assert.Equal(nested.Id, vm.People.Single().BranchId);
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, "七世", "长", updateBranch: true, branchId: branch.Id);
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            await service.CreateRootBranchAsync(foreign.Id, "外谱房支");
+            var foreignBranch = await context.FamilyBranches.SingleAsync(b => b.GenealogyId == foreign.Id);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdatePersonBasicProfileWithRecordedValuesAsync(
+                genealogy.Id, personId, "误改", PersonSex.Unknown, null, null, null, null, null,
+                updateBranch: true, branchId: foreignBranch.Id));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdatePersonBasicProfileWithRecordedValuesAsync(
+                genealogy.Id, personId, "误改", PersonSex.Unknown, null, null, null, null, null,
+                updateBranch: true, branchId: Guid.NewGuid()));
+            var saved = await context.People.SingleAsync(p => p.Id == personId);
+            Assert.Equal("人物", saved.Name);
+            Assert.Equal(branch.Id, saved.BranchId);
+            Assert.Equal("七世", saved.RecordedGeneration);
+            await context.FamilyBranches.Where(b => b.Id == nested.Id).ExecuteDeleteAsync();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.SaveTreePersonProfileWithRecordedValuesAsync(
+            vm.TargetTree.Single(), "误改", PersonSex.Unknown, null, null, null, null, null, updateBranch: true, branchId: nested.Id));
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, "七世", "长", updateBranch: true, branchId: null);
+        Assert.Null(vm.People.Single().BranchId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Recorded_values_are_scoped_validated_and_preserve_derived_values()
     {
         await using var database = new TestDatabase();

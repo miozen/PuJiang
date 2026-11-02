@@ -17,6 +17,7 @@
         <TextBlock Text="逝世："/><TextBox x:Name="DeathBox" MaxLength="100" Margin="0,4,0,8"/>
         <TextBlock Text="谱载世代："/><TextBox x:Name="RecordedGenerationBox" MaxLength="100" Margin="0,4,0,8"/>
         <TextBlock Text="谱载排行："/><TextBox x:Name="RecordedBirthOrderBox" MaxLength="100" Margin="0,4,0,8"/>
+        <TextBlock Text="房支："/><ComboBox x:Name="BranchBox" DisplayMemberPath="Label" Margin="0,4,0,8"/>
         <TextBlock Text="生平："/><TextBox x:Name="BiographyBox" MaxLength="4000" AcceptsReturn="True" TextWrapping="Wrap" Height="80" VerticalScrollBarVisibility="Auto" Margin="0,4,0,12"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>

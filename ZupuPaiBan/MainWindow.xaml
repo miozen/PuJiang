@@ -115,6 +115,11 @@
                     <Button Content="添加人物" Click="AddPerson_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
+                    <TextBlock Text="顶层房支名称：" VerticalAlignment="Center"/>
+                    <TextBox x:Name="newBranchName" Width="160" MaxLength="200" Text="{Binding NewBranchName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button x:Name="createBranchButton" Content="创建顶层房支" Click="CreateBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
+                </WrapPanel>
+                <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="搜索当前族谱姓名：" VerticalAlignment="Center"/>
                     <TextBox x:Name="personSearchText" Width="150" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"/>
                     <ComboBox x:Name="personSearchResults" Width="250" Margin="5,0,0,0" ItemsSource="{Binding SearchResults}" SelectedItem="{Binding SelectedSearchResult}">
