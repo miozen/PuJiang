@@ -8,6 +8,7 @@ using ZupuPaiBan.Services;
 namespace ZupuPaiBan.ViewModels;
 
 public sealed record BranchChoice(Guid Id, string Label);
+public sealed record BranchDeleteCandidate(Guid GenealogyId, GenealogyBranchData Branch, BranchChoice Choice, int SelectionVersion);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -199,6 +200,31 @@ public partial class GenealogySelectionViewModel : ObservableObject
         RenamedBranchName = string.Empty;
         try { await SelectAsync(genealogy); }
         catch (Exception ex) { if (SelectedGenealogy?.Id == genealogy.Id) Status = $"房支已重命名，但刷新失败：{ex.Message}"; }
+    }
+
+    public BranchDeleteCandidate GetBranchDeleteCandidate()
+    {
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var choice = BranchToRename;
+        if (choice is null || !ParentBranchChoices.Any(item => ReferenceEquals(item, choice)))
+            throw new InvalidOperationException("请选择当前族谱中的房支。");
+        var branch = Branches.SingleOrDefault(item => item.Id == choice.Id)
+            ?? throw new InvalidOperationException("房支已失效，请重新选择。");
+        return new BranchDeleteCandidate(genealogy.Id, branch, choice, _selectionVersion);
+    }
+
+    public async Task DeleteEmptyBranchAsync(BranchDeleteCandidate candidate)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.GenealogyId ||
+            !ReferenceEquals(BranchToRename, candidate.Choice) || !ParentBranchChoices.Any(item => ReferenceEquals(item, candidate.Choice)))
+            throw new InvalidOperationException("选择已变化，请重新确认删除。");
+        await using var context = _createContext();
+        await new GenealogyDataService(context).DeleteEmptyBranchAsync(candidate.GenealogyId, candidate.Branch.Id,
+            candidate.Branch.Name, candidate.Branch.ParentBranchId, candidate.Branch.SortOrder);
+        if (candidate.SelectionVersion != _selectionVersion || SelectedGenealogy?.Id != candidate.GenealogyId) return;
+        try { await SelectAsync(SelectedGenealogy); }
+        catch (Exception ex) { if (SelectedGenealogy?.Id == candidate.GenealogyId) Status = $"房支已删除，但刷新失败：{ex.Message}"; }
     }
 
     private static List<BranchChoice> CreateBranchChoices(IReadOnlyList<GenealogyBranchData> branches)

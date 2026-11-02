@@ -107,6 +107,18 @@ public sealed class GenealogyDataService
         if (count == 0) throw new InvalidOperationException("房支不存在、已失效或同级已有该名称。");
     }
 
+    public async Task DeleteEmptyBranchAsync(Guid genealogyId, Guid branchId, string expectedName, Guid? expectedParentId, int expectedSortOrder,
+        CancellationToken cancellationToken = default)
+    {
+        var count = await _context.FamilyBranches
+            .Where(branch => branch.GenealogyId == genealogyId && branch.Id == branchId &&
+                branch.Name == expectedName && branch.ParentBranchId == expectedParentId && branch.SortOrder == expectedSortOrder)
+            .Where(branch => !_context.FamilyBranches.Any(child => child.GenealogyId == genealogyId && child.ParentBranchId == branch.Id))
+            .Where(branch => !_context.People.Any(person => person.GenealogyId == genealogyId && person.BranchId == branch.Id))
+            .ExecuteDeleteAsync(cancellationToken);
+        if (count == 0) throw new InvalidOperationException("房支已变化、不属于当前族谱，或仍有子房支或人物，无法删除。");
+    }
+
     public Task<List<Person>> GetPeopleAsync(Guid genealogyId, CancellationToken cancellationToken = default) =>
         _context.People.Where(p => p.GenealogyId == genealogyId)
             .OrderBy(p => p.Name).ToListAsync(cancellationToken);

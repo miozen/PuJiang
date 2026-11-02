@@ -13,6 +13,49 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Empty_branch_deletion_protects_people_children_and_stale_or_foreign_targets()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewBranchName = "长房";
+        await vm.CreateRootBranchAsync();
+        var root = vm.Branches.Single();
+        vm.SelectedParentBranch = vm.ParentBranchChoices.Single();
+        vm.NewChildBranchName = "次支";
+        await vm.CreateChildBranchAsync();
+        var child = vm.Branches.Single(b => b.Name == "次支");
+        vm.BranchToRename = vm.ParentBranchChoices.Single(b => b.Id == root.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.DeleteEmptyBranchAsync(vm.GetBranchDeleteCandidate()));
+        vm.NewPersonName = "人物";
+        await vm.AddPersonAsync();
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, null, null, updateBranch: true, branchId: child.Id);
+        vm.BranchToRename = vm.ParentBranchChoices.Single(b => b.Id == child.Id);
+        var candidate = vm.GetBranchDeleteCandidate();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.DeleteEmptyBranchAsync(candidate));
+        await using (var context = database.CreateContext())
+        {
+            var service = new GenealogyDataService(context);
+            var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteEmptyBranchAsync(foreign.Id, root.Id, root.Name, root.ParentBranchId, root.SortOrder));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteEmptyBranchAsync(genealogy.Id, root.Id, "旧名称", root.ParentBranchId, root.SortOrder));
+            Assert.Equal(2, await context.FamilyBranches.CountAsync(b => b.GenealogyId == genealogy.Id));
+            Assert.Equal(child.Id, (await context.People.SingleAsync()).BranchId);
+        }
+        await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown,
+            null, null, null, null, null, updateBranch: true, branchId: null);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.DeleteEmptyBranchAsync(candidate));
+        vm.BranchToRename = vm.ParentBranchChoices.Single(b => b.Id == child.Id);
+        await vm.DeleteEmptyBranchAsync(vm.GetBranchDeleteCandidate());
+        Assert.Single(vm.Branches);
+        Assert.Single(vm.People);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Renaming_branches_preserves_hierarchy_and_rejects_conflicts_and_foreign_targets()
     {
         await using var database = new TestDatabase();

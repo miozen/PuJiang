@@ -242,6 +242,19 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void DeleteBranch_Click(object sender, RoutedEventArgs e)
+    {
+        BranchDeleteCandidate candidate;
+        try { candidate = _genealogyViewModel!.GetBranchDeleteCandidate(); }
+        catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (MessageBox.Show($"确定删除空房支“{candidate.Choice.Label}”吗？有子房支或人物的房支不能删除。",
+                "确认删除房支", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        genealogyPanel.IsEnabled = false;
+        try { await _genealogyViewModel.DeleteEmptyBranchAsync(candidate); }
+        catch (Exception ex) { MessageBox.Show($"删除房支失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { genealogyPanel.IsEnabled = true; }
+    }
+
     private async void RenamePerson_Click(object sender, RoutedEventArgs e)
     {
         genealogyPanel.IsEnabled = false;

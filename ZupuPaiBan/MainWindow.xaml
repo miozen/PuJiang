@@ -132,6 +132,7 @@
                     <TextBlock Text="新名称：" Margin="5,0,0,0" VerticalAlignment="Center"/>
                     <TextBox x:Name="renameBranchName" Width="140" MaxLength="200" Text="{Binding RenamedBranchName, UpdateSourceTrigger=PropertyChanged}"/>
                     <Button x:Name="renameBranchButton" Content="重命名房支" Click="RenameBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
+                    <Button x:Name="deleteBranchButton" Content="删除空房支" Click="DeleteBranch_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="搜索当前族谱姓名：" VerticalAlignment="Center"/>

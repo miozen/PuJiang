@@ -115,6 +115,35 @@ internal static class WpfDisplayedWorker
             throw new InvalidOperationException("重命名后层级路径或人物归属不正确。");
         var reopened = new TargetPersonEditDialog(genealogy.People.Single(), genealogy.Branches.ToList());
         if (reopened.BranchId != thirdBranch) throw new InvalidOperationException("重开人物档案后房支归属不正确。");
+        await CreateChildAsync(firstBranch, "待删除空支");
+        var emptyBranch = genealogy.Branches.Single(b => b.Name == "待删除空支").Id;
+        await ConfirmDeleteBranchAsync(emptyBranch, false);
+        if (!genealogy.Branches.Any(b => b.Id == emptyBranch)) throw new InvalidOperationException("取消删除后房支消失。");
+        await ConfirmDeleteBranchAsync(emptyBranch, true);
+        if (genealogy.Branches.Any(b => b.Id == emptyBranch) || genealogy.People.Single().BranchId != thirdBranch)
+            throw new InvalidOperationException("确认删除空房支后结果不正确。");
+
+        async Task ConfirmDeleteBranchAsync(Guid branchId, bool confirm)
+        {
+            ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == branchId);
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = FindWindow(null, "确认删除房支");
+                if (dialog == IntPtr.Zero) return;
+                GetWindowThreadProcessId(dialog, out var ownerPid);
+                if (ownerPid != (uint)Environment.ProcessId) return;
+                timer.Stop();
+                PostMessage(dialog, 0x0111, new IntPtr(confirm ? 6 : 7), IntPtr.Zero);
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("deleteBranchButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            timer.Stop();
+            var until = Stopwatch.StartNew();
+            while (!panel.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (!panel.IsEnabled) throw new TimeoutException("删除房支后界面未恢复。");
+        }
 
         async Task RenameBranchAsync(Guid branchId, string name)
         {
