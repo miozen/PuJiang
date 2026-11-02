@@ -91,6 +91,7 @@ public class ScopedCandidateIsolationTests
         private TaskCompletionSource? drained;
         private int active;
         private bool switching;
+        private bool faulted;
         public Guid Session { get; private set; } = Guid.NewGuid();
         public string Strategy { get; private set; } = "ScopedV1";
 
@@ -100,7 +101,7 @@ public class ScopedCandidateIsolationTests
             Guid session;
             lock (sync)
             {
-                if (switching) return -1;
+                if (switching || faulted) return -1;
                 active++;
                 strategy = Strategy;
                 session = Session;
@@ -109,20 +110,40 @@ public class ScopedCandidateIsolationTests
             finally { lock (sync) { if (--active == 0) drained?.TrySetResult(); } }
         }
 
-        public async Task SwitchAsync(string target, Action started)
+        public async Task SwitchAsync(string target, Action started, CancellationToken cancellationToken = default, Func<Task>? transition = null)
         {
             Task wait;
             lock (sync)
             {
-                if (switching) throw new InvalidOperationException("switch in progress");
+                if (switching || faulted) throw new InvalidOperationException("gate unavailable");
                 switching = true;
                 drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 if (active == 0) drained.SetResult();
                 wait = drained.Task;
                 started();
             }
-            await wait;
-            lock (sync) { Strategy = target; Session = Guid.NewGuid(); switching = false; drained = null; }
+            try
+            {
+                await wait.WaitAsync(cancellationToken);
+                if (transition is not null) await transition();
+                lock (sync) { Strategy = target; Session = Guid.NewGuid(); switching = false; drained = null; }
+            }
+            catch
+            {
+                lock (sync) { switching = false; faulted = true; }
+                throw;
+            }
+        }
+
+        public void Recover()
+        {
+            lock (sync)
+            {
+                if (!faulted || switching || active != 0) throw new InvalidOperationException("gate not drained");
+                Session = Guid.NewGuid();
+                drained = null;
+                faulted = false;
+            }
         }
     }
 
@@ -239,6 +260,91 @@ public class ScopedCandidateIsolationTests
         Assert.Equal(global, await seed.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync());
         Assert.Single(await seed.PersonRelationships.AsNoTracking().ToListAsync());
         Assert.Single(await seed.FamilyUnions.AsNoTracking().ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task Sqlite_abort_inside_delete_rolls_back_record_and_generations_and_allows_fresh_candidate(bool union)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var seed = db.CreateContext();
+        var data = await SeedAsync(seed);
+        var gate = new PolicyGate();
+        var candidate = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, union);
+        var globalBefore = await seed.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync();
+        var trigger = union
+            ? "CREATE TRIGGER TestAbortDelete AFTER DELETE ON FamilyUnions BEGIN UPDATE UnlinkGeneration SET Value = Value + 1 WHERE Id = 1; UPDATE ScopedUnlinkGenerationV1 SET Value = Value + 1 WHERE GenealogyId = OLD.GenealogyId; SELECT RAISE(ABORT, 'test delete failure'); END"
+            : "CREATE TRIGGER TestAbortDelete AFTER DELETE ON PersonRelationships BEGIN UPDATE UnlinkGeneration SET Value = Value + 1 WHERE Id = 1; UPDATE ScopedUnlinkGenerationV1 SET Value = Value + 1 WHERE GenealogyId = OLD.GenealogyId; SELECT RAISE(ABORT, 'test delete failure'); END";
+        await seed.Database.ExecuteSqlRawAsync(trigger);
+        var pause = new PauseDelete();
+        var options = new DbContextOptionsBuilder<ZupuDbContext>().UseSqlite($"Data Source={db.DatabasePath};Pooling=False").AddInterceptors(pause).Options;
+        await using var deleting = new ZupuDbContext(options);
+        var inflight = gate.RunAsync((strategy, session) => DeleteAsync(deleting, candidate, strategy, session, data.A.Id));
+        await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var switching = gate.SwitchAsync("GlobalV1", started.SetResult);
+        try { await started.Task.WaitAsync(TimeSpan.FromSeconds(10)); Assert.False(switching.IsCompleted); }
+        finally { pause.Release.TrySetResult(); }
+        var error = await Assert.ThrowsAsync<SqliteException>(() => inflight.WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal(19, error.SqliteErrorCode);
+        Assert.Contains("test delete failure", error.Message);
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
+        await gate.SwitchAsync("ScopedV1", () => { });
+        Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(seed, candidate, strategy, session, data.A.Id)));
+        Assert.Equal(candidate.Token.Generation, await seed.Database.SqlQueryRaw<long>(ScopedUnlinkGenerationV1.GuardSql(), GenealogyParameter(data.A.Id)).SingleAsync());
+        Assert.Equal(globalBefore, await seed.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync());
+        Assert.Single(await seed.PersonRelationships.AsNoTracking().ToListAsync());
+        Assert.Single(await seed.FamilyUnions.AsNoTracking().ToListAsync());
+        await seed.Database.ExecuteSqlRawAsync("DROP TRIGGER TestAbortDelete");
+        var fresh = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, union);
+        Assert.Equal(1, await gate.RunAsync((strategy, session) => DeleteAsync(seed, fresh, strategy, session, data.A.Id)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task Test_gate_cancel_or_transition_failure_stays_closed_until_drained_explicit_recovery(bool cancel)
+    {
+        await using var db = new TestDatabase();
+        await db.MigrateAsync();
+        await using var seed = db.CreateContext();
+        var data = await SeedAsync(seed);
+        var gate = new PolicyGate();
+        var candidate = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, false);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var active = gate.RunAsync(async (_, _) => { entered.SetResult(); await release.Task; return 42; });
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        using var cancellation = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var switching = gate.SwitchAsync("GlobalV1", started.SetResult, cancellation.Token,
+            cancel ? null : () => Task.FromException(new IOException("模拟策略切换失败")));
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+            if (cancel)
+            {
+                cancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => switching);
+                Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+                Assert.Throws<InvalidOperationException>(() => gate.Recover());
+            }
+        }
+        finally { release.TrySetResult(); }
+        Assert.Equal(42, await active.WaitAsync(TimeSpan.FromSeconds(15)));
+        if (!cancel) await Assert.ThrowsAsync<IOException>(() => switching.WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal(-1, await gate.RunAsync((_, _) => Task.FromResult(1)));
+        Assert.Equal("ScopedV1", gate.Strategy);
+        gate.Recover();
+        Assert.NotEqual(candidate.Token.Session, gate.Session);
+        Assert.Equal(0, await gate.RunAsync((strategy, session) => DeleteAsync(seed, candidate, strategy, session, data.A.Id)));
+        var fresh = await CaptureAsync(seed, data.A.Id, data.First.Id, gate.Session, false);
+        Assert.Equal(1, await gate.RunAsync((strategy, session) => DeleteAsync(seed, fresh, strategy, session, data.A.Id)));
     }
 
     [Theory]
