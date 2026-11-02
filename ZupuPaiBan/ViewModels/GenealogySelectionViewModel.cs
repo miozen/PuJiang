@@ -607,6 +607,24 @@ public partial class GenealogySelectionViewModel : ObservableObject
         return candidates.OrderBy(item => item.Kind).ThenBy(item => item.Description, StringComparer.Ordinal).ToList();
     }
 
+    public async Task UpdateTargetRelationshipDetailsAsync(TargetLinkRemovalCandidate candidate, string? note, string? sourceCitation)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (candidate.GenealogyId != SelectedGenealogy?.Id || candidate.ParticipantId != SelectedPerson?.Id ||
+            candidate.SelectionVersion != _selectionVersion || candidate.PersonSelectionVersion != _candidatePersonSelectionVersion ||
+            candidate.Kind != TargetLinkRemovalKind.Relationship || candidate.RelationshipSnapshot is not { } relationship ||
+            candidate.UnionSnapshot is not null || relationship.Id != candidate.Id)
+            throw new InvalidOperationException("当前选择已变化，请重新选择关系。");
+        var (genealogy, person) = GetCurrentSelectedPersonForEditing();
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        await new GenealogyDataService(context).UpdateRelationshipDetailsAsync(genealogy.Id, relationship, person.Id,
+            candidate.FirstName, candidate.SecondName, candidate.UnlinkGeneration, note, sourceCitation);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
+        if (await RefreshTargetTreeAsync(genealogy.Id, version, "关系资料已保存")) Status = "关系资料已保存。";
+    }
+
     /// <summary>
     /// Explicitly unlinks one currently selected person's relationship or union. The persistence operation is one
     /// participant- and genealogy-scoped DELETE; it never deletes people or another graph record.

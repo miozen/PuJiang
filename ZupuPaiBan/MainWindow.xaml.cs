@@ -393,6 +393,22 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show($"新增婚配失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
+    private async void EditRelationshipDetails_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var candidates = (await _genealogyViewModel!.GetTargetLinkRemovalCandidatesAsync())
+                .Where(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship).ToList();
+            if (candidates.Count == 0) { MessageBox.Show("当前人物没有可编辑的关系。", "提示"); return; }
+            var dialog = new TargetRelationshipDetailsDialog(candidates) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.SelectedCandidate is not { } candidate) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.UpdateTargetRelationshipDetailsAsync(candidate, dialog.Note, dialog.SourceCitation); }
+            finally { genealogyPanel.IsEnabled = true; }
+        }
+        catch (Exception ex) { MessageBox.Show($"保存关系资料失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async void TargetShortcut_RemoveLink_Click(object sender, RoutedEventArgs e)
     {
         try

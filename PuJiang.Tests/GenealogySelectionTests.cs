@@ -13,6 +13,50 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Existing_relationship_details_update_preserves_record_and_rejects_stale_or_foreign_candidates()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.NewPersonName = "父母"; await vm.AddPersonAsync();
+        vm.SelectedPerson = vm.People.Single(p => p.Name == "主体");
+        var subjectId = vm.SelectedPerson.Id;
+        var parentId = vm.People.Single(p => p.Name == "父母").Id;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.AdoptiveParent, parentId, "旧备注", "旧来源");
+        var candidate = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.UpdateTargetRelationshipDetailsAsync(candidate, new string('注', 2001), "来源"));
+        await vm.UpdateTargetRelationshipDetailsAsync(candidate, "新备注", "新来源");
+        await Assert.ThrowsAsync<StaleTargetLinkException>(() => vm.UpdateTargetRelationshipDetailsAsync(candidate, "旧候选", null));
+        await using (var context = database.CreateContext())
+        {
+            var relation = await context.PersonRelationships.SingleAsync();
+            Assert.Equal(candidate.Id, relation.Id);
+            Assert.Equal(subjectId, relation.PersonId);
+            Assert.Equal(parentId, relation.RelatedPersonId);
+            Assert.Equal(PersonRelationshipKind.AdoptiveParent, relation.Kind);
+            Assert.Equal("新备注", relation.Note);
+            Assert.Equal("新来源", relation.SourceCitation);
+            var service = new GenealogyDataService(context);
+            var foreign = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+            var refreshed = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+            await Assert.ThrowsAsync<StaleTargetLinkException>(() => service.UpdateRelationshipDetailsAsync(foreign.Id,
+                refreshed.RelationshipSnapshot!, subjectId, refreshed.FirstName, refreshed.SecondName, refreshed.UnlinkGeneration, "跨谱", null));
+        }
+        var current = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await vm.UpdateTargetRelationshipDetailsAsync(current, null, null);
+        await vm.SelectAsync(genealogy);
+        await using var final = database.CreateContext();
+        var saved = await final.PersonRelationships.SingleAsync();
+        Assert.Equal(candidate.Id, saved.Id);
+        Assert.Null(saved.Note);
+        Assert.Null(saved.SourceCitation);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Union_details_persist_and_invalid_requests_leave_no_records()
     {
         await using var database = new TestDatabase();

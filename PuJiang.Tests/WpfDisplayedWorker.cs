@@ -251,6 +251,45 @@ internal static class WpfDisplayedWorker
             .Any(detail => detail.Contains("界面谱载备注") && detail.Contains("界面谱牒来源")))
             throw new InvalidOperationException("重载后关系清单未显示备注与来源。");
 
+        await EditRelationshipDetailsAsync("界面谱载备注", "界面谱牒来源", "更正备注", "更正来源");
+        await EditRelationshipDetailsAsync("更正备注", "更正来源", "", "");
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        await using (var verifyRelation = coordinator.CreateContext())
+        {
+            var relation = await verifyRelation.PersonRelationships.SingleAsync();
+            if (relation.Note is not null || relation.SourceCitation is not null)
+                throw new InvalidOperationException("关系资料清空未保存。");
+        }
+
+        async Task EditRelationshipDetailsAsync(string expectedNote, string expectedSource, string note, string source)
+        {
+            genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<TargetRelationshipDetailsDialog>().SingleOrDefault();
+                if (dialog is null) return;
+                timer.Stop();
+                ((System.Windows.Controls.ListBox)dialog.FindName("CandidateList")).SelectedIndex = 0;
+                var noteBox = (System.Windows.Controls.TextBox)dialog.FindName("NoteBox");
+                var sourceBox = (System.Windows.Controls.TextBox)dialog.FindName("SourceCitationBox");
+                if (noteBox.Text != expectedNote || sourceBox.Text != expectedSource)
+                    failure = new InvalidOperationException("关系资料编辑窗口未显示原值。");
+                noteBox.Text = note;
+                sourceBox.Text = source;
+                ((System.Windows.Controls.Button)dialog.FindName("SaveButton"))
+                    .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("editRelationshipDetailsButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("编辑关系资料后界面未恢复。"); }
+            if (failure is not null) throw failure;
+        }
+
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
         var unionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         unionTimer.Tick += (_, _) =>

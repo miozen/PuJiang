@@ -165,6 +165,28 @@ public sealed class GenealogyDataService
             throw new StaleTargetLinkException("当前族谱中不存在指定人物参与的关系，可能已被更改或解除。");
     }
 
+    public async Task UpdateRelationshipDetailsAsync(Guid genealogyId, GenealogyRelationshipData expected, Guid participantId,
+        string firstName, string? secondName, long unlinkGeneration, string? note, string? sourceCitation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        if (note?.Length > 2000 || sourceCitation?.Length > 1000)
+            throw new InvalidOperationException("关系资料超过允许长度。");
+        var count = await _context.PersonRelationships
+            .Where(relationship => relationship.GenealogyId == genealogyId && relationship.Id == expected.Id &&
+                (relationship.PersonId == participantId || relationship.RelatedPersonId == participantId) &&
+                relationship.PersonId == expected.PersonId && relationship.RelatedPersonId == expected.RelatedPersonId &&
+                relationship.Kind == expected.Kind && relationship.IsPreferredForLineage == expected.IsPreferredForLineage &&
+                relationship.Note == expected.Note && relationship.SourceCitation == expected.SourceCitation &&
+                _context.People.Any(p => p.GenealogyId == genealogyId && p.Id == relationship.PersonId && p.Name == firstName) &&
+                (relationship.RelatedPersonId == null || _context.People.Any(p => p.GenealogyId == genealogyId &&
+                    p.Id == relationship.RelatedPersonId && p.Name == secondName)) &&
+                _context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(value => value == unlinkGeneration))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.Note, note)
+                .SetProperty(r => r.SourceCitation, sourceCitation), cancellationToken);
+        if (count == 0) throw new StaleTargetLinkException("关系已变化或不属于当前人物，请重新选择。");
+    }
+
     /// <summary>
     /// Deletes exactly one union only when it still belongs to the specified genealogy and includes the current
     /// participant and all fields still match the confirmed snapshot. It never deletes either person or a related
