@@ -423,6 +423,59 @@ internal static class WpfDisplayedWorker
                 throw new InvalidOperationException("族谱资料清空或隔离结果不正确。");
         }
 
+        var importSourceId = Guid.NewGuid();
+        await using (var importContext = coordinator.CreateContext())
+        {
+            importContext.GenealogyImportRecords.AddRange(
+                new ZupuPaiBan.Models.GenealogyImportRecord { GenealogyId = originalGenealogyId, SourceKind = "PuJiang.InternalJson", ImportMode = "Default", SourceFormatVersion = 1, SourceGenealogyId = importSourceId, SourceDocumentFingerprint = "internal-fingerprint" },
+                new ZupuPaiBan.Models.GenealogyImportRecord { GenealogyId = originalGenealogyId, SourceKind = "PuJiang.GEDCOM-5.5.x", ImportMode = "Copy", SourceFormatVersion = 1, SourceGenealogyId = Guid.NewGuid(), SourceDocumentFingerprint = "external-fingerprint" });
+            await importContext.SaveChangesAsync();
+        }
+        await ViewHistoryAsync(originalGenealogyId, false);
+        genealogySelector.SelectedItem = genealogy.Genealogies.Single(g => g.Id == duplicateId);
+        var historySwitch = Stopwatch.StartNew();
+        while (genealogy.SelectedGenealogy?.Id != duplicateId && historySwitch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (genealogy.SelectedGenealogy?.Id != duplicateId) throw new TimeoutException("切换空来源族谱失败。");
+        await ViewHistoryAsync(duplicateId, true);
+        genealogySelector.SelectedItem = genealogy.Genealogies.Single(g => g.Id == originalGenealogyId);
+        historySwitch.Restart();
+        while ((genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.People.Count != 2) && historySwitch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (genealogy.SelectedGenealogy?.Id != originalGenealogyId || genealogy.People.Count != 2) throw new TimeoutException("切回原族谱失败。");
+        await ViewHistoryAsync(originalGenealogyId, false);
+        await using (var verifyHistory = coordinator.CreateContext())
+        {
+            if (await verifyHistory.GenealogyImportRecords.CountAsync() != 2 || await verifyHistory.People.CountAsync(p => p.GenealogyId == originalGenealogyId) != 2)
+                throw new InvalidOperationException("查看来源改变了记录或图数据。");
+        }
+
+        async Task ViewHistoryAsync(Guid expectedId, bool empty)
+        {
+            Exception? failure = null;
+            var historyTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            historyTimer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<GenealogyImportHistoryDialog>().SingleOrDefault();
+                if (dialog is null) return;
+                historyTimer.Stop();
+                var label = (System.Windows.Controls.TextBlock)dialog.FindName("GenealogyLabel");
+                var body = (System.Windows.Controls.TextBox)dialog.FindName("HistoryText");
+                if (!label.Text.Contains(expectedId.ToString()) || !body.IsReadOnly ||
+                    (empty ? body.Text != "当前族谱没有导入来源记录。" :
+                        !body.Text.Contains("internal-fingerprint") || !body.Text.Contains("external-fingerprint") ||
+                        !body.Text.Contains($"来源族谱 ID：{importSourceId}") || !body.Text.Contains("来源标识（由指纹派生）")))
+                    failure = new InvalidOperationException("导入来源窗口内容、隔离或只读状态不正确。");
+                ((System.Windows.Controls.Button)dialog.FindName("CloseButton"))
+                    .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            };
+            historyTimer.Start();
+            ((System.Windows.Controls.Button)main.FindName("viewImportHistoryButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while (historyTimer.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+            if (historyTimer.IsEnabled) { historyTimer.Stop(); throw new TimeoutException("未显示导入来源窗口。"); }
+            if (failure is not null) throw failure;
+        }
+
         async Task EditGenealogyProfileAsync(string expectedSurname, string expectedDescription, string surname, string description)
         {
             Exception? failure = null;

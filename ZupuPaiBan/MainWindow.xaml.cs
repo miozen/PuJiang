@@ -218,6 +218,16 @@ public partial class MainWindow : Window
         finally { genealogyPanel.IsEnabled = true; }
     }
 
+    private async void ViewImportHistory_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var history = await _genealogyViewModel!.GetGenealogyImportHistoryAsync();
+            new GenealogyImportHistoryDialog(history) { Owner = this }.ShowDialog();
+        }
+        catch (Exception ex) { MessageBox.Show($"读取导入来源失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
     private async void EditGenealogyProfile_Click(object sender, RoutedEventArgs e)
     {
         try

@@ -9,6 +9,7 @@ namespace ZupuPaiBan.ViewModels;
 
 public sealed record BranchChoice(Guid Id, string Label);
 public sealed record GenealogyProfileCandidate(GenealogyGraphInfo Snapshot, int SelectionVersion);
+public sealed record GenealogyImportHistory(GenealogyGraphInfo Genealogy, IReadOnlyList<GenealogyImportRecord> Records);
 public sealed record BranchDeleteCandidate(Guid GenealogyId, GenealogyBranchData Branch, BranchChoice Choice, int SelectionVersion);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
@@ -296,6 +297,20 @@ public partial class GenealogySelectionViewModel : ObservableObject
         SelectedGenealogy.Name = name;
         RenamedGenealogyName = name;
         Status = $"当前族谱：{name}，{People.Count} 位人物";
+    }
+
+    public async Task<GenealogyImportHistory> GetGenealogyImportHistoryAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var selected = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var version = _selectionVersion;
+        await using var context = _createContext();
+        var service = new GenealogyDataService(context);
+        var snapshot = await service.GetGenealogyProfileAsync(selected.Id);
+        var records = await service.GetImportRecordsAsync(selected.Id);
+        if (version != _selectionVersion || SelectedGenealogy?.Id != selected.Id)
+            throw new InvalidOperationException("当前族谱已变化，请重新选择。");
+        return new GenealogyImportHistory(snapshot, records.AsReadOnly());
     }
 
     public async Task<GenealogyProfileCandidate> GetGenealogyProfileCandidateAsync()

@@ -118,6 +118,7 @@
                     <TextBox x:Name="renameGenealogyName" Width="160" MaxLength="200" Text="{Binding RenamedGenealogyName, UpdateSourceTrigger=PropertyChanged}"/>
                     <Button x:Name="renameGenealogyButton" Content="重命名族谱" Click="RenameGenealogy_Click" Margin="5,0,0,0" Padding="8,2"/>
                     <Button x:Name="editGenealogyProfileButton" Content="编辑族谱资料" Click="EditGenealogyProfile_Click" Margin="5,0,0,0" Padding="8,2"/>
+                    <Button x:Name="viewImportHistoryButton" Content="查看导入来源" Click="ViewImportHistory_Click" Margin="5,0,0,0" Padding="8,2"/>
                 </WrapPanel>
                 <WrapPanel Margin="0,5,0,0">
                     <TextBlock Text="人物姓名：" VerticalAlignment="Center"/>

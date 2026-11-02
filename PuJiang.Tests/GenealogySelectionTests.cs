@@ -13,6 +13,40 @@ public class GenealogySelectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Import_history_is_scoped_read_only_and_reports_read_failures()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        Guid firstId, secondId;
+        var sourceId = Guid.NewGuid();
+        await using (var context = database.CreateContext())
+        {
+            var first = new Genealogy { Name = "同名谱" };
+            var second = new Genealogy { Name = "同名谱" };
+            firstId = first.Id; secondId = second.Id;
+            context.Genealogies.AddRange(first, second);
+            context.GenealogyImportRecords.AddRange(
+                new GenealogyImportRecord { GenealogyId = firstId, SourceKind = "PuJiang.InternalJson", ImportMode = "Default", SourceFormatVersion = 1, SourceGenealogyId = sourceId, SourceDocumentFingerprint = "first" },
+                new GenealogyImportRecord { GenealogyId = secondId, SourceKind = "PuJiang.ExcelLegacyV1", ImportMode = "Copy", SourceFormatVersion = 1, SourceGenealogyId = Guid.NewGuid(), SourceDocumentFingerprint = "second" });
+            await context.SaveChangesAsync();
+        }
+        var vm = new GenealogySelectionViewModel(database.CreateContext);
+        await vm.LoadAsync();
+        await vm.SelectAsync(vm.Genealogies.Single(g => g.Id == firstId));
+        var history = await vm.GetGenealogyImportHistoryAsync();
+        Assert.Equal(firstId, history.Genealogy.Id);
+        Assert.Equal(sourceId, Assert.Single(history.Records).SourceGenealogyId);
+        await vm.SelectAsync(vm.Genealogies.Single(g => g.Id == secondId));
+        Assert.Equal("second", Assert.Single((await vm.GetGenealogyImportHistoryAsync()).Records).SourceDocumentFingerprint);
+        await using var verify = database.CreateContext();
+        Assert.Equal(2, await verify.GenealogyImportRecords.CountAsync());
+        Assert.Equal(2, await verify.Genealogies.CountAsync());
+        await verify.Database.ExecuteSqlRawAsync("DROP TABLE GenealogyImportRecords");
+        await Assert.ThrowsAsync<SqliteException>(() => vm.GetGenealogyImportHistoryAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Genealogy_profile_edits_are_scoped_preserve_data_and_reject_stale_values()
     {
         await using var database = new TestDatabase();
