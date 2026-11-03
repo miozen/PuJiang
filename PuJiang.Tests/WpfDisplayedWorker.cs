@@ -1211,6 +1211,29 @@ internal static class WpfDisplayedWorker
                     ((System.Windows.Controls.Button)dialog.FindName("LocateButton"))
                         .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                     if (!parentNode.IsPathAncestor) throw new InvalidOperationException("重新定位后路径高亮未恢复。");
+                    if (invalidate == 0)
+                    {
+                        var views = (System.Windows.Controls.TabControl)dialog.FindName("LineageViews");
+                        views.SelectedIndex = 1;
+                        var canvas = (System.Windows.Controls.Canvas)dialog.FindName("GraphCanvas");
+                        var rootPanels = canvas.Children.OfType<System.Windows.Controls.Grid>().ToList();
+                        if (rootPanels.Count != 2) throw new InvalidOperationException("图形根节点错误。");
+                        var toggle = rootPanels.SelectMany(p => p.Children.OfType<System.Windows.Controls.Button>())
+                            .Single(b => b.Tag is Guid id && id == pathParent && ((string)b.Content).StartsWith("展开"));
+                        toggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        if (canvas.Children.OfType<System.Windows.Shapes.Line>().Count() != 1) throw new InvalidOperationException("图形展开未绘制连线。");
+                        searchBox.Text = ""; searchBox.Text = pathSubject.ToString(); searchResults.SelectedIndex = 0;
+                        ((System.Windows.Controls.Button)dialog.FindName("LocateButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        if (!canvas.Children.OfType<System.Windows.Shapes.Line>().Any(l => l.Stroke == System.Windows.Media.Brushes.DarkOrange))
+                            throw new InvalidOperationException("图形路径连线未高亮。");
+                        var scale = (System.Windows.Media.ScaleTransform)dialog.FindName("GraphScale");
+                        ((System.Windows.Controls.Button)dialog.FindName("GraphZoomIn")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        if (scale.ScaleX <= 1) throw new InvalidOperationException("图形缩放未生效。");
+                        toggle = canvas.Children.OfType<System.Windows.Controls.Grid>().SelectMany(p => p.Children.OfType<System.Windows.Controls.Button>())
+                            .Single(b => b.Tag is Guid id && id == pathParent && ((string)b.Content).StartsWith("折叠"));
+                        toggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        if (canvas.Children.OfType<System.Windows.Shapes.Line>().Any()) throw new InvalidOperationException("图形折叠未隐藏下系。");
+                    }
                     if (invalidate != 0)
                     {
                         await genealogy.SelectAsync(invalidate == 1 ? priorGenealogy : pathGenealogy);

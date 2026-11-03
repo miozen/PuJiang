@@ -32,7 +32,8 @@
         </StackPanel>
         <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
-            <GroupBox Header="树形世系（可展开或折叠）" Margin="0,0,8,0">
+            <TabControl x:Name="LineageViews" Margin="0,0,8,0" SelectionChanged="LineageViews_SelectionChanged">
+              <TabItem Header="树形">
                 <TreeView x:Name="LineageTree" SelectedItemChanged="LineageTree_SelectedItemChanged">
                     <TreeView.Resources>
                         <HierarchicalDataTemplate DataType="{x:Type services:LineageTreeNode}" ItemsSource="{Binding Children}">
@@ -51,7 +52,23 @@
                         <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
                     </Style></TreeView.ItemContainerStyle>
                 </TreeView>
-            </GroupBox>
+              </TabItem>
+              <TabItem Header="节点连线图">
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+                    <Button x:Name="GraphZoomOut" Content="缩小" Click="GraphZoomOut_Click" Padding="8,2"/>
+                    <Button x:Name="GraphZoomReset" Content="100%" Click="GraphZoomReset_Click" Margin="4,0" Padding="8,2"/>
+                    <Button x:Name="GraphZoomIn" Content="放大" Click="GraphZoomIn_Click" Padding="8,2"/>
+                    <TextBlock Text="滚动浏览；节点下方按钮展开或折叠下系" Margin="8,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <ScrollViewer x:Name="GraphScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <Canvas x:Name="GraphCanvas" Background="White">
+                      <Canvas.LayoutTransform><ScaleTransform x:Name="GraphScale" ScaleX="1" ScaleY="1"/></Canvas.LayoutTransform>
+                    </Canvas>
+                  </ScrollViewer>
+                </DockPanel>
+              </TabItem>
+            </TabControl>
             <GroupBox Grid.Column="1" Header="所选人物的父母关系">
                 <DockPanel Margin="6">
                     <TextBox x:Name="DetailsText" DockPanel.Dock="Top" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Height="70" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6"/>

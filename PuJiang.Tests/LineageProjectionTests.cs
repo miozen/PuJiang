@@ -63,6 +63,15 @@ public class LineageProjectionTests
         tree.Choose(child.Id, adoptive.Id);
         Assert.Equal(parent.Id, tree.GetPerson(child.Id).Parent!.PersonId);
         Assert.Equal(adoptive.Id, tree.GetPerson(child.Id).Projection.SelectedParent!.Relationship.Id);
+        var graph = LineageGraphLayoutService.Calculate(tree, new HashSet<Guid> { grandparent.Id, parent.Id });
+        var again = LineageGraphLayoutService.Calculate(tree, new HashSet<Guid> { grandparent.Id, parent.Id });
+        Assert.Equal(graph.Nodes.Select(n => (n.Person.PersonId, n.X, n.Y)), again.Nodes.Select(n => (n.Person.PersonId, n.X, n.Y)));
+        Assert.Equal(5, graph.Nodes.Count);
+        Assert.Contains(graph.Edges, e => e.ParentId == parent.Id && e.ChildId == child.Id && e.RelationshipId == adoptive.Id);
+        Assert.All(graph.Nodes, a => Assert.DoesNotContain(graph.Nodes, b => a.Person.PersonId != b.Person.PersonId &&
+            Math.Abs(a.X - b.X) < LineageGraphLayoutService.NodeWidth && Math.Abs(a.Y - b.Y) < LineageGraphLayoutService.NodeHeight));
+        var collapsedGraph = LineageGraphLayoutService.Calculate(tree, new HashSet<Guid>());
+        Assert.DoesNotContain(collapsedGraph.Nodes, n => n.Person.PersonId == child.Id);
         tree.GetPerson(parent.Id).IsExpanded = false;
         Assert.Contains("未记录", tree.Highlight(child.Id));
         Assert.True(tree.GetPerson(parent.Id).IsPathAncestor);

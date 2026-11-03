@@ -2,6 +2,8 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Shapes;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 using ZupuPaiBan.Services;
@@ -21,6 +23,7 @@ public partial class LineageTreeDialog : Window
     private bool _invalid;
     private bool _rendering;
     private LineageTreeNode? _selected;
+    private readonly HashSet<Guid> _graphExpanded = new();
 
     public LineageTreeDialog(GenealogySelectionViewModel viewModel, LineagePreviewContext preview)
     {
@@ -47,6 +50,7 @@ public partial class LineageTreeDialog : Window
         _selected = null;
         _tree.ClearSelection();
         LineageTree.ItemsSource = null;
+        GraphCanvas.Children.Clear();
         SearchResults.ItemsSource = null;
         CandidateList.ItemsSource = null;
         DetailsText.Text = string.Empty;
@@ -69,6 +73,7 @@ public partial class LineageTreeDialog : Window
         _rendering = false;
         StatusText.Text = $"共 {_tree.People.Count} 人；{_tree.People.Count(n => n.Projection.NeedsChoice)} 人的父母关系待选择。";
         RenderDetails();
+        RenderGraph();
     }
     private void RenderDetails()
     {
@@ -78,7 +83,8 @@ public partial class LineageTreeDialog : Window
         CandidateList.SelectedItem = row?.SelectedParent;
         var lost = row is null ? "" : string.Join("\n", row.LostAncestry.Select(r =>
             $"谱载上系失考（关系 ID: {r.Id}）；备注：{r.Note ?? "（未填写）"}；来源：{r.SourceCitation ?? "（未填写）"}"));
-        DetailsText.Text = row is null ? "请选择人物。" : string.IsNullOrEmpty(lost) ? "没有上系失考记录。" : lost;
+        DetailsText.Text = row is null ? "请选择人物。" :
+            $"{row.Person.Name}（人物 ID: {row.Person.Id}）\n" + (string.IsNullOrEmpty(lost) ? "没有上系失考记录。" : lost);
         UpdateButtons();
     }
     private void UpdateButtons()
@@ -95,6 +101,7 @@ public partial class LineageTreeDialog : Window
         var boundary = _tree.Highlight(_selected?.PersonId);
         StatusText.Text = string.IsNullOrEmpty(boundary) ? "请选择人物。" : boundary;
         RenderDetails();
+        RenderGraph();
     }
     private void CandidateList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateButtons();
     private void Choose_Click(object sender, RoutedEventArgs e)
@@ -125,6 +132,7 @@ public partial class LineageTreeDialog : Window
     {
         if (!Current()) return;
         _chartId = null; _chartRevision = null; ChartName.Text = string.Empty;
+        _graphExpanded.Clear();
         _invalidChoices.Clear(); RefreshInvalid();
         _session = new LineageProjectionSession(_preview.Snapshot);
         _tree = new LineageTreeState(_session);
@@ -141,6 +149,7 @@ public partial class LineageTreeDialog : Window
             if (review.GenerationChanged && !ConfirmReview(review)) return;
             _session = new LineageProjectionSession(_preview.Snapshot);
             _tree = new LineageTreeState(_session);
+            _graphExpanded.Clear();
             _invalidChoices.Clear();
             foreach (var choice in review.Choices)
             {
@@ -212,6 +221,20 @@ public partial class LineageTreeDialog : Window
     }
     private void Locate(Guid id)
     {
+        if (LineageViews.SelectedIndex == 1)
+        {
+            var graphNode = _tree.Reveal(id);
+            for (var parent = graphNode.Parent; parent is not null; parent = parent.Parent) _graphExpanded.Add(parent.PersonId);
+            _selected = graphNode;
+            StatusText.Text = _tree.Highlight(id);
+            RenderDetails(); RenderGraph();
+            var layout = LineageGraphLayoutService.Calculate(_tree, _graphExpanded);
+            var positioned = layout.Nodes.Single(n => n.Person.PersonId == id);
+            GraphScroll.UpdateLayout();
+            GraphScroll.ScrollToHorizontalOffset(positioned.X * GraphScale.ScaleX);
+            GraphScroll.ScrollToVerticalOffset(positioned.Y * GraphScale.ScaleY);
+            return;
+        }
         var node = _tree.Reveal(id);
         var path = new Stack<LineageTreeNode>();
         for (var item = node; item is not null; item = item.Parent) path.Push(item);
@@ -241,5 +264,61 @@ public partial class LineageTreeDialog : Window
         _selected = null;
         StatusText.Text = "请选择人物。";
         RenderDetails();
+        RenderGraph();
     }
+
+    private void LineageViews_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.Source, LineageViews)) RenderGraph();
+    }
+
+    private void RenderGraph()
+    {
+        if (_invalid || GraphCanvas is null || LineageViews?.SelectedIndex != 1) return;
+        var layout = LineageGraphLayoutService.Calculate(_tree, _graphExpanded);
+        GraphCanvas.Children.Clear();
+        GraphCanvas.Width = layout.Width; GraphCanvas.Height = layout.Height;
+        var positions = layout.Nodes.ToDictionary(n => n.Person.PersonId);
+        var path = new HashSet<Guid>();
+        for (var node = _selected; node?.Parent is not null; node = node.Parent) path.Add(node.PersonId);
+        foreach (var edge in layout.Edges)
+        {
+            var parent = positions[edge.ParentId]; var child = positions[edge.ChildId];
+            var highlighted = path.Contains(edge.ChildId);
+            GraphCanvas.Children.Add(new Line { X1 = parent.X + LineageGraphLayoutService.NodeWidth / 2,
+                Y1 = parent.Y + LineageGraphLayoutService.NodeHeight, X2 = child.X + LineageGraphLayoutService.NodeWidth / 2,
+                Y2 = child.Y, Stroke = highlighted ? Brushes.DarkOrange : Brushes.Gray, StrokeThickness = highlighted ? 3 : 1.5,
+                Tag = edge.RelationshipId, IsHitTestVisible = false });
+        }
+        foreach (var item in layout.Nodes)
+        {
+            var node = item.Person;
+            var panel = new Grid { Width = LineageGraphLayoutService.NodeWidth, Height = LineageGraphLayoutService.NodeHeight };
+            panel.RowDefinitions.Add(new RowDefinition()); panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
+            var label = new Button { Tag = node.PersonId, Content = node.Projection.Person.Name +
+                (node.Projection.NeedsChoice ? " [待选择]" : node.Projection.SelectedParent is null ? " [未记录上系]" : "") +
+                (node.Projection.LostAncestry.Count > 0 ? " [失考]" : ""),
+                ToolTip = node.Label, Background = node.PersonId == _selected?.PersonId ? Brushes.LightBlue :
+                    node.IsPathAncestor ? Brushes.Moccasin : Brushes.White };
+            label.Click += (_, _) => Locate(node.PersonId);
+            panel.Children.Add(label);
+            if (node.Children.Count > 0)
+            {
+                var toggle = new Button { Content = item.Expanded ? "折叠下系" : $"展开下系（{node.Children.Count}）", Tag = node.PersonId };
+                Grid.SetRow(toggle, 1); panel.Children.Add(toggle);
+                toggle.Click += (_, _) =>
+                {
+                    if (!_graphExpanded.Add(node.PersonId)) _graphExpanded.Remove(node.PersonId);
+                    RenderGraph();
+                };
+            }
+            Canvas.SetLeft(panel, item.X); Canvas.SetTop(panel, item.Y);
+            GraphCanvas.Children.Add(panel);
+        }
+    }
+
+    private void SetGraphZoom(double value) { GraphScale.ScaleX = GraphScale.ScaleY = Math.Clamp(value, 0.3, 2.0); }
+    private void GraphZoomIn_Click(object sender, RoutedEventArgs e) => SetGraphZoom(GraphScale.ScaleX + 0.1);
+    private void GraphZoomOut_Click(object sender, RoutedEventArgs e) => SetGraphZoom(GraphScale.ScaleX - 0.1);
+    private void GraphZoomReset_Click(object sender, RoutedEventArgs e) => SetGraphZoom(1.0);
 }
