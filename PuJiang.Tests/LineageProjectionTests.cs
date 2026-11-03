@@ -22,6 +22,7 @@ public class LineageProjectionTests
         var parent = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "同名" });
         var branch = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "另支" });
         var isolated = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "独立" });
+        var grandparent = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "上代" });
         var biological = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = child.Id, RelatedPersonId = parent.Id,
             Kind = PersonRelationshipKind.BiologicalParent, IsPreferredForLineage = true, SourceCitation = "原谱" };
         var adoptive = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = child.Id, RelatedPersonId = parent.Id,
@@ -29,6 +30,7 @@ public class LineageProjectionTests
         await service.AddRelationshipAsync(biological);
         await service.AddRelationshipAsync(adoptive);
         await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = branch.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.HeirParent });
+        await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = parent.Id, RelatedPersonId = grandparent.Id, Kind = PersonRelationshipKind.BiologicalParent });
         var lost = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = child.Id, Kind = PersonRelationshipKind.LostAncestry, SourceCitation = "失考原谱" };
         await service.AddRelationshipAsync(lost);
         var other = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
@@ -39,7 +41,7 @@ public class LineageProjectionTests
         var preview = await vm.GetLineagePreviewAsync();
         var session = new LineageProjectionSession(preview.Snapshot);
         var rows = session.Project();
-        Assert.Equal(4, rows.Count);
+        Assert.Equal(5, rows.Count);
         Assert.DoesNotContain(rows, row => row.Person.Id == foreign.Id);
         var childRow = rows.Single(row => row.Person.Id == child.Id);
         Assert.True(childRow.NeedsChoice);
@@ -52,7 +54,7 @@ public class LineageProjectionTests
         Assert.Null(rows.Single(row => row.Person.Id == isolated.Id).SelectedParent);
         Assert.Contains("未记录", rows.Single(row => row.Person.Id == isolated.Id).Label);
         var tree = new LineageTreeState(new LineageProjectionSession(preview.Snapshot));
-        Assert.Equal(4, tree.People.Count);
+        Assert.Equal(5, tree.People.Count);
         Assert.Equal(2, tree.Search("同名").Count);
         Assert.Equal(child.Id, Assert.Single(tree.Search(child.Id.ToString())).PersonId);
         Assert.Contains(tree.Roots, n => n.PersonId == child.Id && n.Projection.NeedsChoice);
@@ -61,11 +63,26 @@ public class LineageProjectionTests
         tree.Choose(child.Id, adoptive.Id);
         Assert.Equal(parent.Id, tree.GetPerson(child.Id).Parent!.PersonId);
         Assert.Equal(adoptive.Id, tree.GetPerson(child.Id).Projection.SelectedParent!.Relationship.Id);
+        tree.GetPerson(parent.Id).IsExpanded = false;
+        Assert.Contains("未记录", tree.Highlight(child.Id));
+        Assert.True(tree.GetPerson(parent.Id).IsPathAncestor);
+        Assert.True(tree.GetPerson(grandparent.Id).IsPathAncestor);
+        Assert.False(tree.GetPerson(child.Id).IsPathAncestor);
+        Assert.False(tree.GetPerson(branch.Id).IsPathAncestor);
+        Assert.False(tree.GetPerson(parent.Id).IsExpanded);
+        tree.Highlight(isolated.Id);
+        Assert.False(tree.GetPerson(parent.Id).IsPathAncestor);
+        Assert.False(tree.GetPerson(grandparent.Id).IsPathAncestor);
+        tree.Highlight(child.Id);
         var revealed = tree.Reveal(child.Id);
         Assert.True(revealed.IsSelected);
         Assert.True(tree.GetPerson(parent.Id).IsExpanded);
         tree.Choose(child.Id, null);
         Assert.Contains(tree.Roots, n => n.PersonId == child.Id && n.Projection.NeedsChoice);
+        Assert.False(tree.GetPerson(parent.Id).IsPathAncestor);
+        Assert.Contains("待选择", tree.Highlight(child.Id));
+        tree.ClearSelection();
+        Assert.DoesNotContain(tree.People, n => n.IsSelected || n.IsPathAncestor);
         Assert.Throws<InvalidOperationException>(() => session.Choose(child.Id, Guid.NewGuid()));
         session.Choose(child.Id, adoptive.Id);
         Assert.Equal(adoptive.Id, session.Project().Single(row => row.Person.Id == child.Id).SelectedParent!.Relationship.Id);
@@ -73,7 +90,7 @@ public class LineageProjectionTests
         Assert.Equal(biological.Id, session.Project().Single(row => row.Person.Id == child.Id).SelectedParent!.Relationship.Id);
         session.Choose(child.Id, null);
         Assert.True(session.Project().Single(row => row.Person.Id == child.Id).NeedsChoice);
-        Assert.Equal(4, await context.PersonRelationships.AsNoTracking().CountAsync());
+        Assert.Equal(5, await context.PersonRelationships.AsNoTracking().CountAsync());
         Assert.Equal(preview.Snapshot.UnlinkGeneration, (await service.GetGraphSnapshotAsync(genealogy.Id)).UnlinkGeneration);
         Assert.True(vm.IsLineagePreviewCurrent(preview));
         await vm.SelectAsync(genealogy);

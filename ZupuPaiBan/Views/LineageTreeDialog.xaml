@@ -10,6 +10,7 @@
             <TextBox x:Name="SearchBox" Width="160" TextChanged="SearchBox_TextChanged"/>
             <ComboBox x:Name="SearchResults" Width="340" DisplayMemberPath="Label" Margin="8,0"/>
             <Button x:Name="LocateButton" Content="定位" Click="Locate_Click" Padding="10,3"/>
+            <Button x:Name="ClearSelectionButton" Content="清除人物选择" Click="ClearSelection_Click" Margin="8,0,0,0" Padding="10,3"/>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
             <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,0,0,6"/>
@@ -21,7 +22,14 @@
                 <TreeView x:Name="LineageTree" SelectedItemChanged="LineageTree_SelectedItemChanged">
                     <TreeView.Resources>
                         <HierarchicalDataTemplate DataType="{x:Type services:LineageTreeNode}" ItemsSource="{Binding Children}">
-                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap">
+                                <TextBlock.Style><Style TargetType="TextBlock">
+                                    <Style.Triggers><DataTrigger Binding="{Binding IsPathAncestor}" Value="True">
+                                        <Setter Property="Background" Value="#FFFFD98A"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </DataTrigger></Style.Triggers>
+                                </Style></TextBlock.Style>
+                            </TextBlock>
                         </HierarchicalDataTemplate>
                     </TreeView.Resources>
                     <TreeView.ItemContainerStyle><Style TargetType="TreeViewItem">

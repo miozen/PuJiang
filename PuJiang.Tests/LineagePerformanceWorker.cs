@@ -86,12 +86,12 @@ internal static class LineagePerformanceWorker
         if (full)
         {
             LineageTreeDialog? current = null;
-            for (var i = 0; i < 10; i++)
+            for (var i = 0; i < 20; i++)
             {
                 var opened = await OpenAsync();
                 warm.Add(opened.Elapsed);
                 current = opened.Dialog;
-                if (i != 9) { current.Close(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); }
+                if (i != 19) { current.Close(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); }
             }
             var dialog = current!;
             var tree = (TreeView)dialog.FindName("LineageTree");
@@ -123,10 +123,10 @@ internal static class LineagePerformanceWorker
                     throw new InvalidOperationException("搜索定位未选中目标人物。");
                 return watch.Elapsed.TotalMilliseconds;
             }
-            for (var i = 0; i < 10; i++) names.Add(await SearchAsync("虚构成员0500"));
-            for (var i = 0; i < 10; i++) ids.Add(await SearchAsync(target.ToString()));
+            for (var i = 0; i < 20; i++) names.Add(await SearchAsync("虚构成员0500"));
+            for (var i = 0; i < 20; i++) ids.Add(await SearchAsync(target.ToString()));
 
-            for (var i = 0; i < 10; i++)
+            for (var i = 0; i < 20; i++)
             {
                 root.IsExpanded = false;
                 dialog.UpdateLayout();

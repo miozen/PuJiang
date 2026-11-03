@@ -72,10 +72,10 @@ public class LineagePerformanceTests(ITestOutputHelper output)
             results.Add(result);
             output.WriteLine($"RUN_{run + 1}: {JsonSerializer.Serialize(result)}");
         }
-        Assert.Equal(10, results[0].WarmOpenMs.Count);
-        Assert.Equal(10, results[0].SearchNameMs.Count);
-        Assert.Equal(10, results[0].SearchIdMs.Count);
-        Assert.Equal(10, results[0].ExpandMs.Count);
+        Assert.Equal(20, results[0].WarmOpenMs.Count);
+        Assert.Equal(20, results[0].SearchNameMs.Count);
+        Assert.Equal(20, results[0].SearchIdMs.Count);
+        Assert.Equal(20, results[0].ExpandMs.Count);
         await using var verify = database.CreateContext();
         Assert.Equal(1000, await verify.People.CountAsync());
         Assert.Equal(1023, await verify.PersonRelationships.CountAsync());

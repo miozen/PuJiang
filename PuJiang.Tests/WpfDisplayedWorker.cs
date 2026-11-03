@@ -1103,10 +1103,43 @@ internal static class WpfDisplayedWorker
                         .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                     if (!parentNode.IsExpanded || tree.SelectedItem is not LineageTreeNode located || located.PersonId != pathSubject)
                         throw new InvalidOperationException("搜索定位未展开路径并选中人物。");
+                    if (!parentNode.IsPathAncestor || located.IsPathAncestor || !status.Text.Contains("未记录"))
+                        throw new InvalidOperationException("搜索后的祖先高亮或路径边界不正确。");
+                    tree.UpdateLayout();
+                    var parentContainer = tree.ItemContainerGenerator.ContainerFromItem(parentNode) as System.Windows.Controls.TreeViewItem
+                        ?? throw new InvalidOperationException("路径祖先容器不存在。");
+                    var pathLabel = FindLineageLabel(parentContainer, parentNode)
+                        ?? throw new InvalidOperationException("路径祖先标签不存在。");
+                    if (pathLabel.Background is not System.Windows.Media.SolidColorBrush pathBrush ||
+                        pathBrush.Color != System.Windows.Media.Color.FromRgb(255, 217, 138))
+                        throw new InvalidOperationException("路径祖先没有应用高亮样式。");
+                    choices.SelectedItem = choices.Items.Cast<LineageParentOption>().Single(c => c.Parent.Id == pathAdoptive);
+                    ((System.Windows.Controls.Button)dialog.FindName("ChooseButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    var adoptiveNode = tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathAdoptive);
+                    var originalParentNode = tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathParent);
+                    if (!adoptiveNode.IsPathAncestor || originalParentNode.IsPathAncestor)
+                        throw new InvalidOperationException("更换选线后路径高亮未更新。");
+                    choices.SelectedItem = choices.Items.Cast<LineageParentOption>().Single(c => c.Parent.Id == pathParent);
+                    ((System.Windows.Controls.Button)dialog.FindName("ChooseButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    parentNode = tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathParent);
+                    if (!parentNode.IsPathAncestor) throw new InvalidOperationException("恢复选线后路径高亮不正确。");
+                    parentNode.IsExpanded = false;
+                    if (parentNode.IsExpanded || parentNode.Children.Single().Projection.SelectedParent?.Parent.Id != pathParent)
+                        throw new InvalidOperationException("折叠改变了选线或自动重新展开。");
+                    ((System.Windows.Controls.Button)dialog.FindName("ClearSelectionButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (parentNode.IsPathAncestor || tree.SelectedItem is not null)
+                        throw new InvalidOperationException("清除选择未清除路径高亮。");
+                    searchBox.Text = ""; searchBox.Text = pathSubject.ToString(); searchResults.SelectedIndex = 0;
+                    ((System.Windows.Controls.Button)dialog.FindName("LocateButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (!parentNode.IsPathAncestor) throw new InvalidOperationException("重新定位后路径高亮未恢复。");
                     if (invalidate != 0)
                     {
                         await genealogy.SelectAsync(invalidate == 1 ? priorGenealogy : pathGenealogy);
-                        if (tree.Items.Count != 0 || choices.Items.Count != 0 || !status.Text.Contains("失效"))
+                        if (tree.Items.Count != 0 || choices.Items.Count != 0 || parentNode.IsPathAncestor || !status.Text.Contains("失效"))
                             throw new InvalidOperationException("切谱或刷新后树形浏览未失效。");
                     }
                 }
@@ -1263,5 +1296,16 @@ internal static class WpfDisplayedWorker
         try { failedCoordinator.CreateContext(); throw new InvalidOperationException("取消后仍可创建上下文。"); }
         catch (InvalidOperationException ex) when (ex.Message.Contains("停用")) { }
         failedWindow.Close();
+    }
+
+    private static System.Windows.Controls.TextBlock? FindLineageLabel(DependencyObject root, LineageTreeNode node)
+    {
+        if (root is System.Windows.Controls.TextBlock text && ReferenceEquals(text.DataContext, node) && text.Text == node.Label) return text;
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var result = FindLineageLabel(System.Windows.Media.VisualTreeHelper.GetChild(root, i), node);
+            if (result is not null) return result;
+        }
+        return null;
     }
 }

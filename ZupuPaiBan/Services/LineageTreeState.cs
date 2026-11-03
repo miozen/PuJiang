@@ -12,6 +12,7 @@ public sealed partial class LineageTreeNode : ObservableObject
     public ObservableCollection<LineageTreeNode> Children { get; } = new();
     [ObservableProperty] private bool _isExpanded;
     [ObservableProperty] private bool _isSelected;
+    [ObservableProperty] private bool _isPathAncestor;
 
     public LineageTreeNode(LineagePersonProjection projection) => Projection = projection;
 }
@@ -53,7 +54,31 @@ public sealed class LineageTreeState
         foreach (var item in _nodes.Values) item.IsSelected = false;
         for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent) ancestor.IsExpanded = true;
         node.IsSelected = true;
+        Highlight(personId);
         return node;
+    }
+
+    public string Highlight(Guid? personId)
+    {
+        foreach (var item in _nodes.Values) item.IsPathAncestor = false;
+        if (personId is not Guid id) return string.Empty;
+        var node = GetPerson(id);
+        var boundary = node;
+        for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            ancestor.IsPathAncestor = true;
+            boundary = ancestor;
+        }
+        if (boundary.Projection.NeedsChoice) return "路径止于待选择的父母关系。";
+        return boundary.Projection.LostAncestry.Count > 0
+            ? "路径止于上系失考或未记录父母；不推断始祖。"
+            : "路径止于未记录父母；不推断始祖。";
+    }
+
+    public void ClearSelection()
+    {
+        foreach (var item in _nodes.Values) item.IsSelected = false;
+        Highlight(null);
     }
 
     private void Rebuild(Guid? selectedPersonId)

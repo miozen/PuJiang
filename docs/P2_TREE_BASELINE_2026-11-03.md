@@ -17,7 +17,7 @@
 dotnet test PuJiang.Tests/PuJiang.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~Thousand_person_target_lineage_window_baseline&Category=Performance&Category=UI" --logger "console;verbosity=detailed" --logger "trx;LogFileName=lineage-performance.trx" --results-directory TestResults
 ```
 
-通过 1/1。三个独立子进程各测一次首次打开；首个进程另测 10 次重复打开及各 10 次操作。主窗口和族谱已初始化、已加载一次目标谱并读取一次快照后开始计时，因此首次打开不包含进程启动、主窗口初始化或初选族谱，也不代表操作系统冷缓存。窗口通过同一 `GetLineagePreviewAsync` 和 `LineageTreeDialog` 构造、`Show` 及 `UpdateLayout` 打开；到 WPF Dispatcher `ApplicationIdle` 停表，不保证屏幕物理帧已呈现，也不包含人工操作时间。
+通过 1/1。此轮工具版本见提交 `b5fcef4`；后续 D-020 参考场景采样已调整为 20 次，结果见 [P2 树形测量](P2_TREE_ACCEPTANCE_2026-11-03.md)。本轮三个独立子进程各测一次首次打开；首个进程另测 10 次重复打开及各 10 次操作。主窗口和族谱已初始化、已加载一次目标谱并读取一次快照后开始计时，因此首次打开不包含进程启动、主窗口初始化或初选族谱，也不代表操作系统冷缓存。窗口通过同一 `GetLineagePreviewAsync` 和 `LineageTreeDialog` 构造、`Show` 及 `UpdateLayout` 打开；到 WPF Dispatcher `ApplicationIdle` 停表，不保证屏幕物理帧已呈现，也不包含人工操作时间。
 
 姓名与 ID 测量每次先选中并折叠同一顶层人物、清空搜索；计时包含一次性设置完整查询、程序选择对应搜索结果、触发定位、路径展开、`UpdateLayout` 至 `ApplicationIdle`。不模拟逐字键入、鼠标选择或人工反应。展开测量在搜索后重复折叠并展开同一顶层节点（3 个直属子节点）；更深层的展开状态可能保留。所有结果依执行顺序列出，单位毫秒；样本量小，极值可能受系统调度影响。
 

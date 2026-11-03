@@ -37,11 +37,12 @@ public partial class LineageTreeDialog : Window
     {
         _invalid = true;
         _selected = null;
+        _tree.ClearSelection();
         LineageTree.ItemsSource = null;
         SearchResults.ItemsSource = null;
         CandidateList.ItemsSource = null;
         DetailsText.Text = string.Empty;
-        LocateButton.IsEnabled = ChooseButton.IsEnabled = ClearButton.IsEnabled = false;
+        LocateButton.IsEnabled = ChooseButton.IsEnabled = ClearButton.IsEnabled = ClearSelectionButton.IsEnabled = false;
         StatusText.Text = "族谱已切换或刷新，浏览已失效；请关闭后重新打开。";
     }
     private bool Current()
@@ -81,8 +82,10 @@ public partial class LineageTreeDialog : Window
     }
     private void LineageTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        if (_invalid || _rendering || e.NewValue is not LineageTreeNode node) return;
-        _selected = node;
+        if (_invalid || _rendering) return;
+        _selected = e.NewValue as LineageTreeNode;
+        var boundary = _tree.Highlight(_selected?.PersonId);
+        StatusText.Text = string.IsNullOrEmpty(boundary) ? "请选择人物。" : boundary;
         RenderDetails();
     }
     private void CandidateList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateButtons();
@@ -130,6 +133,16 @@ public partial class LineageTreeDialog : Window
         container.BringIntoView();
         container.Focus();
         _selected = node;
+        StatusText.Text = _tree.Highlight(id);
+        RenderDetails();
+    }
+
+    private void ClearSelection_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Current()) return;
+        _tree.ClearSelection();
+        _selected = null;
+        StatusText.Text = "请选择人物。";
         RenderDetails();
     }
 }
