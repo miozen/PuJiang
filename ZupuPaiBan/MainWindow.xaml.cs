@@ -425,8 +425,10 @@ public partial class MainWindow : Window
         try
         {
             var person = _genealogyViewModel!.GetSelectedPersonForEditing();
+            var selection = _genealogyViewModel.CapturePersonSelection();
             var dialog = new TargetRelationshipDialog(person, _genealogyViewModel.GetCurrentPeopleForEditing()) { Owner = this };
             if (dialog.ShowDialog() != true) return;
+            _genealogyViewModel.ValidatePersonSelection(selection);
             genealogyPanel.IsEnabled = false;
             try { await _genealogyViewModel.AddTargetRelationshipAsync(dialog.Kind, dialog.RelatedPersonId, dialog.Note, dialog.SourceCitation); }
             finally { genealogyPanel.IsEnabled = true; }

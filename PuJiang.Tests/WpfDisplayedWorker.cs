@@ -358,6 +358,22 @@ internal static class WpfDisplayedWorker
         genealogy.NewPersonName = "关系对方";
         await genealogy.AddPersonAsync();
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
+        await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.LostAncestry, null, "旧记", "旧谱");
+        var lostId = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single().Id;
+        var cancelRelationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        cancelRelationTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<TargetRelationshipDialog>().SingleOrDefault();
+            if (dialog is null) return;
+            cancelRelationTimer.Stop();
+            dialog.Close();
+        };
+        cancelRelationTimer.Start();
+        typeof(MainWindow).GetMethod("TargetShortcut_AddRelationship_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(main, [main, new RoutedEventArgs()]);
+        cancelRelationTimer.Stop();
+        if ((await genealogy.GetTargetLinkRemovalCandidatesAsync()).Count != 1)
+            throw new InvalidOperationException("取消新增关系后记录发生变化。");
         var relationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         relationTimer.Tick += (_, _) =>
         {
@@ -382,6 +398,14 @@ internal static class WpfDisplayedWorker
         if (!genealogy.TargetTree.SelectMany(node => node.Details)
             .Any(detail => detail.Contains("界面谱载备注") && detail.Contains("界面谱牒来源")))
             throw new InvalidOperationException("重载后关系清单未显示备注与来源。");
+
+        var ancestryDetails = genealogy.TargetTree.Single(n => n.PersonId == originalPerson).Details;
+        if (!ancestryDetails.Any(d => d.Contains("上系失考") && d.Contains("旧记") && d.Contains("旧谱")) ||
+            !ancestryDetails.Any(d => d.Contains("生物父母") && d.Contains("关系对方")))
+            throw new InvalidOperationException("重载后未同时显示失考及新增上系记录。");
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+        var lostCandidate = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Id == lostId);
+        await genealogy.RemoveTargetLinkAsync(lostCandidate);
 
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Name == "搜索验收人物");
         var beforeCorrection = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single();

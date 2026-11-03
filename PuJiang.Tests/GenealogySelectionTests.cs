@@ -11,6 +11,54 @@ namespace PuJiang.Tests;
 
 public class GenealogySelectionTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Discovered_parent_preserves_lost_ancestry_and_rejects_invalid_links()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "主体"; await vm.AddPersonAsync();
+        vm.NewPersonName = "父母"; await vm.AddPersonAsync();
+        var subject = vm.People.Single(p => p.Name == "主体");
+        var parent = vm.People.Single(p => p.Name == "父母");
+        var foreign = new Genealogy { Name = "乙谱" };
+        var foreignPerson = new Person { GenealogyId = foreign.Id, Name = "外谱人物" };
+        await using (var setup = database.CreateContext())
+        {
+            setup.Genealogies.Add(foreign);
+            setup.People.Add(foreignPerson);
+            await setup.SaveChangesAsync();
+        }
+        vm.SelectedPerson = subject;
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.LostAncestry, null, "旧记", "旧谱");
+        var lost = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        var selection = vm.CapturePersonSelection();
+        vm.SelectedPerson = parent;
+        vm.SelectedPerson = subject;
+        Assert.Throws<InvalidOperationException>(() => vm.ValidatePersonSelection(selection));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, subject.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, foreignPerson.Id));
+        await vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, parent.Id, "新记", "新谱");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, parent.Id));
+        vm.SelectedPerson = parent;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.AddTargetRelationshipAsync(PersonRelationshipKind.BiologicalParent, subject.Id));
+        await vm.SelectAsync(genealogy);
+        var details = vm.TargetTree.Single(n => n.PersonId == subject.Id).Details;
+        Assert.Contains(details, d => d.Contains("上系失考") && d.Contains("旧记") && d.Contains("旧谱"));
+        Assert.Contains(details, d => d.Contains("生物父母") && d.Contains("父母") && d.Contains("新谱"));
+        await using var verify = database.CreateContext();
+        var records = await verify.PersonRelationships.AsNoTracking().ToListAsync();
+        Assert.Equal(2, records.Count);
+        var preserved = records.Single(r => r.Id == lost.Id);
+        Assert.Equal(PersonRelationshipKind.LostAncestry, preserved.Kind);
+        Assert.Null(preserved.RelatedPersonId);
+        Assert.Equal("旧记", preserved.Note);
+        Assert.Equal("旧谱", preserved.SourceCitation);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

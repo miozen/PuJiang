@@ -32,7 +32,7 @@
         <TextBlock Text="来源（可选）："/>
         <TextBox x:Name="SourceCitationBox" MaxLength="1000" TextWrapping="Wrap" Margin="0,4,0,8"/>
         <TextBlock Foreground="#805020" TextWrapping="Wrap" Margin="0,0,0,12"
-                   Text="保存只新增这一条原始关系；不会自动合并人物、删除既有关系或推导婚配。"/>
+                   Text="保存只新增这一条原始关系。已有的上系失考记录及其备注、来源会保留，并与新增父母关系同时显示；不会自动合并人物或推导婚配。"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="取消" IsCancel="True" Padding="14,4" Margin="0,0,8,0"/>
             <Button x:Name="SaveButton" Content="新增关系" IsDefault="True" Padding="14,4" Click="Save_Click"/>
