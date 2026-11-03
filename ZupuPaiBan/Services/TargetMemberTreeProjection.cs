@@ -48,6 +48,10 @@ public static class TargetMemberTreeProjection
                 if (relation.RelatedPersonId is Guid parentId)
                     details[parentId].Add(new($"{kind}对应子女：{Display(relation.PersonId)}（关系 ID: {relation.Id}）", relation.PersonId));
             }
+            else if (relation.Kind == PersonRelationshipKind.Spouse && relation.RelatedPersonId is Guid spouseId && spouseId != relation.PersonId)
+            {
+                details[spouseId].Add(new($"配偶关系（原记录方向：{Display(relation.PersonId)} → {Display(spouseId)}）：{Display(relation.PersonId)}{preferred}{note}{source}（关系 ID: {relation.Id}）", relation.PersonId));
+            }
         }
 
         foreach (var union in snapshot.Unions.OrderBy(u => u.Id))

@@ -11,6 +11,56 @@ public class TargetMemberTreeProjectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Directed_spouse_is_visible_on_both_sides_without_creating_or_merging_records()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        await using var context = database.CreateContext();
+        var service = new GenealogyDataService(context);
+        var genealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "甲谱" });
+        var first = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "同名" });
+        var second = await service.AddPersonAsync(new Person { GenealogyId = genealogy.Id, Name = "同名" });
+        var relationship = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = first.Id,
+            RelatedPersonId = second.Id, Kind = PersonRelationshipKind.Spouse, Note = "原备注", SourceCitation = "原来源" };
+        await service.AddRelationshipAsync(relationship);
+        await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = first.Id, PartnerTwoId = second.Id });
+        var vm = new GenealogySelectionViewModel(database.CreateContext);
+        await vm.LoadAsync();
+        await vm.SelectAsync(vm.Genealogies.Single(g => g.Id == genealogy.Id));
+        var forward = vm.TargetTree.Single(n => n.PersonId == first.Id).Entries.Single(e => e.Label.Contains(relationship.Id.ToString()));
+        var reverse = vm.TargetTree.Single(n => n.PersonId == second.Id).Entries.Single(e => e.Label.Contains(relationship.Id.ToString()));
+        Assert.Equal(second.Id, vm.GetRelationshipTargetNode(forward).PersonId);
+        Assert.Equal(first.Id, vm.GetRelationshipTargetNode(reverse).PersonId);
+        Assert.Contains("原记录方向", reverse.Label);
+        Assert.Contains(first.Id.ToString(), reverse.Label);
+        Assert.Contains(second.Id.ToString(), reverse.Label);
+        Assert.Contains("原备注", reverse.Label);
+        Assert.Contains("原来源", reverse.Label);
+        Assert.Contains(vm.TargetTree.Single(n => n.PersonId == second.Id).Entries, e => e.Label.StartsWith("婚配："));
+        Assert.Single(await context.PersonRelationships.AsNoTracking().ToListAsync());
+        Assert.Single(await context.FamilyUnions.AsNoTracking().ToListAsync());
+        await vm.SelectAsync(vm.SelectedGenealogy);
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(reverse));
+        var reloaded = vm.TargetTree.Single(n => n.PersonId == second.Id).Entries.Single(e => e.Label.Contains(relationship.Id.ToString()));
+        var other = await service.CreateGenealogyAsync(new Genealogy { Name = "乙谱" });
+        await vm.SelectAsync(other);
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(reloaded));
+        await vm.SelectAsync(genealogy);
+        vm.SelectedPerson = vm.People.Single(p => p.Id == second.Id);
+        var candidates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        await vm.RemoveTargetLinkAsync(candidates.Single(c => c.Kind == TargetLinkRemovalKind.FamilyUnion));
+        Assert.Single(await context.PersonRelationships.AsNoTracking().ToListAsync());
+        Assert.Empty(await context.FamilyUnions.AsNoTracking().ToListAsync());
+        await service.AddFamilyUnionAsync(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = first.Id, PartnerTwoId = second.Id });
+        vm.SelectedPerson = vm.People.Single(p => p.Id == second.Id);
+        candidates = await vm.GetTargetLinkRemovalCandidatesAsync();
+        await vm.RemoveTargetLinkAsync(candidates.Single(c => c.Kind == TargetLinkRemovalKind.Relationship));
+        Assert.Empty(await context.PersonRelationships.AsNoTracking().ToListAsync());
+        Assert.Single(await context.FamilyUnions.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Multiple_parents_and_missing_lineage_remain_visible_without_choosing_a_mainline()
     {
         await using var database = new TestDatabase();

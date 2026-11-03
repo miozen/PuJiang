@@ -87,6 +87,38 @@ internal static class WpfDisplayedWorker
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == quickChild);
         await genealogy.DeleteUnrelatedPersonAsync();
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+        genealogy.NewPersonName = "配偶验收人物";
+        await genealogy.AddPersonAsync();
+        var spouseId = genealogy.People.Single(p => p.Name == "配偶验收人物").Id;
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+        await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.Spouse, spouseId, "配偶谱记", "配偶谱源");
+        await genealogy.AddTargetFamilyUnionAsync(ZupuPaiBan.Models.FamilyUnionKind.Marriage, spouseId);
+        await genealogy.SelectAsync(genealogy.SelectedGenealogy);
+        var spouseNode = genealogy.TargetTree.Single(n => n.PersonId == spouseId);
+        var spouseEntry = spouseNode.Entries.Single(e => e.Label.Contains("原记录方向") && e.OtherPersonId == originalPerson);
+        if (!spouseEntry.Label.Contains("配偶谱记") || !spouseEntry.Label.Contains("配偶谱源") ||
+            !spouseNode.Entries.Any(e => e.Label.StartsWith("婚配：")))
+            throw new InvalidOperationException("配偶关系反向展示或独立婚配不正确。");
+        var spouseTree = (System.Windows.Controls.TreeView)main.FindName("targetTree");
+        spouseTree.UpdateLayout();
+        var spouseItem = (System.Windows.Controls.TreeViewItem)spouseTree.ItemContainerGenerator.ContainerFromItem(spouseNode);
+        spouseItem.IsExpanded = true;
+        spouseTree.UpdateLayout();
+        var spouseEntryItem = (System.Windows.Controls.TreeViewItem)spouseItem.ItemContainerGenerator.ContainerFromItem(spouseEntry);
+        spouseEntryItem.IsSelected = true;
+        ((System.Windows.Controls.Button)main.FindName("locateRelationshipTargetButton"))
+            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (spouseTree.SelectedItem is not TargetMemberTreeNode spouseTarget || spouseTarget.PersonId != originalPerson ||
+            genealogy.GetSelectedPersonForEditing().Id != originalPerson)
+            throw new InvalidOperationException("反向配偶关系未定位到原主体。");
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == spouseId);
+        var spouseLinks = await genealogy.GetTargetLinkRemovalCandidatesAsync();
+        await genealogy.RemoveTargetLinkAsync(spouseLinks.Single(c => c.Kind == TargetLinkRemovalKind.Relationship));
+        var remainingUnion = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Kind == TargetLinkRemovalKind.FamilyUnion);
+        await genealogy.RemoveTargetLinkAsync(remainingUnion);
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == spouseId);
+        await genealogy.DeleteUnrelatedPersonAsync();
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
 
         async Task QuickUnlinkAsync(bool confirm)
         {
