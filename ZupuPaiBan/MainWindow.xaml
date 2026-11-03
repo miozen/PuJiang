@@ -47,6 +47,9 @@
                 <MenuItem Header="协作导出..." Command="{Binding ExportCollaborationCommand}"/>
                 <MenuItem Header="协作导入..." Command="{Binding ImportCollaborationCommand}"/>
             </MenuItem>
+            <MenuItem Header="视图(_V)">
+                <MenuItem Header="横向世系图（虚构示例）…" Click="HorizontalSample_Click"/>
+            </MenuItem>
             <MenuItem Header="帮助(_H)">
                 <MenuItem Header="关于" Click="BtnAbout_Click"/>
             </MenuItem>

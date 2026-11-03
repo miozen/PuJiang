@@ -15,6 +15,10 @@ namespace ZupuPaiBan;
 
 public partial class MainWindow : Window
 {
+    private void HorizontalSample_Click(object sender, RoutedEventArgs e)
+    {
+        new HorizontalLineageSampleWindow { Owner = this }.Show();
+    }
     private readonly MainViewModel _viewModel;
     private readonly TargetContextCoordinator _targetContexts;
     private readonly string _backupDirectory;
