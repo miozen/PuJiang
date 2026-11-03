@@ -403,6 +403,20 @@ internal static class WpfDisplayedWorker
         if (!ancestryDetails.Any(d => d.Contains("上系失考") && d.Contains("旧记") && d.Contains("旧谱")) ||
             !ancestryDetails.Any(d => d.Contains("生物父母") && d.Contains("关系对方")))
             throw new InvalidOperationException("重载后未同时显示失考及新增上系记录。");
+        var sourceNode = genealogy.TargetTree.Single(n => n.PersonId == originalPerson);
+        var targetPerson = genealogy.People.Single(p => p.Name == "关系对方");
+        var relationEntry = sourceNode.Entries.Single(e => e.OtherPersonId == targetPerson.Id);
+        tree.UpdateLayout();
+        var sourceItem = (System.Windows.Controls.TreeViewItem)tree.ItemContainerGenerator.ContainerFromItem(sourceNode);
+        sourceItem.IsExpanded = true;
+        tree.UpdateLayout();
+        var entryItem = (System.Windows.Controls.TreeViewItem)sourceItem.ItemContainerGenerator.ContainerFromItem(relationEntry);
+        entryItem.IsSelected = true;
+        ((System.Windows.Controls.Button)main.FindName("locateRelationshipTargetButton"))
+            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (tree.SelectedItem is not TargetMemberTreeNode located || located.PersonId != targetPerson.Id ||
+            genealogy.GetSelectedPersonForEditing().Id != targetPerson.Id)
+            throw new InvalidOperationException("关系对方定位未选中正确人物。");
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
         var lostCandidate = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Id == lostId);
         await genealogy.RemoveTargetLinkAsync(lostCandidate);

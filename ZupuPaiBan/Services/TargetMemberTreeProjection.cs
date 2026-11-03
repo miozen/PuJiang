@@ -4,7 +4,11 @@ using ZupuPaiBan.Models;
 namespace ZupuPaiBan.Services;
 
 /// <summary>以人物为入口列出关系；不选取单一父母、不推导世代。</summary>
-public sealed record TargetMemberTreeNode(Guid PersonId, string Label, IReadOnlyList<string> Details);
+public sealed record TargetMemberTreeDetail(string Label, Guid? OtherPersonId);
+public sealed record TargetMemberTreeNode(Guid PersonId, string Label, IReadOnlyList<TargetMemberTreeDetail> Entries)
+{
+    public IReadOnlyList<string> Details => Entries.Select(entry => entry.Label).ToList().AsReadOnly();
+}
 
 public static class TargetMemberTreeProjection
 {
@@ -12,7 +16,7 @@ public static class TargetMemberTreeProjection
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var people = snapshot.People.ToDictionary(p => p.Id);
-        var details = people.Keys.ToDictionary(id => id, _ => new List<string>());
+        var details = people.Keys.ToDictionary(id => id, _ => new List<TargetMemberTreeDetail>());
         var parentCounts = people.Keys.ToDictionary(id => id, _ => 0);
 
         string Display(Guid id) => people.TryGetValue(id, out var person)
@@ -37,12 +41,12 @@ public static class TargetMemberTreeProjection
             var preferred = relation.IsPreferredForLineage ? " [谱载首选标记]" : string.Empty;
             var note = string.IsNullOrWhiteSpace(relation.Note) ? string.Empty : $"；备注：{relation.Note}";
             var source = string.IsNullOrWhiteSpace(relation.SourceCitation) ? string.Empty : $"；来源：{relation.SourceCitation}";
-            details[relation.PersonId].Add($"{kind}：{other}{preferred}{note}{source}（关系 ID: {relation.Id}）");
+            details[relation.PersonId].Add(new($"{kind}：{other}{preferred}{note}{source}（关系 ID: {relation.Id}）", relation.RelatedPersonId));
             if (parentKind)
             {
                 parentCounts[relation.PersonId]++;
                 if (relation.RelatedPersonId is Guid parentId)
-                    details[parentId].Add($"{kind}对应子女：{Display(relation.PersonId)}（关系 ID: {relation.Id}）");
+                    details[parentId].Add(new($"{kind}对应子女：{Display(relation.PersonId)}（关系 ID: {relation.Id}）", relation.PersonId));
             }
         }
 
@@ -60,16 +64,16 @@ public static class TargetMemberTreeProjection
             var start = string.IsNullOrWhiteSpace(union.StartDateText) ? string.Empty : $"；始于：{union.StartDateText}";
             var end = string.IsNullOrWhiteSpace(union.EndDateText) ? string.Empty : $"；止于：{union.EndDateText}";
             var note = string.IsNullOrWhiteSpace(union.Note) ? string.Empty : $"；备注：{union.Note}";
-            details[union.PartnerOneId].Add($"{kind}：{second}{start}{end}{note}（记录 ID: {union.Id}）");
+            details[union.PartnerOneId].Add(new($"{kind}：{second}{start}{end}{note}（记录 ID: {union.Id}）", union.PartnerTwoId));
             if (union.PartnerTwoId is Guid partnerId)
-                details[partnerId].Add($"{kind}：{first}{start}{end}{note}（记录 ID: {union.Id}）");
+                details[partnerId].Add(new($"{kind}：{first}{start}{end}{note}（记录 ID: {union.Id}）", union.PartnerOneId));
         }
 
         return snapshot.People.OrderBy(p => p.Name, StringComparer.Ordinal).ThenBy(p => p.Id).Select(person =>
         {
             var entries = details[person.Id];
-            if (parentCounts[person.Id] > 1) entries.Insert(0, "存在多条父母关系；未自动选择展示主线");
-            if (entries.Count == 0) entries.Add("未记录人物关系（不推断为始祖）");
+            if (parentCounts[person.Id] > 1) entries.Insert(0, new("存在多条父母关系；未自动选择展示主线", null));
+            if (entries.Count == 0) entries.Add(new("未记录人物关系（不推断为始祖）", null));
             return new TargetMemberTreeNode(person.Id, Display(person.Id), entries.AsReadOnly());
         }).ToList().AsReadOnly();
     }

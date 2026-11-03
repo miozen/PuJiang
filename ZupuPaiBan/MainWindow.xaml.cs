@@ -385,14 +385,30 @@ public partial class MainWindow : Window
             var result = _genealogyViewModel?.SelectedSearchResult
                 ?? throw new InvalidOperationException("请先选择搜索结果。");
             var node = _genealogyViewModel!.GetSearchResultNode(result);
-            targetTree.UpdateLayout();
-            if (targetTree.ItemContainerGenerator.ContainerFromItem(node) is not TreeViewItem item)
-                throw new InvalidOperationException("无法定位人物，请重新加载族谱。");
-            item.IsSelected = true;
-            item.BringIntoView();
-            item.Focus();
+            LocateTreeNode(node);
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "人物定位", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
+    private void LocateRelationshipTarget_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var detail = targetTree.SelectedItem as TargetMemberTreeDetail
+                ?? throw new InvalidOperationException("请先选择一条关系或婚配记录。");
+            LocateTreeNode(_genealogyViewModel!.GetRelationshipTargetNode(detail));
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "定位关系对方", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
+    private void LocateTreeNode(TargetMemberTreeNode node)
+    {
+        targetTree.UpdateLayout();
+        if (targetTree.ItemContainerGenerator.ContainerFromItem(node) is not TreeViewItem item)
+            throw new InvalidOperationException("无法定位人物，请重新加载族谱。");
+        item.IsSelected = true;
+        item.BringIntoView();
+        item.Focus();
     }
 
     private async void TargetPerson_SelectionChanged(object sender, SelectionChangedEventArgs e)

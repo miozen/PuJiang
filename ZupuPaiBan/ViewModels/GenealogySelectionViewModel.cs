@@ -63,6 +63,18 @@ public partial class GenealogySelectionViewModel : ObservableObject
         return TargetTree.SingleOrDefault(node => node.PersonId == result.Id)
             ?? throw new InvalidOperationException("人物已变化，请重新加载族谱。");
     }
+
+    public TargetMemberTreeNode GetRelationshipTargetNode(TargetMemberTreeDetail detail)
+    {
+        if (SelectedGenealogy is null || !TargetTree.Any(node => node.Entries.Any(entry => ReferenceEquals(entry, detail))))
+            throw new InvalidOperationException("关系选择已失效，请重新选择。");
+        if (detail.OtherPersonId is not Guid id)
+            throw new InvalidOperationException("此记录没有可定位的对方人物。");
+        if (!People.Any(person => person.Id == id && person.GenealogyId == SelectedGenealogy.Id))
+            throw new InvalidOperationException("对方人物已失效，请重新加载族谱。");
+        return TargetTree.SingleOrDefault(node => node.PersonId == id)
+            ?? throw new InvalidOperationException("对方人物已失效，请重新加载族谱。");
+    }
     [ObservableProperty] private ObservableCollection<TargetMemberTreeNode> _targetTree = new();
     [ObservableProperty] private ObservableCollection<Person> _biologicalChildren = new();
     [ObservableProperty] private Person? _selectedBiologicalChild;

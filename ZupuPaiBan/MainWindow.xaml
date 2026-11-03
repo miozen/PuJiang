@@ -251,6 +251,7 @@
                             <Button x:Name="previewPersonDeleteButton" Content="删除目标人物" Click="DeleteTargetPerson_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="为目标人物新增子女" Click="TargetShortcut_AddChild_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="新增人物关系" Click="TargetShortcut_AddRelationship_Click" Margin="0,0,5,4" Padding="6,2"/>
+                            <Button x:Name="locateRelationshipTargetButton" Content="定位关系对方" Click="LocateRelationshipTarget_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button x:Name="editRelationshipDetailsButton" Content="编辑关系资料" Click="EditRelationshipDetails_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button x:Name="correctParentKindButton" Content="更正父母关系类型" Click="CorrectParentKind_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="新增婚配" Click="TargetShortcut_AddFamilyUnion_Click" Margin="0,0,0,4" Padding="6,2"/>
@@ -262,7 +263,8 @@
                     <TreeView x:Name="targetTree" ItemsSource="{Binding TargetTree}" SelectedItemChanged="TargetTree_SelectedItemChanged"
                               ToolTip="选择人物查看档案；双击编辑档案；右键添加生物子女。">
                         <TreeView.Resources>
-                            <HierarchicalDataTemplate DataType="{x:Type services:TargetMemberTreeNode}" ItemsSource="{Binding Details}">
+                            <DataTemplate DataType="{x:Type services:TargetMemberTreeDetail}"><TextBlock Text="{Binding Label}" TextWrapping="Wrap"/></DataTemplate>
+                            <HierarchicalDataTemplate DataType="{x:Type services:TargetMemberTreeNode}" ItemsSource="{Binding Entries}">
                                 <TextBlock Text="{Binding Label}" TextWrapping="Wrap" MouseLeftButtonDown="TargetTreePerson_MouseLeftButtonDown">
                                     <TextBlock.ContextMenu>
                                         <ContextMenu>

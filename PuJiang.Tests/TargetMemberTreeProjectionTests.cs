@@ -1,4 +1,5 @@
 using Xunit;
+using Microsoft.EntityFrameworkCore;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 using ZupuPaiBan.Services;
@@ -27,6 +28,7 @@ public class TargetMemberTreeProjectionTests
         await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = child.Id, RelatedPersonId = adoptive.Id, Kind = PersonRelationshipKind.AdoptiveParent });
         await service.AddRelationshipAsync(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = parent.Id, Kind = PersonRelationshipKind.LostAncestry });
         context.FamilyUnions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = parent.Id, PartnerTwoId = adoptive.Id, Note = "虚构婚配" });
+        context.FamilyUnions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = child.Id, PartnerTwoId = null });
         await context.SaveChangesAsync();
 
         var snapshot = await service.GetGraphSnapshotAsync(genealogy.Id);
@@ -44,6 +46,28 @@ public class TargetMemberTreeProjectionTests
         Assert.Equal("三世", snapshot.People.Single(p => p.Id == child.Id).RecordedGeneration);
         Assert.Equal(4, snapshot.People.Single(p => p.Id == child.Id).DerivedGeneration);
         Assert.Equal(4, (await service.GetGraphSnapshotAsync(genealogy.Id)).Relationships.Count);
+
+        var vm = new GenealogySelectionViewModel(database.CreateContext);
+        await vm.LoadAsync();
+        await vm.SelectAsync(vm.Genealogies.Single(g => g.Id == genealogy.Id));
+        var currentChild = vm.TargetTree.Single(n => n.PersonId == child.Id);
+        var childToParent = currentChild.Entries.Single(e => e.OtherPersonId == parent.Id);
+        Assert.Equal(parent.Id, vm.GetRelationshipTargetNode(childToParent).PersonId);
+        var currentParent = vm.TargetTree.Single(n => n.PersonId == parent.Id);
+        Assert.Equal(child.Id, vm.GetRelationshipTargetNode(currentParent.Entries.Single(e => e.OtherPersonId == child.Id)).PersonId);
+        Assert.Equal(adoptive.Id, vm.GetRelationshipTargetNode(currentParent.Entries.Single(e => e.OtherPersonId == adoptive.Id)).PersonId);
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(currentParent.Entries.Single(e => e.Label.Contains("上系失考"))));
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(currentChild.Entries.Single(e => e.Label.Contains("对方资料未记录"))));
+        var secondGenealogy = await service.CreateGenealogyAsync(new Genealogy { Name = "另一谱" });
+        await vm.SelectAsync(vm.SelectedGenealogy);
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(childToParent));
+        var reloadedEntry = vm.TargetTree.Single(n => n.PersonId == child.Id).Entries.Single(e => e.OtherPersonId == parent.Id);
+        await vm.SelectAsync(secondGenealogy);
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(reloadedEntry));
+        await vm.SelectAsync(null);
+        Assert.Throws<InvalidOperationException>(() => vm.GetRelationshipTargetNode(childToParent));
+        Assert.Equal(4, await context.PersonRelationships.CountAsync());
+        Assert.Equal(2, await context.FamilyUnions.CountAsync());
     }
 
     [Fact]
