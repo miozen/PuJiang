@@ -32,6 +32,8 @@ internal static class RestoreWorkerProgram
             return await LineagePerformanceWorker.RunAsync(args[1], args[2] == "full");
         if (args.Length == 3 && args[0] == "--lineage-graph-perf")
             return await LineagePerformanceWorker.RunAsync(args[1], args[2] == "full", graph: true);
+        if (args.Length == 3 && args[0] == "--lineage-shape-perf")
+            return await LineageGraphShapeWorker.RunAsync(args[1], args[2]);
         if (args.Length == 2 && args[0] == "--wpf-inflight")
             return await WpfInflightWorker.RunAsync(args[1]);
         if (args.Length == 2 && args[0] == "--wpf-external-inflight")
