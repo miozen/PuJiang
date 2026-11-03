@@ -356,6 +356,9 @@ public class GenealogySelectionTests
         vm.SelectedParentBranch = vm.ParentBranchChoices.Single(x => x.Id == a.Id);
         vm.NewChildBranchName = "子"; await vm.CreateChildBranchAsync();
         var child = vm.Branches.Single(x => x.Name == "子");
+        vm.SelectedParentBranch = vm.ParentBranchChoices.Single(x => x.Id == child.Id);
+        vm.NewChildBranchName = "孙"; await vm.CreateChildBranchAsync();
+        var grandchild = vm.Branches.Single(x => x.Name == "孙");
         vm.NewPersonName = "人物"; await vm.AddPersonAsync();
         await vm.SaveTreePersonProfileWithRecordedValuesAsync(vm.TargetTree.Single(), "人物", PersonSex.Unknown, null, null, null, null, null, true, child.Id);
         vm.BranchToRename = vm.ParentBranchChoices.Single(x => x.Id == a.Id);
@@ -376,6 +379,15 @@ public class GenealogySelectionTests
         await using var context = database.CreateContext();
         var service = new GenealogyDataService(context);
         var current = vm.Branches.Single(x => x.Id == a.Id);
+        var foreignGenealogy = new Genealogy { Name = "外谱" };
+        var foreignBranch = new FamilyBranch { GenealogyId = foreignGenealogy.Id, Name = "外谱房" };
+        context.Genealogies.Add(foreignGenealogy);
+        context.FamilyBranches.Add(foreignBranch);
+        await context.SaveChangesAsync();
+        var foreignTarget = new GenealogyBranchData(foreignBranch.Id, foreignBranch.ParentBranchId, foreignBranch.Name, foreignBranch.SortOrder);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current, current));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current, grandchild));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current, foreignTarget));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(Guid.NewGuid(), current, b));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current with { Name = "旧名称" }, b));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.MoveBranchAsync(genealogy.Id, current, b with { Name = "旧目标" }));

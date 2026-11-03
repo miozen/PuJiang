@@ -161,6 +161,9 @@ internal static class WpfDisplayedWorker
         if (genealogy.Branches.Any(b => b.Id == emptyBranch) || genealogy.People.Single().BranchId != thirdBranch)
             throw new InvalidOperationException("确认删除空房支后结果不正确。");
 
+        await MoveBranchAsync(firstBranch, secondBranch, confirm: false);
+        if (genealogy.Branches.Single(b => b.Id == firstBranch).ParentBranchId is not null)
+            throw new InvalidOperationException("取消移动后房支发生变化。");
         await MoveBranchAsync(firstBranch, secondBranch);
         if (!genealogy.ParentBranchChoices.Any(b => b.Id == thirdBranch && b.Label.Contains("次房 / 新长房 / 新次支 / 三支")) || genealogy.People.Single().BranchId != thirdBranch)
             throw new InvalidOperationException("移动后子树或人物归属不正确。");
@@ -224,7 +227,7 @@ internal static class WpfDisplayedWorker
         await EditBranchAsync(null, thirdBranch);
         await ConfirmDeleteBranchAsync(temporaryChild, true);
 
-        async Task MoveBranchAsync(Guid branchId, Guid? parentId)
+        async Task MoveBranchAsync(Guid branchId, Guid? parentId, bool confirm = true)
         {
             ((System.Windows.Controls.ComboBox)main.FindName("renameBranchSelector")).SelectedItem = genealogy.ParentBranchChoices.Single(b => b.Id == branchId);
             ((System.Windows.Controls.CheckBox)main.FindName("moveBranchToRoot")).IsChecked = parentId is null;
@@ -238,7 +241,7 @@ internal static class WpfDisplayedWorker
                 GetWindowThreadProcessId(dialog, out var ownerPid);
                 if (ownerPid != (uint)Environment.ProcessId) return;
                 timer.Stop();
-                PostMessage(dialog, 0x0111, new IntPtr(6), IntPtr.Zero);
+                PostMessage(dialog, 0x0111, new IntPtr(confirm ? 6 : 7), IntPtr.Zero);
             };
             timer.Start();
             ((System.Windows.Controls.Button)main.FindName("moveBranchButton"))
@@ -246,7 +249,7 @@ internal static class WpfDisplayedWorker
             timer.Stop();
             var until = Stopwatch.StartNew();
             while (!panel.IsEnabled && until.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
-            if (!panel.IsEnabled || genealogy.Branches.Single(b => b.Id == branchId).ParentBranchId != parentId)
+            if (!panel.IsEnabled || (confirm && genealogy.Branches.Single(b => b.Id == branchId).ParentBranchId != parentId))
                 throw new InvalidOperationException("界面未完成房支移动。");
         }
 
