@@ -338,19 +338,19 @@ public partial class MainWindow : Window
 
     private async void RemoveBiologicalParentRelationship_Click(object sender, RoutedEventArgs e)
     {
-        var parent = _genealogyViewModel?.SelectedPerson;
-        var child = _genealogyViewModel?.SelectedBiologicalChild;
-        if (parent == null || child == null)
+        try
         {
-            MessageBox.Show("请先选择父母人物和其生物子女。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
+            genealogyPanel.IsEnabled = false;
+            BiologicalUnlinkCandidate candidate;
+            try { candidate = await _genealogyViewModel!.GetBiologicalUnlinkCandidateAsync(); }
+            finally { genealogyPanel.IsEnabled = true; }
+            var dialog = new TargetLinkRemovalDialog([candidate.Link], selectSingle: true) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            genealogyPanel.IsEnabled = false;
+            try { await _genealogyViewModel.RemoveBiologicalParentRelationshipAsync(candidate); }
+            finally { genealogyPanel.IsEnabled = true; }
         }
-        if (MessageBox.Show($"确定解除“{parent.Name}”与“{child.Name}”的生物父母关系吗？\n人物档案会保留，但该关系及其记录的备注和来源将被删除，无法撤销。",
-                "确认解除关系", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-        genealogyPanel.IsEnabled = false;
-        try { await _genealogyViewModel!.RemoveBiologicalParentRelationshipAsync(); }
         catch (Exception ex) { MessageBox.Show($"解除关系失败：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error); }
-        finally { genealogyPanel.IsEnabled = true; }
     }
 
     private void ClearSelectedPerson_Click(object sender, RoutedEventArgs e) =>

@@ -15,6 +15,7 @@ public sealed record BranchMoveCandidate(Guid GenealogyId, GenealogyBranchData S
 public sealed record BranchReassignmentCandidate(NonEmptyBranchSnapshot Snapshot, BranchChoice Choice, int SelectionVersion);
 public sealed record PersonDeletePreview(Guid GenealogyId, Guid PersonId, string PersonName, int SelectionVersion, int PersonSelectionVersion, long Generation, IReadOnlyList<TargetLinkRemovalCandidate> Links);
 public sealed record PersonSelectionToken(Guid GenealogyId, Guid PersonId, int SelectionVersion, int PersonSelectionVersion);
+public sealed record BiologicalUnlinkCandidate(TargetLinkRemovalCandidate Link, int ChildSelectionVersion);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -24,6 +25,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
     private int _selectionVersion;
     private int _personSelectionVersion;
     private int _candidatePersonSelectionVersion;
+    private int _biologicalChildSelectionVersion;
 
     [ObservableProperty] private ObservableCollection<Genealogy> _genealogies = new();
     [ObservableProperty] private Genealogy? _selectedGenealogy;
@@ -78,6 +80,7 @@ public partial class GenealogySelectionViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<TargetMemberTreeNode> _targetTree = new();
     [ObservableProperty] private ObservableCollection<Person> _biologicalChildren = new();
     [ObservableProperty] private Person? _selectedBiologicalChild;
+    partial void OnSelectedBiologicalChildChanged(Person? value) => ++_biologicalChildSelectionVersion;
     [ObservableProperty] private Person? _selectedExistingChild;
     [ObservableProperty] private string _childrenStatus = "请选择人物查看生物子女";
     [ObservableProperty]
@@ -639,20 +642,36 @@ public partial class GenealogySelectionViewModel : ObservableObject
         }
     }
 
+    public async Task<BiologicalUnlinkCandidate> GetBiologicalUnlinkCandidateAsync()
+    {
+        var (genealogy, parent) = GetCurrentSelectedPersonForEditing();
+        var child = SelectedBiologicalChild ?? throw new InvalidOperationException("请先选择生物子女。");
+        if (child.GenealogyId != genealogy.Id || !People.Any(p => p.Id == child.Id && p.GenealogyId == genealogy.Id))
+            throw new InvalidOperationException("所选子女不属于当前族谱，请重新选择。");
+        var childVersion = _biologicalChildSelectionVersion;
+        var candidates = await GetTargetLinkRemovalCandidatesAsync();
+        if (childVersion != _biologicalChildSelectionVersion || SelectedBiologicalChild?.Id != child.Id)
+            throw new InvalidOperationException("子女选择已变化，请重新选择。");
+        var matches = candidates.Where(c => c.RelationshipSnapshot is { Kind: PersonRelationshipKind.BiologicalParent } r &&
+            r.PersonId == child.Id && r.RelatedPersonId == parent.Id).ToList();
+        if (matches.Count != 1) throw new InvalidOperationException("所选生物父母关系不存在或不唯一，请重新加载。");
+        return new BiologicalUnlinkCandidate(matches[0], childVersion);
+    }
+
+    public async Task RemoveBiologicalParentRelationshipAsync(BiologicalUnlinkCandidate candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (candidate.ChildSelectionVersion != _biologicalChildSelectionVersion ||
+            candidate.Link.RelationshipSnapshot is not { Kind: PersonRelationshipKind.BiologicalParent } relationship ||
+            relationship.PersonId != SelectedBiologicalChild?.Id || relationship.RelatedPersonId != SelectedPerson?.Id)
+            throw new InvalidOperationException("子女或父母选择已变化，请重新选择。");
+        await RemoveTargetLinkCoreAsync(candidate.Link, "生物父子关系已解除", "已解除生物父子关系。");
+    }
+
     public async Task RemoveBiologicalParentRelationshipAsync()
     {
-        using var operation = _operationCoordinator?.EnterOperation();
-        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
-        var parent = SelectedPerson ?? throw new InvalidOperationException("请先选择父母人物。");
-        var child = SelectedBiologicalChild ?? throw new InvalidOperationException("请先选择生物子女。");
-        var version = _personSelectionVersion;
-        await using var context = _createContext();
-        await new GenealogyDataService(context).RemoveBiologicalParentRelationshipAsync(genealogy.Id, parent.Id, child.Id);
-        if (version == _personSelectionVersion && SelectedGenealogy?.Id == genealogy.Id && SelectedPerson?.Id == parent.Id)
-        {
-            await LoadSelectedBiologicalChildrenAsync();
-            await RefreshTargetTreeAsync(genealogy.Id, _selectionVersion, "生物父子关系已解除");
-        }
+        var candidate = await GetBiologicalUnlinkCandidateAsync();
+        await RemoveBiologicalParentRelationshipAsync(candidate);
     }
 
     public async Task AddExistingBiologicalChildAsync()
@@ -871,7 +890,11 @@ public partial class GenealogySelectionViewModel : ObservableObject
     /// Explicitly unlinks one currently selected person's relationship or union. The persistence operation is one
     /// participant- and genealogy-scoped DELETE; it never deletes people or another graph record.
     /// </summary>
-    public async Task RemoveTargetLinkAsync(TargetLinkRemovalCandidate candidate)
+    public Task RemoveTargetLinkAsync(TargetLinkRemovalCandidate candidate) =>
+        RemoveTargetLinkCoreAsync(candidate, candidate.Kind == TargetLinkRemovalKind.Relationship ? "人物关系已解除" : "婚配关系已解除",
+            candidate.Kind == TargetLinkRemovalKind.Relationship ? "已解除人物关系。" : "已解除婚配关系。");
+
+    private async Task RemoveTargetLinkCoreAsync(TargetLinkRemovalCandidate candidate, string completedOperation, string successStatus)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         using var operation = _operationCoordinator?.EnterOperation();
@@ -923,9 +946,8 @@ public partial class GenealogySelectionViewModel : ObservableObject
         if (version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || SelectedPerson?.Id != person.Id) return;
         if (candidate.Kind == TargetLinkRemovalKind.Relationship)
             await LoadSelectedBiologicalChildrenAsync();
-        var completedOperation = candidate.Kind == TargetLinkRemovalKind.Relationship ? "人物关系已解除" : "婚配关系已解除";
         if (await RefreshTargetTreeAsync(genealogy.Id, version, completedOperation))
-            Status = candidate.Kind == TargetLinkRemovalKind.Relationship ? "已解除人物关系。" : "已解除婚配关系。";
+            Status = successStatus;
     }
 
     private (Genealogy Genealogy, Person Person) GetCurrentSelectedPersonForEditing()

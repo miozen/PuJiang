@@ -65,6 +65,64 @@ internal static class WpfDisplayedWorker
         genealogy.NewPersonName = "搜索验收人物";
         await genealogy.AddPersonAsync();
         var originalPerson = genealogy.People.Single().Id;
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+        genealogy.NewChildName = "快捷解除子女";
+        await genealogy.AddBiologicalChildAsync();
+        var quickChild = genealogy.People.Single(p => p.Name == "快捷解除子女").Id;
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == quickChild);
+        var quickOriginal = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await genealogy.UpdateTargetRelationshipDetailsAsync(quickOriginal, "快捷备注", "快捷来源");
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+        await genealogy.LoadSelectedBiologicalChildrenAsync();
+        genealogy.SelectedBiologicalChild = genealogy.BiologicalChildren.Single(p => p.Id == quickChild);
+        await QuickUnlinkAsync(false);
+        await using (var verifyCancel = coordinator.CreateContext())
+            if (!await verifyCancel.PersonRelationships.AnyAsync(r => r.Id == quickOriginal.Id))
+                throw new InvalidOperationException("取消快捷解除后关系消失。");
+        await QuickUnlinkAsync(true);
+        await using (var verifyUnlink = coordinator.CreateContext())
+            if (await verifyUnlink.PersonRelationships.AnyAsync(r => r.Id == quickOriginal.Id) ||
+                await verifyUnlink.People.CountAsync() != 2)
+                throw new InvalidOperationException("快捷解除结果不正确。");
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == quickChild);
+        await genealogy.DeleteUnrelatedPersonAsync();
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+
+        async Task QuickUnlinkAsync(bool confirm)
+        {
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<TargetLinkRemovalDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                try
+                {
+                    var list = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+                    var preview = ((System.Windows.Controls.TextBox)dialog.FindName("PreviewBox")).Text;
+                    if (list.Items.Count != 1 || dialog.SelectedCandidate?.Id != quickOriginal.Id ||
+                        !preview.Contains(quickChild.ToString()) || !preview.Contains(originalPerson.ToString()) ||
+                        !preview.Contains("快捷备注") || !preview.Contains("快捷来源"))
+                        throw new InvalidOperationException("快捷解除预览未绑定正确关系及资料。");
+                    if (confirm)
+                    {
+                        ((System.Windows.Controls.CheckBox)dialog.FindName("ConfirmationBox")).IsChecked = true;
+                        ((System.Windows.Controls.Button)dialog.FindName("RemoveButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    }
+                    else dialog.Close();
+                }
+                catch (Exception ex) { failure = ex; dialog.Close(); }
+            };
+            timer.Start();
+            typeof(MainWindow).GetMethod("RemoveBiologicalParentRelationship_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(main, [main, new RoutedEventArgs()]);
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled) && until.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("快捷解除窗口未完成。"); }
+            if (failure is not null) throw failure;
+        }
+
         genealogy.NewPersonName = "临时删除人物";
         await genealogy.AddPersonAsync();
         var temporaryPerson = genealogy.People.Single(p => p.Name == "临时删除人物").Id;

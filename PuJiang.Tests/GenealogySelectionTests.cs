@@ -1731,6 +1731,80 @@ public class GenealogySelectionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Biological_unlink_candidate_rejects_changed_selection_and_stale_record()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var vm = new GenealogySelectionViewModel(database.CreateContext) { NewName = "甲谱" };
+        await vm.CreateAsync();
+        var genealogy = vm.SelectedGenealogy!;
+        vm.NewPersonName = "同名"; await vm.AddPersonAsync();
+        var parent = vm.People.Single();
+        vm.SelectedPerson = parent;
+        vm.NewChildName = "同名"; await vm.AddBiologicalChildAsync();
+        var child = vm.People.Single(p => p.Id != parent.Id);
+        vm.SelectedPerson = vm.People.Single(p => p.Id == child.Id);
+        var original = (await vm.GetTargetLinkRemovalCandidatesAsync()).Single();
+        await vm.UpdateTargetRelationshipDetailsAsync(original, "谱载备注", "旧谱来源");
+        vm.SelectedPerson = vm.People.Single(p => p.Id == parent.Id);
+        await vm.LoadSelectedBiologicalChildrenAsync();
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(p => p.Id == child.Id);
+        var candidate = await vm.GetBiologicalUnlinkCandidateAsync();
+        Assert.Equal("谱载备注", candidate.Link.RelationshipSnapshot!.Note);
+        Assert.Equal("旧谱来源", candidate.Link.RelationshipSnapshot.SourceCitation);
+        vm.SelectedBiologicalChild = null;
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(p => p.Id == child.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveBiologicalParentRelationshipAsync(candidate));
+        candidate = await vm.GetBiologicalUnlinkCandidateAsync();
+        await using (var external = database.CreateContext())
+        {
+            var relation = await external.PersonRelationships.SingleAsync(r => r.Id == candidate.Link.Id);
+            relation.Note = "外部修改";
+            await external.SaveChangesAsync();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveBiologicalParentRelationshipAsync(candidate));
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(p => p.Id == child.Id);
+        candidate = await vm.GetBiologicalUnlinkCandidateAsync();
+        await using (var external = database.CreateContext())
+        {
+            (await external.People.SingleAsync(p => p.Id == child.Id)).Name = "改名子女";
+            await external.SaveChangesAsync();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveBiologicalParentRelationshipAsync(candidate));
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(p => p.Id == child.Id);
+        candidate = await vm.GetBiologicalUnlinkCandidateAsync();
+        await using (var external = database.CreateContext())
+        {
+            var relation = await external.PersonRelationships.SingleAsync(r => r.Id == candidate.Link.Id);
+            external.PersonRelationships.Remove(relation);
+            await external.SaveChangesAsync();
+            external.PersonRelationships.Add(new PersonRelationship { Id = relation.Id, GenealogyId = genealogy.Id,
+                PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent,
+                Note = relation.Note, SourceCitation = relation.SourceCitation });
+            await external.SaveChangesAsync();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => vm.RemoveBiologicalParentRelationshipAsync(candidate));
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(p => p.Id == child.Id);
+        candidate = await vm.GetBiologicalUnlinkCandidateAsync();
+        await using (var external = database.CreateContext())
+        {
+            var foreign = new Genealogy { Name = "乙谱" };
+            var other = new Person { GenealogyId = foreign.Id, Name = "同名" };
+            external.Genealogies.Add(foreign); external.People.Add(other);
+            await external.SaveChangesAsync();
+            vm.SelectedBiologicalChild = other;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => vm.GetBiologicalUnlinkCandidateAsync());
+        }
+        vm.SelectedBiologicalChild = vm.BiologicalChildren.Single(p => p.Id == child.Id);
+        candidate = await vm.GetBiologicalUnlinkCandidateAsync();
+        await vm.RemoveBiologicalParentRelationshipAsync(candidate);
+        await using var verify = database.CreateContext();
+        Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        Assert.Equal(3, await verify.People.CountAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Remove_biological_parent_relation_preserves_people_and_other_relationships()
     {
         await using var database = new TestDatabase();

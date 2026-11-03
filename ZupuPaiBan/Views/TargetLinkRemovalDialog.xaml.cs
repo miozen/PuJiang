@@ -9,7 +9,7 @@ public partial class TargetLinkRemovalDialog : Window
 {
     public TargetLinkRemovalCandidate? SelectedCandidate => CandidateList.SelectedItem as TargetLinkRemovalCandidate;
 
-    public TargetLinkRemovalDialog(IReadOnlyCollection<TargetLinkRemovalCandidate> candidates)
+    public TargetLinkRemovalDialog(IReadOnlyCollection<TargetLinkRemovalCandidate> candidates, bool selectSingle = false)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         var subject = candidates.FirstOrDefault() ?? throw new ArgumentException("解除候选不能为空。", nameof(candidates));
@@ -19,6 +19,7 @@ public partial class TargetLinkRemovalDialog : Window
         InitializeComponent();
         SubjectLabel.Text = $"当前人物：{subject.SubjectName}（ID: {subject.ParticipantId}）";
         CandidateList.ItemsSource = candidates.OrderBy(candidate => candidate.Kind).ThenBy(candidate => candidate.Description, StringComparer.Ordinal).ToList();
+        if (selectSingle && candidates.Count == 1) CandidateList.SelectedIndex = 0;
     }
 
     private void CandidateList_SelectionChanged(object sender, SelectionChangedEventArgs e)
