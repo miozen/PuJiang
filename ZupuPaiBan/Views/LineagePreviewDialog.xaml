@@ -1,0 +1,32 @@
+<Window x:Class="ZupuPaiBan.Views.LineagePreviewDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="全谱主线预览" Width="980" Height="650" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" Text="只读会话预览：多条父母关系需要手动选择；未记录上系不推断为始祖，谱载首选标记不会自动选线。" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,0,0,6"/>
+            <Button Content="关闭" IsCancel="True" Padding="14,4" HorizontalAlignment="Right"/>
+        </StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <GroupBox Header="全谱人物及当前选线" Margin="0,0,8,0">
+                <ListBox x:Name="PersonList" SelectionChanged="PersonList_SelectionChanged" HorizontalContentAlignment="Stretch">
+                    <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" TextWrapping="Wrap" Margin="0,3"/></DataTemplate></ListBox.ItemTemplate>
+                </ListBox>
+            </GroupBox>
+            <GroupBox Grid.Column="1" Header="所选人物的父母候选及失考资料">
+                <DockPanel Margin="6">
+                    <TextBox x:Name="DetailsText" DockPanel.Dock="Top" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Height="70" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6"/>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button x:Name="ChooseButton" Content="选择这条关系" IsEnabled="False" Click="Choose_Click" Padding="10,4" Margin="0,0,8,0"/>
+                        <Button x:Name="ClearButton" Content="清除本次选择" IsEnabled="False" Click="Clear_Click" Padding="10,4"/>
+                    </StackPanel>
+                    <ListBox x:Name="CandidateList" SelectionChanged="CandidateList_SelectionChanged" HorizontalContentAlignment="Stretch">
+                        <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" TextWrapping="Wrap" Margin="0,3"/></DataTemplate></ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </GroupBox>
+        </Grid>
+    </DockPanel>
+</Window>

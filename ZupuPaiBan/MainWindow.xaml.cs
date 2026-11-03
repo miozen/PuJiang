@@ -436,6 +436,19 @@ public partial class MainWindow : Window
         catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); }
     }
 
+    private async void LineagePreview_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            genealogyPanel.IsEnabled = false;
+            LineagePreviewContext preview;
+            try { preview = await _genealogyViewModel!.GetLineagePreviewAsync(); }
+            finally { genealogyPanel.IsEnabled = true; }
+            new LineagePreviewDialog(_genealogyViewModel!, preview) { Owner = this }.ShowDialog();
+        }
+        catch (Exception ex) { MessageBox.Show($"无法预览全谱主线：{ex.Message}", "全谱主线预览", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
     private async void AncestryPreview_Click(object sender, RoutedEventArgs e)
     {
         try

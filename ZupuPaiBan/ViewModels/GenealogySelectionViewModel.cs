@@ -17,6 +17,7 @@ public sealed record PersonDeletePreview(Guid GenealogyId, Guid PersonId, string
 public sealed record PersonSelectionToken(Guid GenealogyId, Guid PersonId, int SelectionVersion, int PersonSelectionVersion);
 public sealed record BiologicalUnlinkCandidate(TargetLinkRemovalCandidate Link, int ChildSelectionVersion);
 public sealed record AncestryPreviewContext(GenealogyGraphSnapshot Snapshot, PersonSelectionToken Selection, ObservableCollection<TargetMemberTreeNode> Tree);
+public sealed record LineagePreviewContext(GenealogyGraphSnapshot Snapshot, Guid GenealogyId, int SelectionVersion, ObservableCollection<TargetMemberTreeNode> Tree);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -171,6 +172,28 @@ public partial class GenealogySelectionViewModel : ObservableObject
         catch (InvalidOperationException) { return false; }
         return ReferenceEquals(preview.Tree, TargetTree);
     }
+
+    public async Task<LineagePreviewContext> GetLineagePreviewAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var genealogy = SelectedGenealogy ?? throw new InvalidOperationException("请先选择族谱。");
+        var version = _selectionVersion;
+        var tree = TargetTree;
+        var changed = false;
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler handler = (_, _) => changed = true;
+        tree.CollectionChanged += handler;
+        try
+        {
+            var snapshot = await GetGraphSnapshotForSelectionAsync(genealogy.Id);
+            if (changed || version != _selectionVersion || SelectedGenealogy?.Id != genealogy.Id || !ReferenceEquals(tree, TargetTree))
+                throw new InvalidOperationException("族谱已切换或刷新，请重新打开主线预览。");
+            return new LineagePreviewContext(snapshot, genealogy.Id, version, tree);
+        }
+        finally { tree.CollectionChanged -= handler; }
+    }
+
+    public bool IsLineagePreviewCurrent(LineagePreviewContext preview) =>
+        preview.GenealogyId == SelectedGenealogy?.Id && preview.SelectionVersion == _selectionVersion && ReferenceEquals(preview.Tree, TargetTree);
 
     /// <summary>Supplies edit dialogs with a snapshot bounded to the current target genealogy.</summary>
     public IReadOnlyList<Person> GetCurrentPeopleForEditing()

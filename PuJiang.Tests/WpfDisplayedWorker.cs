@@ -1050,10 +1050,63 @@ internal static class WpfDisplayedWorker
         await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.LostAncestry, null);
         await PreviewPathAsync(false);
         await PreviewPathAsync(true);
+        await PreviewFullLineageAsync(false);
+        await PreviewFullLineageAsync(true);
         await using (var pathVerify = coordinator.CreateContext())
             if (await pathVerify.PersonRelationships.CountAsync(r => r.GenealogyId == pathGenealogy.Id) != 3)
                 throw new InvalidOperationException("只读路径预览修改了原始关系。");
         await genealogy.SelectAsync(priorGenealogy);
+
+        async Task PreviewFullLineageAsync(bool invalidate)
+        {
+            if (genealogy.SelectedGenealogy?.Id != pathGenealogy.Id) await genealogy.SelectAsync(pathGenealogy);
+            genealogy.SelectedPerson = null;
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += async (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<LineagePreviewDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                try
+                {
+                    var people = (System.Windows.Controls.ListBox)dialog.FindName("PersonList");
+                    var choices = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+                    var status = (System.Windows.Controls.TextBlock)dialog.FindName("StatusText");
+                    var details = (System.Windows.Controls.TextBox)dialog.FindName("DetailsText");
+                    if (people.Items.Count != 3) throw new InvalidOperationException("全谱预览未列出所有人物。");
+                    people.SelectedItem = people.Items.Cast<LineagePersonProjection>().Single(r => r.Person.Id == pathSubject);
+                    var row = (LineagePersonProjection)people.SelectedItem;
+                    if (!row.NeedsChoice || choices.Items.Count != 2 || !details.Text.Contains("失考"))
+                        throw new InvalidOperationException("全谱预览未显示待选关系及失考。");
+                    choices.SelectedItem = choices.Items.Cast<LineageParentOption>().Single(c => c.Parent.Id == pathParent);
+                    ((System.Windows.Controls.Button)dialog.FindName("ChooseButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    row = (LineagePersonProjection)people.SelectedItem;
+                    if (row.SelectedParent?.Parent.Id != pathParent || row.NeedsChoice)
+                        throw new InvalidOperationException("全谱预览选择关系未生效。");
+                    ((System.Windows.Controls.Button)dialog.FindName("ClearButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (!((LineagePersonProjection)people.SelectedItem).NeedsChoice)
+                        throw new InvalidOperationException("清除选择后未恢复待选择状态。");
+                    if (invalidate)
+                    {
+                        await genealogy.SelectAsync(priorGenealogy);
+                        if (people.Items.Count != 0 || choices.Items.Count != 0 || !status.Text.Contains("失效"))
+                            throw new InvalidOperationException("切谱后全谱预览未清空。");
+                    }
+                }
+                catch (Exception ex) { failure = ex; }
+                finally { dialog.Close(); }
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("lineagePreviewButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled || main.OwnedWindows.OfType<LineagePreviewDialog>().Any(w => w.IsVisible)) && until.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("全谱预览未完成。"); }
+            if (failure is not null) throw failure;
+        }
 
         async Task PreviewPathAsync(bool invalidate)
         {
