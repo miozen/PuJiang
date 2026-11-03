@@ -248,6 +248,7 @@
                     <DockPanel>
                         <WrapPanel DockPanel.Dock="Top" Margin="3">
                             <Button Content="编辑目标人物" Click="TargetShortcut_Edit_Click" Margin="0,0,5,4" Padding="6,2"/>
+                            <Button x:Name="ancestryPreviewButton" Content="预览上系路径" Click="AncestryPreview_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button x:Name="previewPersonDeleteButton" Content="删除目标人物" Click="DeleteTargetPerson_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="为目标人物新增子女" Click="TargetShortcut_AddChild_Click" Margin="0,0,5,4" Padding="6,2"/>
                             <Button Content="新增人物关系" Click="TargetShortcut_AddRelationship_Click" Margin="0,0,5,4" Padding="6,2"/>

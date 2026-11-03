@@ -436,6 +436,19 @@ public partial class MainWindow : Window
         catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); }
     }
 
+    private async void AncestryPreview_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            genealogyPanel.IsEnabled = false;
+            AncestryPreviewContext preview;
+            try { preview = await _genealogyViewModel!.GetAncestryPreviewAsync(); }
+            finally { genealogyPanel.IsEnabled = true; }
+            new AncestryPreviewDialog(_genealogyViewModel!, preview) { Owner = this }.ShowDialog();
+        }
+        catch (Exception ex) { MessageBox.Show($"无法预览上系：{ex.Message}", "上系路径预览", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
     private async void TargetShortcut_AddRelationship_Click(object sender, RoutedEventArgs e)
     {
         try

@@ -1,0 +1,19 @@
+<Window x:Class="ZupuPaiBan.Views.AncestryPreviewDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="上系路径预览" Width="760" Height="560" MinWidth="560" MinHeight="420" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" Text="只读预览：多条父母关系需手动选择；谱载首选标记不会自动选线。" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,0,0,6"/>
+            <ListBox x:Name="ChoiceList" MaxHeight="130" MinHeight="50" DisplayMemberPath="Label" SelectionChanged="ChoiceList_SelectionChanged"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                <Button x:Name="ContinueButton" Content="沿所选上系继续" Click="Continue_Click" IsEnabled="False" Padding="12,4" Margin="0,0,8,0"/>
+                <Button Content="关闭" IsCancel="True" Padding="14,4"/>
+            </StackPanel>
+        </StackPanel>
+        <ListBox x:Name="PathList" HorizontalContentAlignment="Stretch">
+            <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,3"/></DataTemplate></ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</Window>

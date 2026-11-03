@@ -1034,6 +1034,69 @@ internal static class WpfDisplayedWorker
             if (failure is not null) throw failure;
         }
 
+        var priorGenealogy = genealogy.SelectedGenealogy!;
+        genealogy.NewName = "路径验收谱";
+        await genealogy.CreateAsync();
+        var pathGenealogy = genealogy.SelectedGenealogy!;
+        genealogy.NewPersonName = "路径主体"; await genealogy.AddPersonAsync();
+        genealogy.NewPersonName = "路径父母"; await genealogy.AddPersonAsync();
+        genealogy.NewPersonName = "路径养亲"; await genealogy.AddPersonAsync();
+        var pathSubject = genealogy.People.Single(p => p.Name == "路径主体").Id;
+        var pathParent = genealogy.People.Single(p => p.Name == "路径父母").Id;
+        var pathAdoptive = genealogy.People.Single(p => p.Name == "路径养亲").Id;
+        genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == pathSubject);
+        await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.BiologicalParent, pathParent);
+        await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.AdoptiveParent, pathAdoptive);
+        await genealogy.AddTargetRelationshipAsync(ZupuPaiBan.Models.PersonRelationshipKind.LostAncestry, null);
+        await PreviewPathAsync(false);
+        await PreviewPathAsync(true);
+        await using (var pathVerify = coordinator.CreateContext())
+            if (await pathVerify.PersonRelationships.CountAsync(r => r.GenealogyId == pathGenealogy.Id) != 3)
+                throw new InvalidOperationException("只读路径预览修改了原始关系。");
+        await genealogy.SelectAsync(priorGenealogy);
+
+        async Task PreviewPathAsync(bool invalidate)
+        {
+            if (genealogy.SelectedGenealogy?.Id != pathGenealogy.Id) await genealogy.SelectAsync(pathGenealogy);
+            genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == pathSubject);
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += async (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<AncestryPreviewDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                try
+                {
+                    var paths = (System.Windows.Controls.ListBox)dialog.FindName("PathList");
+                    var choices = (System.Windows.Controls.ListBox)dialog.FindName("ChoiceList");
+                    var status = (System.Windows.Controls.TextBlock)dialog.FindName("StatusText");
+                    if (paths.Items.Count != 1 || !paths.Items[0].ToString()!.Contains("失考") || choices.Items.Count != 2)
+                        throw new InvalidOperationException("路径预览未展示失考及多条候选。");
+                    choices.SelectedItem = choices.Items.Cast<AncestryChoice>().Single(c => c.ParentId == pathParent);
+                    ((System.Windows.Controls.Button)dialog.FindName("ContinueButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (paths.Items.Count != 2 || !paths.Items[1].ToString()!.Contains(pathParent.ToString()) || !status.Text.Contains("未记录"))
+                        throw new InvalidOperationException("路径预览选择后结果不正确。");
+                    if (invalidate)
+                    {
+                        await genealogy.SelectAsync(priorGenealogy);
+                        if (paths.Items.Count != 0 || choices.Items.Count != 0 || !status.Text.Contains("失效"))
+                            throw new InvalidOperationException("切谱后上系预览未失效。");
+                    }
+                }
+                catch (Exception ex) { failure = ex; }
+                finally { dialog.Close(); }
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("ancestryPreviewButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled || main.OwnedWindows.OfType<AncestryPreviewDialog>().Any(w => w.IsVisible)) && until.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("上系预览未完成。"); }
+            if (failure is not null) throw failure;
+        }
+
         var service = new DataService(coordinator);
         var preview = new PrintPreviewWindow(service, new PrintService()) { Owner = main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         preview.Show();

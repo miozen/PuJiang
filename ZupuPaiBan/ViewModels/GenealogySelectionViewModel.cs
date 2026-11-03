@@ -16,6 +16,7 @@ public sealed record BranchReassignmentCandidate(NonEmptyBranchSnapshot Snapshot
 public sealed record PersonDeletePreview(Guid GenealogyId, Guid PersonId, string PersonName, int SelectionVersion, int PersonSelectionVersion, long Generation, IReadOnlyList<TargetLinkRemovalCandidate> Links);
 public sealed record PersonSelectionToken(Guid GenealogyId, Guid PersonId, int SelectionVersion, int PersonSelectionVersion);
 public sealed record BiologicalUnlinkCandidate(TargetLinkRemovalCandidate Link, int ChildSelectionVersion);
+public sealed record AncestryPreviewContext(GenealogyGraphSnapshot Snapshot, PersonSelectionToken Selection, ObservableCollection<TargetMemberTreeNode> Tree);
 
 /// <summary>创建和选择目标模型族谱；选择仅在当前会话有效。</summary>
 public partial class GenealogySelectionViewModel : ObservableObject
@@ -144,6 +145,31 @@ public partial class GenealogySelectionViewModel : ObservableObject
             token.SelectionVersion != _selectionVersion || token.PersonSelectionVersion != _candidatePersonSelectionVersion)
             throw new InvalidOperationException("当前选择已变化，请重新选择。");
         _ = GetCurrentSelectedPersonForEditing();
+    }
+
+    public async Task<AncestryPreviewContext> GetAncestryPreviewAsync()
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        var selection = CapturePersonSelection();
+        var tree = TargetTree;
+        var changed = false;
+        System.Collections.Specialized.NotifyCollectionChangedEventHandler changedHandler = (_, _) => changed = true;
+        tree.CollectionChanged += changedHandler;
+        try
+        {
+            var snapshot = await GetGraphSnapshotForSelectionAsync(selection.GenealogyId);
+            ValidatePersonSelection(selection);
+            if (changed || !ReferenceEquals(tree, TargetTree)) throw new InvalidOperationException("族谱已刷新，请重新打开上系预览。");
+            return new AncestryPreviewContext(snapshot, selection, tree);
+        }
+        finally { tree.CollectionChanged -= changedHandler; }
+    }
+
+    public bool IsAncestryPreviewCurrent(AncestryPreviewContext preview)
+    {
+        try { ValidatePersonSelection(preview.Selection); }
+        catch (InvalidOperationException) { return false; }
+        return ReferenceEquals(preview.Tree, TargetTree);
     }
 
     /// <summary>Supplies edit dialogs with a snapshot bounded to the current target genealogy.</summary>
