@@ -418,6 +418,41 @@ internal static class WpfDisplayedWorker
             genealogy.GetSelectedPersonForEditing().Id != targetPerson.Id)
             throw new InvalidOperationException("关系对方定位未选中正确人物。");
         genealogy.SelectedPerson = genealogy.People.Single(p => p.Id == originalPerson);
+        Exception? previewFailure = null;
+        var previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        previewTimer.Tick += (_, _) =>
+        {
+            var dialog = main.OwnedWindows.OfType<TargetLinkRemovalDialog>().FirstOrDefault(w => w.IsVisible);
+            if (dialog is null) return;
+            previewTimer.Stop();
+            try
+            {
+                var list = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+                var preview = (System.Windows.Controls.TextBox)dialog.FindName("PreviewBox");
+                var confirmation = (System.Windows.Controls.CheckBox)dialog.FindName("ConfirmationBox");
+                var button = (System.Windows.Controls.Button)dialog.FindName("RemoveButton");
+                list.SelectedItem = list.Items.Cast<TargetLinkRemovalCandidate>().Single(c => c.Id == lostId);
+                if (!preview.Text.Contains(lostId.ToString()) || !preview.Text.Contains(originalPerson.ToString()) ||
+                    !preview.Text.Contains("旧记") || !preview.Text.Contains("旧谱") || !preview.Text.Contains("未详"))
+                    throw new InvalidOperationException("失考记录预览未显示快照资料。");
+                confirmation.IsChecked = true;
+                list.SelectedItem = list.Items.Cast<TargetLinkRemovalCandidate>().Single(c => c.Id != lostId);
+                if (confirmation.IsChecked == true || button.IsEnabled || !preview.Text.Contains(targetPerson.Id.ToString()) ||
+                    !preview.Text.Contains("界面谱载备注") || !preview.Text.Contains("界面谱牒来源"))
+                    throw new InvalidOperationException("切换记录后预览或确认状态不正确。");
+            }
+            catch (Exception ex) { previewFailure = ex; }
+            finally { dialog.Close(); }
+        };
+        previewTimer.Start();
+        typeof(MainWindow).GetMethod("TargetShortcut_RemoveLink_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(main, [main, new RoutedEventArgs()]);
+        var previewDeadline = Stopwatch.StartNew();
+        while ((previewTimer.IsEnabled || !panel.IsEnabled) && previewDeadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        if (previewTimer.IsEnabled || !panel.IsEnabled) { previewTimer.Stop(); throw new TimeoutException("解除预览未完成。"); }
+        if (previewFailure is not null) throw previewFailure;
+        if ((await genealogy.GetTargetLinkRemovalCandidatesAsync()).Count != 2)
+            throw new InvalidOperationException("取消解除后记录发生变化。");
         var lostCandidate = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.Id == lostId);
         await genealogy.RemoveTargetLinkAsync(lostCandidate);
 
@@ -549,6 +584,13 @@ internal static class WpfDisplayedWorker
         var unknown = (await genealogy.GetTargetLinkRemovalCandidatesAsync()).Single(c => c.UnionSnapshot is { PartnerTwoId: null });
         if (unknown.UnionSnapshot!.StartDateText != "未详始年" || unknown.UnionSnapshot.Note != "未详备注")
             throw new InvalidOperationException("未详婚配重载后资料不正确。");
+        var unknownPreviewDialog = new TargetLinkRemovalDialog([unknown]);
+        ((System.Windows.Controls.ListBox)unknownPreviewDialog.FindName("CandidateList")).SelectedIndex = 0;
+        var unknownPreview = ((System.Windows.Controls.TextBox)unknownPreviewDialog.FindName("PreviewBox")).Text;
+        if (!unknownPreview.Contains("未详") || !unknownPreview.Contains(unknown.Id.ToString()) ||
+            !unknownPreview.Contains("未详始年") || !unknownPreview.Contains("未详备注"))
+            throw new InvalidOperationException("另一方未详的婚配预览不正确。");
+        unknownPreviewDialog.Close();
         var unknownEditTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         unknownEditTimer.Tick += (_, _) =>
         {
@@ -665,6 +707,7 @@ internal static class WpfDisplayedWorker
                     throw new InvalidOperationException("取消补全后婚配发生改变。");
             }
         }
+        Exception? unionPreviewFailure = null;
         var removalTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         removalTimer.Tick += (_, _) =>
         {
@@ -673,6 +716,9 @@ internal static class WpfDisplayedWorker
             removalTimer.Stop();
             var list = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
             list.SelectedItem = list.Items.Cast<TargetLinkRemovalCandidate>().Single(c => c.Id == unknown.Id);
+            var unionPreview = ((System.Windows.Controls.TextBox)dialog.FindName("PreviewBox")).Text;
+            if (!unionPreview.Contains(unknown.Id.ToString()) || !unionPreview.Contains("未详始年") || !unionPreview.Contains("已编辑未详"))
+                unionPreviewFailure = new InvalidOperationException("婚配预览未显示记录及保存资料。");
             ((System.Windows.Controls.CheckBox)dialog.FindName("ConfirmationBox")).IsChecked = true;
             ((System.Windows.Controls.Button)dialog.FindName("RemoveButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         };
@@ -681,6 +727,7 @@ internal static class WpfDisplayedWorker
         var removeUnknownWait = Stopwatch.StartNew();
         while ((removalTimer.IsEnabled || !panel.IsEnabled) && removeUnknownWait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
         if (removalTimer.IsEnabled || !panel.IsEnabled) { removalTimer.Stop(); throw new TimeoutException("未详婚配解除未完成。"); }
+        if (unionPreviewFailure is not null) throw unionPreviewFailure;
         await using (var verifyUnknown = coordinator.CreateContext())
             if (await verifyUnknown.FamilyUnions.AnyAsync(u => u.Id == unknown.Id)) throw new InvalidOperationException("未详婚配未解除。");
 

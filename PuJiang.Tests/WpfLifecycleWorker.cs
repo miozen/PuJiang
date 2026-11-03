@@ -176,7 +176,8 @@ internal static class WpfLifecycleWorker
         if (relatedBox.Items.Count != 1 || relatedBox.Items[0] is not Person { Id: var relatedId } || relatedId != second.Id)
             throw new InvalidOperationException("关系编辑框暴露了当前族谱以外或主体自身的人物。");
         relatedBox.SelectedItem = relatedBox.Items[0];
-        await viewModel.AddTargetRelationshipAsync(relationshipDialog.Kind, relationshipDialog.RelatedPersonId);
+        var longNote = new string('谱', 2000);
+        await viewModel.AddTargetRelationshipAsync(relationshipDialog.Kind, relationshipDialog.RelatedPersonId, longNote, "卷一");
 
         var unionDialog = new TargetFamilyUnionDialog(viewModel.GetSelectedPersonForEditing(), viewModel.GetCurrentPeopleForEditing());
         var partnerBox = (System.Windows.Controls.ComboBox)unionDialog.FindName("PartnerTwoBox");
@@ -203,8 +204,30 @@ internal static class WpfLifecycleWorker
         var removeButton = (System.Windows.Controls.Button)removalDialog.FindName("RemoveButton");
         if (removeButton.IsEnabled) throw new InvalidOperationException("解除入口未要求明确确认。");
         candidateList.SelectedItem = removalCandidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.Relationship);
+        var preview = (System.Windows.Controls.TextBox)removalDialog.FindName("PreviewBox");
+        var relationshipCandidate = removalDialog.SelectedCandidate!;
+        if (!preview.IsReadOnly || !preview.Text.Contains(relationshipCandidate.Id.ToString()) ||
+            !preview.Text.Contains(first.Id.ToString()) || !preview.Text.Contains(second.Id.ToString()) ||
+            !preview.Text.Contains(longNote) || !preview.Text.Contains("卷一"))
+            throw new InvalidOperationException("关系预览未完整显示候选快照。");
+        var sameNameId = Guid.NewGuid();
+        var sameNameFirst = relationshipCandidate with { FirstName = "同名", SecondName = "同名", Description = "同名关系" };
+        var sameNameSecond = sameNameFirst with { Id = sameNameId, RelationshipSnapshot = sameNameFirst.RelationshipSnapshot! with { Id = sameNameId } };
+        var sameNameDialog = new TargetLinkRemovalDialog([sameNameFirst, sameNameSecond]);
+        var sameNameList = (System.Windows.Controls.ListBox)sameNameDialog.FindName("CandidateList");
+        var sameNamePreview = (System.Windows.Controls.TextBox)sameNameDialog.FindName("PreviewBox");
+        sameNameList.SelectedItem = sameNameSecond;
+        if (!sameNamePreview.Text.Contains(sameNameId.ToString()) || !sameNamePreview.Text.Contains(first.Id.ToString()) ||
+            !sameNamePreview.Text.Contains(second.Id.ToString()))
+            throw new InvalidOperationException("同名同类候选未按记录和人物 ID 区分。");
+        sameNameDialog.Close();
         confirmation.IsChecked = true;
         if (!removeButton.IsEnabled) throw new InvalidOperationException("解除入口未在选择并确认后启用。");
+        candidateList.SelectedItem = removalCandidates.Single(candidate => candidate.Kind == TargetLinkRemovalKind.FamilyUnion);
+        if (confirmation.IsChecked == true || removeButton.IsEnabled || !preview.Text.Contains("（未填写）"))
+            throw new InvalidOperationException("切换候选后确认或空资料预览不正确。");
+        candidateList.SelectedItem = relationshipCandidate;
+        confirmation.IsChecked = true;
 
         await using (var external = database.CreateContext())
         {

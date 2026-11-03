@@ -2,14 +2,19 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="解除人物关系或婚配" SizeToContent="WidthAndHeight" ResizeMode="NoResize"
-        WindowStartupLocation="CenterOwner" MinWidth="560" MaxHeight="520">
+        WindowStartupLocation="CenterOwner" MinWidth="560" MaxHeight="720">
     <StackPanel Margin="18">
         <TextBlock x:Name="SubjectLabel" TextWrapping="Wrap" Margin="0,0,0,8"/>
         <TextBlock Text="请选择要解除的一条记录："/>
-        <ListBox x:Name="CandidateList" MinHeight="120" MaxHeight="220" Margin="0,4,0,10"
-                 SelectionChanged="CandidateList_SelectionChanged" DisplayMemberPath="Description"/>
+        <ListBox x:Name="CandidateList" MinHeight="80" MaxHeight="140" Margin="0,4,0,10"
+                 SelectionChanged="CandidateList_SelectionChanged">
+            <ListBox.ItemTemplate><DataTemplate><TextBlock TextWrapping="Wrap"><Run Text="{Binding Description}"/><Run Text="  记录 ID: "/><Run Text="{Binding Id}"/></TextBlock></DataTemplate></ListBox.ItemTemplate>
+        </ListBox>
+        <TextBlock Text="所选记录预览："/>
+        <TextBox x:Name="PreviewBox" IsReadOnly="True" IsTabStop="True" TextWrapping="Wrap" AcceptsReturn="True"
+                 VerticalScrollBarVisibility="Auto" Height="160" Margin="0,4,0,10" Text="请选择一条记录查看详情。"/>
         <TextBlock Foreground="#A02020" TextWrapping="Wrap"
-                   Text="解除只删除所选的一条关系或婚配记录，不删除人物，也不删除其它关系；此操作无法撤销。"/>
+                   Text="解除将删除所选记录及其备注、来源或婚配资料；不删除人物或其它记录。此操作无法撤销。"/>
         <CheckBox x:Name="ConfirmationBox" Margin="0,10,0,12" Content="我已核对所选记录，并确认解除它。"
                   Checked="ConfirmationChanged" Unchecked="ConfirmationChanged"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

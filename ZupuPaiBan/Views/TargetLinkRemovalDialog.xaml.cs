@@ -25,7 +25,19 @@ public partial class TargetLinkRemovalDialog : Window
     {
         // A changed selection requires a fresh acknowledgement for the exact record now shown.
         ConfirmationBox.IsChecked = false;
+        PreviewBox.Text = SelectedCandidate is { } candidate ? FormatPreview(candidate) : "请选择一条记录查看详情。";
         UpdateRemoveButton();
+    }
+
+    private static string FormatPreview(TargetLinkRemovalCandidate candidate)
+    {
+        static string Value(string? value) => string.IsNullOrEmpty(value) ? "（未填写）" : value;
+        static string Person(string? name, Guid? id) => id is Guid personId ? $"{name}（ID: {personId}）" : "（未详）";
+        if (candidate.RelationshipSnapshot is { } relationship)
+            return $"{candidate.Description}\n记录 ID: {relationship.Id}\n主体: {Person(candidate.FirstName, relationship.PersonId)}\n对方: {Person(candidate.SecondName, relationship.RelatedPersonId)}\n谱载首选标记: {(relationship.IsPreferredForLineage ? "是" : "否")}\n备注: {Value(relationship.Note)}\n来源: {Value(relationship.SourceCitation)}";
+        if (candidate.UnionSnapshot is { } union)
+            return $"{candidate.Description}\n记录 ID: {union.Id}\n第一方: {Person(candidate.FirstName, union.PartnerOneId)}\n第二方: {Person(candidate.SecondName, union.PartnerTwoId)}\n起始时间: {Value(union.StartDateText)}\n结束时间: {Value(union.EndDateText)}\n备注: {Value(union.Note)}";
+        return "记录详情不可用，请关闭窗口重新选择。";
     }
 
     private void ConfirmationChanged(object sender, RoutedEventArgs e) => UpdateRemoveButton();
