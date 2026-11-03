@@ -436,6 +436,19 @@ public partial class MainWindow : Window
         catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information); }
     }
 
+    private async void LineageTree_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            genealogyPanel.IsEnabled = false;
+            LineagePreviewContext preview;
+            try { preview = await _genealogyViewModel!.GetLineagePreviewAsync(); }
+            finally { genealogyPanel.IsEnabled = true; }
+            new LineageTreeDialog(_genealogyViewModel!, preview) { Owner = this }.ShowDialog();
+        }
+        catch (Exception ex) { MessageBox.Show($"无法打开树形世系：{ex.Message}", "树形世系浏览", MessageBoxButton.OK, MessageBoxImage.Information); }
+    }
+
     private async void LineagePreview_Click(object sender, RoutedEventArgs e)
     {
         try

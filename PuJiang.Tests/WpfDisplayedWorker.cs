@@ -1052,10 +1052,75 @@ internal static class WpfDisplayedWorker
         await PreviewPathAsync(true);
         await PreviewFullLineageAsync(false);
         await PreviewFullLineageAsync(true);
+        await PreviewLineageTreeAsync(0);
+        await PreviewLineageTreeAsync(1);
+        await PreviewLineageTreeAsync(2);
         await using (var pathVerify = coordinator.CreateContext())
             if (await pathVerify.PersonRelationships.CountAsync(r => r.GenealogyId == pathGenealogy.Id) != 3)
                 throw new InvalidOperationException("只读路径预览修改了原始关系。");
         await genealogy.SelectAsync(priorGenealogy);
+
+        async Task PreviewLineageTreeAsync(int invalidate)
+        {
+            if (genealogy.SelectedGenealogy?.Id != pathGenealogy.Id) await genealogy.SelectAsync(pathGenealogy);
+            genealogy.SelectedPerson = null;
+            Exception? failure = null;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            timer.Tick += async (_, _) =>
+            {
+                var dialog = main.OwnedWindows.OfType<LineageTreeDialog>().FirstOrDefault(w => w.IsVisible);
+                if (dialog is null) return;
+                timer.Stop();
+                try
+                {
+                    var tree = (System.Windows.Controls.TreeView)dialog.FindName("LineageTree");
+                    var searchBox = (System.Windows.Controls.TextBox)dialog.FindName("SearchBox");
+                    var searchResults = (System.Windows.Controls.ComboBox)dialog.FindName("SearchResults");
+                    var choices = (System.Windows.Controls.ListBox)dialog.FindName("CandidateList");
+                    var status = (System.Windows.Controls.TextBlock)dialog.FindName("StatusText");
+                    if (tree.Items.Count != 3 || !tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathSubject).Projection.NeedsChoice)
+                        throw new InvalidOperationException("树形浏览未显示待选及断开人物。");
+                    searchBox.Text = "路径";
+                    if (searchResults.Items.Count != 3) throw new InvalidOperationException("树形浏览姓名搜索结果错误。");
+                    searchBox.Text = pathSubject.ToString();
+                    if (searchResults.Items.Count != 1) throw new InvalidOperationException("树形浏览 ID 搜索结果错误。");
+                    searchResults.SelectedIndex = 0;
+                    ((System.Windows.Controls.Button)dialog.FindName("LocateButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (tree.SelectedItem is not LineageTreeNode selected || selected.PersonId != pathSubject || choices.Items.Count != 2 ||
+                        !((System.Windows.Controls.TextBox)dialog.FindName("DetailsText")).Text.Contains("失考"))
+                        throw new InvalidOperationException("树形浏览定位或候选显示错误。");
+                    choices.SelectedItem = choices.Items.Cast<LineageParentOption>().Single(c => c.Parent.Id == pathParent);
+                    ((System.Windows.Controls.Button)dialog.FindName("ChooseButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    var parentNode = tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathParent);
+                    if (tree.Items.Count != 2 || parentNode.Children.Single().PersonId != pathSubject || !parentNode.IsExpanded)
+                        throw new InvalidOperationException("选择后树形父子边不正确。");
+                    parentNode.IsExpanded = false;
+                    if (parentNode.IsExpanded) throw new InvalidOperationException("树形折叠失败。");
+                    searchBox.Text = ""; searchBox.Text = pathSubject.ToString(); searchResults.SelectedIndex = 0;
+                    ((System.Windows.Controls.Button)dialog.FindName("LocateButton"))
+                        .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (!parentNode.IsExpanded || tree.SelectedItem is not LineageTreeNode located || located.PersonId != pathSubject)
+                        throw new InvalidOperationException("搜索定位未展开路径并选中人物。");
+                    if (invalidate != 0)
+                    {
+                        await genealogy.SelectAsync(invalidate == 1 ? priorGenealogy : pathGenealogy);
+                        if (tree.Items.Count != 0 || choices.Items.Count != 0 || !status.Text.Contains("失效"))
+                            throw new InvalidOperationException("切谱或刷新后树形浏览未失效。");
+                    }
+                }
+                catch (Exception ex) { failure = ex; }
+                finally { dialog.Close(); }
+            };
+            timer.Start();
+            ((System.Windows.Controls.Button)main.FindName("lineageTreeButton"))
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var until = Stopwatch.StartNew();
+            while ((timer.IsEnabled || !panel.IsEnabled || main.OwnedWindows.OfType<LineageTreeDialog>().Any(w => w.IsVisible)) && until.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(20);
+            if (timer.IsEnabled || !panel.IsEnabled) { timer.Stop(); throw new TimeoutException("树形世系浏览未完成。"); }
+            if (failure is not null) throw failure;
+        }
 
         async Task PreviewFullLineageAsync(bool invalidate)
         {
