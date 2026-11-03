@@ -174,8 +174,10 @@ internal static class LineagePerformanceWorker
             dialog.UpdateLayout();
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             watch.Stop();
-            if (((Canvas)dialog.FindName("GraphCanvas")).Children.OfType<Grid>().Count() != 41)
-                throw new InvalidOperationException("图形初始根节点错误。");
+            var layout = (LineageGraphLayout)typeof(LineageTreeDialog).GetField("_graphLayout", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(dialog)!;
+            var count = ((Canvas)dialog.FindName("GraphCanvas")).Children.OfType<Grid>().Count();
+            if (layout.Nodes.Count != 41 || count == 0 || count >= 41)
+                throw new InvalidOperationException("图形根节点布局或视口呈现错误。");
             return (dialog, watch.Elapsed.TotalMilliseconds);
         }
         var (first, firstMs) = await OpenAsync();
@@ -199,6 +201,8 @@ internal static class LineagePerformanceWorker
             async Task ResetAsync()
             {
                 expanded.Clear(); render.Invoke(dialog, null); search.Text = string.Empty;
+                var scroll = (ScrollViewer)dialog.FindName("GraphScroll");
+                scroll.ScrollToHorizontalOffset(0); scroll.ScrollToVerticalOffset(0);
                 dialog.UpdateLayout(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             }
             async Task<double> SearchAsync(string query)

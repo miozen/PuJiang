@@ -84,6 +84,8 @@ internal static class LineageGraphShapeWorker
             for (var i = 0; i < 10; i++)
             {
                 var personId = LineagePerformanceData.PersonId(i);
+                scroll.ScrollToVerticalOffset(i * (LineageGraphLayoutService.NodeHeight + LineageGraphLayoutService.VerticalGap));
+                dialog.UpdateLayout(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 var button = canvas.Children.OfType<Grid>().SelectMany(g => g.Children.OfType<Button>())
                     .Single(b => b.Tag is Guid id && id == personId && ((string)b.Content).StartsWith("展开"));
                 watch.Restart(); button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
@@ -103,20 +105,21 @@ internal static class LineageGraphShapeWorker
         }
         Phase("full-render");
         expanded.UnionWith(tree.People.Select(n => n.PersonId));
-        for (var run = 1; run <= 3; run++)
+        for (var run = 1; run <= 20; run++)
         {
             watch.Restart(); render.Invoke(dialog, null); dialog.UpdateLayout();
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); watch.Stop();
             var nodes = canvas.Children.OfType<Grid>().Count(); var lines = canvas.Children.OfType<Line>().Count();
-            if (nodes != 1000 || lines != (shape == "balanced" ? 959 : 999))
-                throw new InvalidOperationException($"全展开节点或边数量错误：{nodes}/{lines}。");
+            var layout = (LineageGraphLayout)typeof(LineageTreeDialog).GetField("_graphLayout", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(dialog)!;
+            if (layout.Nodes.Count != 1000 || layout.Edges.Count != (shape == "balanced" ? 959 : 999) || nodes >= 1000)
+                throw new InvalidOperationException($"布局或视口控件数量错误：{layout.Nodes.Count}/{layout.Edges.Count}，视口 {nodes}/{lines}。");
             Record("full-render", new { run, ms = watch.Elapsed.TotalMilliseconds, counts = Counts() });
         }
         Phase("locate-last");
         var search = (TextBox)dialog.FindName("SearchBox");
         var results = (ComboBox)dialog.FindName("SearchResults");
         var targetId = LineagePerformanceData.PersonId(shape == "balanced" ? 500 : 999);
-        for (var run = 1; run <= 3; run++)
+        for (var run = 1; run <= 20; run++)
         {
             search.Text = string.Empty; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             watch.Restart(); search.Text = targetId.ToString();
@@ -130,7 +133,7 @@ internal static class LineageGraphShapeWorker
             Record("locate-last", new { run, ms = watch.Elapsed.TotalMilliseconds, x = point.X, y = point.Y, counts = Counts() });
         }
         Phase("scroll");
-        for (var run = 1; run <= 3; run++)
+        for (var run = 1; run <= 20; run++)
         {
             scroll.ScrollToHorizontalOffset(0); scroll.ScrollToVerticalOffset(0);
             dialog.UpdateLayout(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);

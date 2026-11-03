@@ -61,7 +61,7 @@
                     <Button x:Name="GraphZoomIn" Content="放大" Click="GraphZoomIn_Click" Padding="8,2"/>
                     <TextBlock Text="滚动浏览；节点下方按钮展开或折叠下系" Margin="8,0" VerticalAlignment="Center"/>
                   </StackPanel>
-                  <ScrollViewer x:Name="GraphScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                  <ScrollViewer x:Name="GraphScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" ScrollChanged="GraphScroll_Changed" SizeChanged="GraphScroll_SizeChanged">
                     <Canvas x:Name="GraphCanvas" Background="White">
                       <Canvas.LayoutTransform><ScaleTransform x:Name="GraphScale" ScaleX="1" ScaleY="1"/></Canvas.LayoutTransform>
                     </Canvas>

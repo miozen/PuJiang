@@ -24,6 +24,7 @@ public partial class LineageTreeDialog : Window
     private bool _rendering;
     private LineageTreeNode? _selected;
     private readonly HashSet<Guid> _graphExpanded = new();
+    private LineageGraphLayout? _graphLayout;
 
     public LineageTreeDialog(GenealogySelectionViewModel viewModel, LineagePreviewContext preview)
     {
@@ -51,6 +52,7 @@ public partial class LineageTreeDialog : Window
         _tree.ClearSelection();
         LineageTree.ItemsSource = null;
         GraphCanvas.Children.Clear();
+        _graphLayout = null;
         SearchResults.ItemsSource = null;
         CandidateList.ItemsSource = null;
         DetailsText.Text = string.Empty;
@@ -228,11 +230,13 @@ public partial class LineageTreeDialog : Window
             _selected = graphNode;
             StatusText.Text = _tree.Highlight(id);
             RenderDetails(); RenderGraph();
-            var layout = LineageGraphLayoutService.Calculate(_tree, _graphExpanded);
+            var layout = _graphLayout!;
             var positioned = layout.Nodes.Single(n => n.Person.PersonId == id);
             GraphScroll.UpdateLayout();
             GraphScroll.ScrollToHorizontalOffset(positioned.X * GraphScale.ScaleX);
             GraphScroll.ScrollToVerticalOffset(positioned.Y * GraphScale.ScaleY);
+            GraphScroll.UpdateLayout();
+            RenderGraphViewport();
             return;
         }
         var node = _tree.Reveal(id);
@@ -275,15 +279,32 @@ public partial class LineageTreeDialog : Window
     private void RenderGraph()
     {
         if (_invalid || GraphCanvas is null || LineageViews?.SelectedIndex != 1) return;
-        var layout = LineageGraphLayoutService.Calculate(_tree, _graphExpanded);
+        _graphLayout = LineageGraphLayoutService.Calculate(_tree, _graphExpanded);
+        GraphCanvas.Width = _graphLayout.Width; GraphCanvas.Height = _graphLayout.Height;
+        RenderGraphViewport();
+    }
+
+    private void GraphScroll_Changed(object sender, ScrollChangedEventArgs e) => RenderGraphViewport();
+    private void GraphScroll_SizeChanged(object sender, SizeChangedEventArgs e) => RenderGraphViewport();
+
+    private void RenderGraphViewport()
+    {
+        if (_invalid || _graphLayout is not { } layout || GraphScroll is null || GraphScale is null || LineageViews?.SelectedIndex != 1) return;
+        var scale = GraphScale.ScaleX;
+        var width = GraphScroll.ViewportWidth / scale;
+        var height = GraphScroll.ViewportHeight / scale;
+        if (width <= 0 || height <= 0 || !double.IsFinite(width) || !double.IsFinite(height)) return;
+        var viewport = new Rect(GraphScroll.HorizontalOffset / scale - width, GraphScroll.VerticalOffset / scale - height, width * 3, height * 3);
         GraphCanvas.Children.Clear();
-        GraphCanvas.Width = layout.Width; GraphCanvas.Height = layout.Height;
         var positions = layout.Nodes.ToDictionary(n => n.Person.PersonId);
         var path = new HashSet<Guid>();
         for (var node = _selected; node?.Parent is not null; node = node.Parent) path.Add(node.PersonId);
         foreach (var edge in layout.Edges)
         {
             var parent = positions[edge.ParentId]; var child = positions[edge.ChildId];
+            var start = new Point(parent.X + LineageGraphLayoutService.NodeWidth / 2, parent.Y + LineageGraphLayoutService.NodeHeight);
+            var end = new Point(child.X + LineageGraphLayoutService.NodeWidth / 2, child.Y);
+            if (!LineageGraphViewport.IntersectsLine(viewport, start, end)) continue;
             var highlighted = path.Contains(edge.ChildId);
             GraphCanvas.Children.Add(new Line { X1 = parent.X + LineageGraphLayoutService.NodeWidth / 2,
                 Y1 = parent.Y + LineageGraphLayoutService.NodeHeight, X2 = child.X + LineageGraphLayoutService.NodeWidth / 2,
@@ -292,6 +313,7 @@ public partial class LineageTreeDialog : Window
         }
         foreach (var item in layout.Nodes)
         {
+            if (!viewport.IntersectsWith(new Rect(item.X, item.Y, LineageGraphLayoutService.NodeWidth, LineageGraphLayoutService.NodeHeight))) continue;
             var node = item.Person;
             var panel = new Grid { Width = LineageGraphLayoutService.NodeWidth, Height = LineageGraphLayoutService.NodeHeight };
             panel.RowDefinitions.Add(new RowDefinition()); panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
@@ -317,7 +339,7 @@ public partial class LineageTreeDialog : Window
         }
     }
 
-    private void SetGraphZoom(double value) { GraphScale.ScaleX = GraphScale.ScaleY = Math.Clamp(value, 0.3, 2.0); }
+    private void SetGraphZoom(double value) { GraphScale.ScaleX = GraphScale.ScaleY = Math.Clamp(value, 0.3, 2.0); GraphScroll.UpdateLayout(); RenderGraphViewport(); }
     private void GraphZoomIn_Click(object sender, RoutedEventArgs e) => SetGraphZoom(GraphScale.ScaleX + 0.1);
     private void GraphZoomOut_Click(object sender, RoutedEventArgs e) => SetGraphZoom(GraphScale.ScaleX - 0.1);
     private void GraphZoomReset_Click(object sender, RoutedEventArgs e) => SetGraphZoom(1.0);
