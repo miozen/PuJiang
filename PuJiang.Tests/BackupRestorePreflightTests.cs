@@ -20,6 +20,7 @@ public class BackupRestorePreflightTests
         Assert.Contains("数据库：包含", message);
         Assert.Contains("照片和附件：不包含", message);
         Assert.Contains("配置：不包含", message);
+        Assert.Contains("含数据库内的图表配置", message);
         Assert.Contains("未恢复或替换数据库", message);
         Assert.Contains("不证明数据内容正确或备份来源真实性", message);
     }

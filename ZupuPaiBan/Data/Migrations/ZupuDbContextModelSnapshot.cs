@@ -217,6 +217,65 @@ namespace ZupuPaiBan.Data.Migrations
                     b.ToTable("GenealogyImportRecords", (string)null);
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageChart", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("GenealogyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Generation")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GenealogyId");
+
+                    b.ToTable("LineageCharts");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageChartChoice", b =>
+                {
+                    b.Property<Guid>("ChartId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PersonId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("ParentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PersonName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RelationshipId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("ChartId", "PersonId");
+
+                    b.ToTable("LineageChartChoices");
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.Person", b =>
                 {
                     b.Property<Guid>("Id")
@@ -393,6 +452,24 @@ namespace ZupuPaiBan.Data.Migrations
                     b.Navigation("Genealogy");
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageChart", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.Genealogy", null)
+                        .WithMany()
+                        .HasForeignKey("GenealogyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageChartChoice", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageChart", null)
+                        .WithMany("Choices")
+                        .HasForeignKey("ChartId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.Person", b =>
                 {
                     b.HasOne("ZupuPaiBan.Models.Genealogy", "Genealogy")
@@ -457,6 +534,11 @@ namespace ZupuPaiBan.Data.Migrations
                     b.Navigation("ImportRecords");
 
                     b.Navigation("People");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageChart", b =>
+                {
+                    b.Navigation("Choices");
                 });
 #pragma warning restore 612, 618
         }

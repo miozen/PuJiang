@@ -2,6 +2,8 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using ZupuPaiBan.Data;
+using ZupuPaiBan.Models;
 using ZupuPaiBan.Services;
 using ZupuPaiBan.ViewModels;
 
@@ -11,7 +13,11 @@ public partial class LineageTreeDialog : Window
 {
     private readonly GenealogySelectionViewModel _viewModel;
     private readonly LineagePreviewContext _preview;
-    private readonly LineageTreeState _tree;
+    private LineageTreeState _tree;
+    private LineageProjectionSession _session;
+    private Guid? _chartId;
+    private long? _chartRevision;
+    private readonly List<ChartChoiceReview> _invalidChoices = new();
     private bool _invalid;
     private bool _rendering;
     private LineageTreeNode? _selected;
@@ -20,12 +26,14 @@ public partial class LineageTreeDialog : Window
     {
         _viewModel = viewModel;
         _preview = preview;
-        _tree = new LineageTreeState(new LineageProjectionSession(preview.Snapshot));
+        _session = new LineageProjectionSession(preview.Snapshot);
+        _tree = new LineageTreeState(_session);
         InitializeComponent();
         _viewModel.PropertyChanged += ViewModelChanged;
         _preview.Tree.CollectionChanged += TreeChanged;
         Closed += (_, _) => { _viewModel.PropertyChanged -= ViewModelChanged; _preview.Tree.CollectionChanged -= TreeChanged; };
         Render(null);
+        Loaded += async (_, _) => await RefreshCharts();
     }
 
     private void ViewModelChanged(object? sender, PropertyChangedEventArgs e)
@@ -77,7 +85,7 @@ public partial class LineageTreeDialog : Window
     {
         if (ChooseButton is null || ClearButton is null) return;
         var row = _selected?.Projection;
-        ChooseButton.IsEnabled = !_invalid && row?.ParentCandidates.Count > 1 && CandidateList.SelectedItem is LineageParentOption;
+        ChooseButton.IsEnabled = !_invalid && row?.ParentCandidates.Count > 0 && CandidateList.SelectedItem is LineageParentOption;
         ClearButton.IsEnabled = !_invalid && row?.ParentCandidates.Count > 1 && row.SelectedParent is not null;
     }
     private void LineageTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
@@ -94,8 +102,97 @@ public partial class LineageTreeDialog : Window
         if (!Current() || _selected is null || CandidateList.SelectedItem is not LineageParentOption option) return;
         var id = _selected.PersonId;
         _tree.Choose(id, option.Relationship.Id);
+        _invalidChoices.RemoveAll(c => c.Choice.PersonId == id);
+        RefreshInvalid();
         Render(id);
         Locate(id);
+    }
+
+    private async Task RefreshCharts()
+    {
+        if (!Current()) return;
+        try { Charts.ItemsSource = await _viewModel.ListLineageChartsAsync(_preview); }
+        catch (Exception ex) { StatusText.Text = ex.Message; }
+    }
+
+    private void RefreshInvalid()
+    {
+        InvalidChoices.ItemsSource = null;
+        InvalidChoices.ItemsSource = _invalidChoices.ToList();
+    }
+
+    private void NewChart_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Current()) return;
+        _chartId = null; _chartRevision = null; ChartName.Text = string.Empty;
+        _invalidChoices.Clear(); RefreshInvalid();
+        _session = new LineageProjectionSession(_preview.Snapshot);
+        _tree = new LineageTreeState(_session);
+        Render(null);
+    }
+
+    private async void OpenChart_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Current() || Charts.SelectedItem is not LineageChart chart) { StatusText.Text = "请选择图表。"; return; }
+        try
+        {
+            var review = await _viewModel.ReviewLineageChartAsync(_preview, chart.Id);
+            if (!Current()) return;
+            if (review.GenerationChanged && !ConfirmReview(review)) return;
+            _session = new LineageProjectionSession(_preview.Snapshot);
+            _tree = new LineageTreeState(_session);
+            _invalidChoices.Clear();
+            foreach (var choice in review.Choices)
+            {
+                if (choice.Problem is not null) { _invalidChoices.Add(choice); _tree.Suppress(choice.Choice.PersonId); }
+                else _tree.Choose(choice.Choice.PersonId, choice.Choice.RelationshipId);
+            }
+            _chartId = review.Chart.Id; _chartRevision = review.Chart.Revision; ChartName.Text = review.Chart.Name;
+            RefreshInvalid(); Render(null);
+        }
+        catch (Exception ex) { StatusText.Text = ex.Message; }
+    }
+
+    private bool ConfirmReview(ChartReview review)
+    {
+        var dialog = new Window { Owner = this, Title = "复核图表", Width = 780, Height = 480,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var panel = new DockPanel { Margin = new Thickness(12) };
+        var message = new TextBlock { Text = "谱系数据已变化。请核对全部选线；确认后仅应用仍匹配的选线，失效项须单独处理。", TextWrapping = TextWrapping.Wrap };
+        DockPanel.SetDock(message, Dock.Top);
+        panel.Children.Add(message);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        var confirm = new Button { Content = "确认复核", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(4), IsDefault = true };
+        var cancel = new Button { Content = "取消", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(4), IsCancel = true };
+        confirm.Click += (_, _) => dialog.DialogResult = true;
+        buttons.Children.Add(confirm); buttons.Children.Add(cancel); panel.Children.Add(buttons);
+        panel.Children.Add(new ListBox { ItemsSource = review.Choices, DisplayMemberPath = nameof(ChartChoiceReview.Label), Margin = new Thickness(0, 8, 0, 8) });
+        dialog.Content = panel;
+        return dialog.ShowDialog() == true;
+    }
+
+    private void ClearInvalid_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Current() || InvalidChoices.SelectedItem is not ChartChoiceReview choice) return;
+        _invalidChoices.Remove(choice);
+        if (_preview.Snapshot.People.Any(p => p.Id == choice.Choice.PersonId)) _session.Choose(choice.Choice.PersonId, null);
+        _tree = new LineageTreeState(_session);
+        RefreshInvalid(); Render(null);
+    }
+
+    private async void SaveChart_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Current()) return;
+        if (_invalidChoices.Count != 0) { StatusText.Text = "请先逐项重新选择或明确清除失效选线。"; return; }
+        try
+        {
+            var chart = await _viewModel.SaveLineageChartAsync(_preview, _chartId, ChartName.Text, _chartRevision, _session.ExplicitSelections);
+            _chartId = chart.Id; _chartRevision = chart.Revision;
+            await RefreshCharts();
+            StatusText.Text = "图表配置已保存。";
+        }
+        catch (Exception ex) { StatusText.Text = ex.Message; }
     }
     private void Clear_Click(object sender, RoutedEventArgs e)
     {

@@ -48,6 +48,8 @@ public sealed class LineageTreeState
         Rebuild(personId);
     }
 
+    public void Suppress(Guid personId) { _session.Suppress(personId); Rebuild(null); }
+
     public LineageTreeNode Reveal(Guid personId)
     {
         var node = GetPerson(personId);

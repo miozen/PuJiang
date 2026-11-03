@@ -22,7 +22,7 @@ public sealed record LineageParentOption(GenealogyRelationshipData Relationship,
 public sealed record LineagePersonProjection(GenealogyPersonData Person, IReadOnlyList<LineageParentOption> ParentCandidates,
     LineageParentOption? SelectedParent, IReadOnlyList<GenealogyRelationshipData> LostAncestry)
 {
-    public bool NeedsChoice => ParentCandidates.Count > 1 && SelectedParent is null;
+    public bool NeedsChoice => ParentCandidates.Count > 0 && SelectedParent is null;
     public string Label => $"{Person.Name}（人物 ID: {Person.Id}） — " +
         (NeedsChoice ? "父母关系待选择" : SelectedParent is null ? "未记录父母（不推断始祖）" : $"已选 {SelectedParent.Label}") +
         (LostAncestry.Count > 0 ? "；有谱载上系失考记录" : "");
@@ -35,6 +35,7 @@ public sealed class LineageProjectionSession
     private readonly Dictionary<Guid, List<LineageParentOption>> _parents;
     private readonly Dictionary<Guid, List<GenealogyRelationshipData>> _lost;
     private readonly Dictionary<Guid, Guid> _selections = new();
+    private readonly HashSet<Guid> _suppressed = new();
 
     public LineageProjectionSession(GenealogyGraphSnapshot snapshot)
     {
@@ -64,20 +65,25 @@ public sealed class LineageProjectionSession
     public IReadOnlyList<LineagePersonProjection> Project() => _people.Select(person =>
     {
         var candidates = _parents[person.Id];
-        LineageParentOption? selected = candidates.Count == 1 ? candidates[0] :
-            _selections.TryGetValue(person.Id, out var id) ? candidates.Single(c => c.Relationship.Id == id) : null;
+        LineageParentOption? selected = _suppressed.Contains(person.Id) ? null :
+            _selections.TryGetValue(person.Id, out var id) ? candidates.Single(c => c.Relationship.Id == id) :
+            candidates.Count == 1 ? candidates[0] : null;
         return new LineagePersonProjection(person, candidates.AsReadOnly(), selected, _lost[person.Id].AsReadOnly());
     }).ToList().AsReadOnly();
 
     public void Choose(Guid personId, Guid? relationshipId)
     {
-        if (!_parents.TryGetValue(personId, out var candidates) || candidates.Count < 2)
-            throw new InvalidOperationException("当前人物没有多条可选父母关系。");
-        if (relationshipId is null) { _selections.Remove(personId); return; }
+        if (!_parents.TryGetValue(personId, out var candidates))
+            throw new InvalidOperationException("人物不存在。");
+        if (relationshipId is null) { _selections.Remove(personId); _suppressed.Remove(personId); return; }
         if (!candidates.Any(candidate => candidate.Relationship.Id == relationshipId))
             throw new InvalidOperationException("关系不属于当前人物，请重新选择。");
+        _suppressed.Remove(personId);
         _selections[personId] = relationshipId.Value;
     }
+
+    public IReadOnlyDictionary<Guid, Guid> ExplicitSelections => new Dictionary<Guid, Guid>(_selections);
+    public void Suppress(Guid personId) { if (_parents.ContainsKey(personId)) { _selections.Remove(personId); _suppressed.Add(personId); } }
 
     private void ValidateAcyclic(IEnumerable<Guid> ids)
     {

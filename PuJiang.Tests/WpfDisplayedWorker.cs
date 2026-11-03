@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using ZupuPaiBan;
 using ZupuPaiBan.Data;
 using ZupuPaiBan.Infrastructure;
+using ZupuPaiBan.Models;
 using ZupuPaiBan.Services;
 using ZupuPaiBan.ViewModels;
 using ZupuPaiBan.Views;
@@ -1093,6 +1094,80 @@ internal static class WpfDisplayedWorker
                     choices.SelectedItem = choices.Items.Cast<LineageParentOption>().Single(c => c.Parent.Id == pathParent);
                     ((System.Windows.Controls.Button)dialog.FindName("ChooseButton"))
                         .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    if (invalidate == 0)
+                    {
+                        ((System.Windows.Controls.TextBox)dialog.FindName("ChartName")).Text = "测试图表";
+                        ((System.Windows.Controls.Button)dialog.FindName("SaveChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        var charts = (System.Windows.Controls.ComboBox)dialog.FindName("Charts");
+                        var wait = Stopwatch.StartNew();
+                        while (!status.Text.Contains("已保存") && wait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+                        if (!status.Text.Contains("已保存")) throw new InvalidOperationException("WPF 保存图表失败：" + status.Text);
+                        ((System.Windows.Controls.Button)dialog.FindName("NewChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        charts.SelectedIndex = 0;
+                        ((System.Windows.Controls.Button)dialog.FindName("OpenChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        wait.Restart();
+                        while (tree.Items.Count != 2 && wait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+                        if (tree.Items.Count != 2 || tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathParent).Children.Single().PersonId != pathSubject)
+                            throw new InvalidOperationException("WPF 重开图表未恢复选线：" + status.Text);
+                        await using (var invalidDb = coordinator.CreateContext())
+                        {
+                            var graph = await new GenealogyDataService(invalidDb).GetGraphSnapshotAsync(pathGenealogy.Id);
+                            var stale = new LineageChart { GenealogyId = pathGenealogy.Id, Name = "失效图表", Revision = 1, Generation = graph.UnlinkGeneration };
+                            stale.Choices.Add(new LineageChartChoice { PersonId = pathSubject, PersonName = "路径人物", ParentId = pathParent,
+                                ParentName = "路径父母", RelationshipId = Guid.NewGuid(), Kind = PersonRelationshipKind.BiologicalParent });
+                            invalidDb.LineageCharts.Add(stale);
+                            await invalidDb.SaveChangesAsync();
+                        }
+                        ((System.Windows.Controls.Button)dialog.FindName("SaveChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        wait.Restart();
+                        while (charts.Items.Count < 2 && wait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+                        charts.SelectedItem = charts.Items.Cast<LineageChart>().Single(c => c.Name == "失效图表");
+                        ((System.Windows.Controls.Button)dialog.FindName("OpenChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        var invalidList = (System.Windows.Controls.ListBox)dialog.FindName("InvalidChoices");
+                        wait.Restart();
+                        while (invalidList.Items.Count != 1 && wait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+                        if (invalidList.Items.Count != 1 || !tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathSubject).Projection.NeedsChoice)
+                            throw new InvalidOperationException("WPF 未保留并阻止失效选线。");
+                        ((System.Windows.Controls.Button)dialog.FindName("SaveChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        if (!status.Text.Contains("失效选线")) throw new InvalidOperationException("WPF 未阻止保存未处理失效项。");
+                        invalidList.SelectedIndex = 0;
+                        ((System.Windows.Controls.Button)dialog.FindName("ClearInvalidButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        if (invalidList.Items.Count != 0) throw new InvalidOperationException("WPF 未明确清除失效项。");
+                        var reviewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+                        reviewTimer.Tick += (_, _) =>
+                        {
+                            var reviewWindow = dialog.OwnedWindows.OfType<Window>().FirstOrDefault(w => w.IsVisible && w.Title == "复核图表");
+                            if (reviewWindow is null) return;
+                            reviewTimer.Stop();
+                            var reviewPanel = (System.Windows.Controls.DockPanel)reviewWindow.Content;
+                            var reviewList = reviewPanel.Children.OfType<System.Windows.Controls.ListBox>().Single();
+                            if (reviewList.Items.Count != 1) { reviewWindow.DialogResult = false; return; }
+                            var reviewButtons = reviewPanel.Children.OfType<System.Windows.Controls.StackPanel>().Single();
+                            reviewButtons.Children.OfType<System.Windows.Controls.Button>().Single(b => (string)b.Content == "确认复核")
+                                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        };
+                        reviewTimer.Start();
+                        var reviewMethod = typeof(LineageTreeDialog).GetMethod("ConfirmReview", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                        var review = new ChartReview(new LineageChart(), true, new[] {
+                            new ChartChoiceReview(new LineageChartChoice { PersonName = "测试", ParentName = "父母" }, null) });
+                        if (reviewMethod.Invoke(dialog, new object[] { review }) is not true)
+                            throw new InvalidOperationException("WPF 复核窗口未展示和确认选线。");
+                        charts.SelectedItem = charts.Items.Cast<LineageChart>().Single(c => c.Name == "测试图表");
+                        ((System.Windows.Controls.Button)dialog.FindName("OpenChartButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        wait.Restart();
+                        while (tree.Items.Count != 2 && wait.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+                        searchBox.Text = ""; searchBox.Text = pathSubject.ToString(); searchResults.SelectedIndex = 0;
+                        ((System.Windows.Controls.Button)dialog.FindName("LocateButton"))
+                            .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    }
                     var parentNode = tree.Items.Cast<LineageTreeNode>().Single(n => n.PersonId == pathParent);
                     if (tree.Items.Count != 2 || parentNode.Children.Single().PersonId != pathSubject || !parentNode.IsExpanded)
                         throw new InvalidOperationException("选择后树形父子边不正确。");

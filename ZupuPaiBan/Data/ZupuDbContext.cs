@@ -15,6 +15,8 @@ public class ZupuDbContext : DbContext
     public DbSet<FamilyUnion> FamilyUnions => Set<FamilyUnion>();
     public DbSet<FamilyBranch> FamilyBranches => Set<FamilyBranch>();
     public DbSet<GenealogyImportRecord> GenealogyImportRecords => Set<GenealogyImportRecord>();
+    public DbSet<LineageChart> LineageCharts => Set<LineageChart>();
+    public DbSet<LineageChartChoice> LineageChartChoices => Set<LineageChartChoice>();
 
     private readonly string _dbPath;
     private readonly Action<bool>? _onDispose;
@@ -83,6 +85,21 @@ public class ZupuDbContext : DbContext
 
     private static void ConfigureTargetModel(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<LineageChart>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.HasIndex(e => e.GenealogyId);
+            entity.HasOne<Genealogy>().WithMany().HasForeignKey(e => e.GenealogyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(e => e.Choices).WithOne().HasForeignKey(e => e.ChartId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<LineageChartChoice>(entity =>
+        {
+            entity.HasKey(e => new { e.ChartId, e.PersonId });
+            entity.Property(e => e.PersonName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ParentName).IsRequired().HasMaxLength(200);
+        });
+
         modelBuilder.Entity<Genealogy>(entity =>
         {
             entity.ToTable("Genealogies");

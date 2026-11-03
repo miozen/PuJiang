@@ -117,7 +117,7 @@ public partial class DatabaseBackupDialog : Window
 
     internal static string FormatPreflightReport(BackupRestorePreflightReport report) =>
         $"预检通过：备份格式版本 {report.FormatVersion}，数据库结构和迁移版本符合当前程序。\n" +
-        $"数据库：{(report.IncludesDatabase ? "包含" : "不包含")}；照片和附件：{(report.IncludesAttachments ? "包含" : "不包含")}；配置：{(report.IncludesConfiguration ? "包含" : "不包含")}。\n" +
+        $"数据库：{(report.IncludesDatabase ? "包含（含数据库内的图表配置）" : "不包含")}；照片和附件：{(report.IncludesAttachments ? "包含" : "不包含")}；数据库外配置：{(report.IncludesConfiguration ? "包含" : "不包含")}。\n" +
         "仅完成预检，未恢复或替换数据库；不证明数据内容正确或备份来源真实性。";
 
     private IDisposable? TryEnterOperation()

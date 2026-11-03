@@ -195,6 +195,33 @@ public partial class GenealogySelectionViewModel : ObservableObject
     public bool IsLineagePreviewCurrent(LineagePreviewContext preview) =>
         preview.GenealogyId == SelectedGenealogy?.Id && preview.SelectionVersion == _selectionVersion && ReferenceEquals(preview.Tree, TargetTree);
 
+    public async Task<List<LineageChart>> ListLineageChartsAsync(LineagePreviewContext preview)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (!IsLineagePreviewCurrent(preview)) throw new InvalidOperationException("族谱已切换或刷新。");
+        await using var context = _createContext();
+        return await new LineageChartService(context).ListAsync(preview.GenealogyId);
+    }
+
+    public async Task<ChartReview> ReviewLineageChartAsync(LineagePreviewContext preview, Guid chartId)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (!IsLineagePreviewCurrent(preview)) throw new InvalidOperationException("族谱已切换或刷新。");
+        await using var context = _createContext();
+        var review = await new LineageChartService(context).ReviewAsync(preview.GenealogyId, chartId, preview.Snapshot);
+        if (!IsLineagePreviewCurrent(preview)) throw new InvalidOperationException("族谱已切换或刷新。");
+        return review;
+    }
+
+    public async Task<LineageChart> SaveLineageChartAsync(LineagePreviewContext preview, Guid? chartId, string name,
+        long? revision, IReadOnlyDictionary<Guid, Guid> selections)
+    {
+        using var operation = _operationCoordinator?.EnterOperation();
+        if (!IsLineagePreviewCurrent(preview)) throw new InvalidOperationException("族谱已切换或刷新。");
+        await using var context = _createContext();
+        return await new LineageChartService(context).SaveAsync(preview.GenealogyId, chartId, name, revision, preview.Snapshot, selections);
+    }
+
     /// <summary>Supplies edit dialogs with a snapshot bounded to the current target genealogy.</summary>
     public IReadOnlyList<Person> GetCurrentPeopleForEditing()
     {

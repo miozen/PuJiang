@@ -4,7 +4,21 @@
         xmlns:services="clr-namespace:ZupuPaiBan.Services"
         Title="树形世系浏览" Width="1100" Height="700" MinWidth="760" MinHeight="500" WindowStartupLocation="CenterOwner">
     <DockPanel Margin="16">
-        <TextBlock DockPanel.Dock="Top" Text="只读会话浏览：仅显示已选父母边。未选择和未记录上系的人物单独列出，不推断始祖；选择不保存。" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <TextBlock DockPanel.Dock="Top" Text="主线是展示投影，不修改原始关系；请显式保存图表配置。未选择及未记录上系不推断始祖。" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="已保存图表：" VerticalAlignment="Center"/>
+            <ComboBox x:Name="Charts" Width="170" DisplayMemberPath="Name" Margin="4,0"/>
+            <Button x:Name="OpenChartButton" Content="打开" Click="OpenChart_Click" Padding="8,3" Margin="4,0"/>
+            <Button x:Name="NewChartButton" Content="新建" Click="NewChart_Click" Padding="8,3" Margin="4,0"/>
+            <TextBlock Text="图表名称：" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            <TextBox x:Name="ChartName" Width="150"/>
+            <Button x:Name="SaveChartButton" Content="保存图表" Click="SaveChart_Click" Padding="8,3" Margin="8,0"/>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+            <TextBlock Text="失效选线（须重新选择或明确清除后才能保存）：" />
+            <ListBox x:Name="InvalidChoices" DisplayMemberPath="Label" Height="48"/>
+            <Button x:Name="ClearInvalidButton" Content="明确清除所选失效项" Click="ClearInvalid_Click" HorizontalAlignment="Left" Padding="8,2"/>
+        </StackPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
             <TextBlock Text="姓名或人物 ID：" VerticalAlignment="Center"/>
             <TextBox x:Name="SearchBox" Width="160" TextChanged="SearchBox_TextChanged"/>

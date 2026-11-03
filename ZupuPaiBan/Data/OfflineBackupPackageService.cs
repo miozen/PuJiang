@@ -8,7 +8,7 @@ namespace ZupuPaiBan.Data;
 public sealed record OfflineBackupManifest(int FormatVersion, string DatabaseEntry, long DatabaseBytes,
     string DatabaseSha256, DateTimeOffset CreatedUtc, bool IncludesAttachments, bool IncludesConfiguration);
 
-/// <summary>仅数据库的版本化备份；不实现恢复，附件和配置明确不包含。</summary>
+/// <summary>仅数据库的版本化备份；包含库内图表配置，不包含附件和库外配置，不实现恢复。</summary>
 public static class OfflineBackupPackageService
 {
     private const string ManifestEntry = "manifest.json";
