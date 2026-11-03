@@ -22,6 +22,7 @@ public class LineageGraphShapeTests(ITestOutputHelper output)
         await using (var context = database.CreateContext())
         {
             context.Genealogies.Add(new Genealogy { Id = LineagePerformanceData.GenealogyId, Name = "虚构测量谱" });
+            context.Genealogies.Add(new Genealogy { Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff"), Name = "隔离切换谱" });
             context.People.AddRange(Enumerable.Range(0, 1000).Select(i => new Person {
                 Id = LineagePerformanceData.PersonId(i), GenealogyId = LineagePerformanceData.GenealogyId, Name = $"虚构成员{i:D4}" }));
             await context.SaveChangesAsync();
