@@ -96,8 +96,7 @@ public static class HorizontalLineageLayout
                 else
                 {
                     var first = nodeMap[visibleChildren[0].ChildId];
-                    var last = nodeMap[visibleChildren[^1].ChildId];
-                    center = (first.Y + first.Height / 2) / 2 + (last.Y + last.Height / 2) / 2;
+                    center = first.Y + first.Height / 2;
                     visibleEdges.AddRange(visibleChildren);
                 }
                 var x = p.Generation * columnWidth;

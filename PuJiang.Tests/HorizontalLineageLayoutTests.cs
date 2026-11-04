@@ -70,6 +70,57 @@ public class HorizontalLineageLayoutTests
     }
 
     [Fact]
+    public void FirstChildrenAlignAndWholeVisibleSubtreesStayOrderedAcrossExpansionStates()
+    {
+        var people = new[] { P(1, 0, 0, 100, 60), P(2, 1, 0, 80, 30), P(3, 1, 1, 90, 70),
+            P(4, 2, 0, 80, 50), P(5, 2, 1, 80, 40), P(6, 2, 0, 80, 60), P(7, 2, 1, 80, 30),
+            P(8, 3, 0, 80, 80), P(9, 3, 1, 80, 20), P(10, 3, 0, 80, 40), P(11, 3, 1, 80, 50),
+            P(12, 0, 1, 80, 50), P(13, 1, 0, 80, 30) };
+        var edges = new[] { E(101, 1, 2), E(102, 1, 3), E(103, 2, 4), E(104, 2, 5),
+            E(105, 3, 6), E(106, 3, 7), E(107, 4, 8), E(108, 4, 9), E(109, 7, 10),
+            E(110, 7, 11), E(111, 12, 13) };
+        var states = new[] { new[] { 1, 12 }, new[] { 1, 2, 4, 12 },
+            new[] { 1, 2, 3, 4, 7, 12 }, new[] { 1, 3, 4, 7, 12 },
+            new[] { 1, 2, 3, 4, 7, 12 } };
+        HorizontalLayoutResult? fullyExpanded = null;
+        foreach (var state in states)
+        {
+            var result = Layout(people, edges, state);
+            var reversed = Layout(people.Reverse().ToArray(), edges.Reverse().ToArray(), state.Reverse().ToArray());
+            Assert.Equal(result.Nodes, reversed.Nodes);
+            AssertGeometry(result);
+            var visible = result.Nodes.ToDictionary(n => n.PersonId);
+            foreach (var group in result.Edges.GroupBy(e => e.ParentId))
+            {
+                var children = group.OrderBy(e => people.Single(p => p.Id == e.ChildId).SiblingOrder).ToArray();
+                var parent = visible[group.Key];
+                var first = visible[children[0].ChildId];
+                Assert.Equal(parent.Y + parent.Height / 2, first.Y + first.Height / 2);
+                for (var i = 1; i < children.Length; i++)
+                {
+                    var before = DescendantNodes(children[i - 1].ChildId, result).ToArray();
+                    var after = DescendantNodes(children[i].ChildId, result).ToArray();
+                    Assert.True(before.Max(n => n.Y + n.Height) < after.Min(n => n.Y));
+                }
+            }
+            if (state.Contains(2) && state.Contains(3))
+            {
+                if (fullyExpanded is null) fullyExpanded = result;
+                else Assert.Equal(fullyExpanded.Nodes, result.Nodes);
+            }
+            if (!state.Contains(2))
+                Assert.DoesNotContain(result.Nodes, n => n.PersonId == Id(4));
+        }
+    }
+
+    private static IEnumerable<HorizontalLayoutNode> DescendantNodes(Guid root, HorizontalLayoutResult result)
+    {
+        yield return result.Nodes.Single(n => n.PersonId == root);
+        foreach (var child in result.Edges.Where(e => e.ParentId == root))
+            foreach (var node in DescendantNodes(child.ChildId, result)) yield return node;
+    }
+
+    [Fact]
     public void InputOrderDoesNotChangeResultOrMutateInputs()
     {
         var p = new[] { P(1, 0), P(2, 1), P(3, 1, 1), P(4, 2) };
