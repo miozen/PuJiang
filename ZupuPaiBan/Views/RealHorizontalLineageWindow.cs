@@ -63,11 +63,19 @@ public sealed class RealHorizontalLineageWindow : Window
     private Point _scrollStart;
     private bool _dragged;
     internal Func<ProjectionReadSession, Task>? BeforeApplyForTest { get; set; }
+    internal Func<string, bool>? ConfirmPathForTest { get; set; }
+    internal Func<string[], int?>? ChooseInsertionForTest { get; set; }
+    internal Func<AncestryPathReader.Result, Guid?>? ChoosePathParentForTest { get; set; }
+    internal Func<bool>? ConfirmDerivedForTest { get; set; }
+    internal Func<Task>? BeforePathApplyForTest { get; set; }
+    internal Task LoadPathForTest() => LoadAncestryPathAsync();
+    internal void AllowDerivedForTest(bool value) => _allowDerived.IsChecked = value;
     internal ProjectionReadSession? SessionForTest => _session;
     internal int VisibleNodeCount => _nodes.Count;
     internal string StatusForTest => _status.Text;
     internal bool IsInvalidForTest => _invalid;
     internal int PeopleCountForTest => _people.Items.Count;
+    internal int CandidateCountForTest => _candidates.Items.Count;
     internal int CanvasCountForTest => _canvas.Children.Count;
     internal string DetailsForTest => _details.Text;
     internal int PartnerCountForTest => _partners.Items.Count;
@@ -118,10 +126,10 @@ public sealed class RealHorizontalLineageWindow : Window
         left.Children.Add(_people);
         left.Children.Add(Button("加载更多人物", async () => await LoadPeopleAsync(false)));
         left.Children.Add(Button("定位已加载人物", async () => await LocateSelectedAsync()));
+        left.Children.Add(Button("补载路径并定位", async () => await LoadAncestryPathAsync()));
         var row = new StackPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(new TextBlock { Text = "确认世代列：", VerticalAlignment = VerticalAlignment.Center }); row.Children.Add(_column);
         row.Children.Add(Button("选为起点", async () => await SetRootAsync())); left.Children.Add(row);
-        left.Children.Add(_allowDerived);
         left.Children.Add(new TextBlock { Text = "选择图表（可留空；仅供复核）", Margin = new Thickness(0, 8, 0, 2) }); left.Children.Add(_charts);
         left.Children.Add(Button("加载更多图表", async () => await LoadChartsAsync(false)));
         left.Children.Add(new TextBlock { Text = "当前人物的下系候选（未排序）", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 2) });
@@ -262,6 +270,161 @@ public sealed class RealHorizontalLineageWindow : Window
         if (!CanStart() || _people.SelectedItem is not PersonOption person) return;
         await LocatePersonAsync(person.Value, false);
     }
+    private async Task LoadAncestryPathAsync()
+    {
+        if (!CanStart() || _people.SelectedItem is not PersonOption target) return;
+        if (_nodes.ContainsKey(target.Value.Id)) { await LocatePersonAsync(target.Value, false); return; }
+        if (_nodes.Count == 0) { _status.Text = "请先选择当前图的起点。"; return; }
+        var epoch = _epoch; var selectionVersion = _rootChoiceVersion; var mappingVersion = _mappingVersion; var searchVersion = _searchInputVersion;
+        var chartId = (_charts.SelectedItem as ChartOption)?.Value.Id;
+        if (chartId == Guid.Empty) chartId = null;
+        var choices = new Dictionary<Guid, Guid>(); var anchors = _nodes.Keys.ToHashSet(); _busy = true;
+        bool CurrentRequest() => Current(epoch) && selectionVersion == _rootChoiceVersion && mappingVersion == _mappingVersion && searchVersion == _searchInputVersion &&
+            ((_charts.SelectedItem as ChartOption)?.Value.Id is Guid currentChart ? (currentChart == Guid.Empty ? null : currentChart) : null) == chartId;
+        try
+        {
+            AncestryPathReader.Result path;
+            while (true)
+            {
+                path = await Task.Run(() => AncestryPathReader.ReadAsync(_session!, _token, target.Value.Id, anchors, chartId, choices, cancellationToken: _lifetime.Token));
+                if (!CurrentRequest()) return;
+                if (path.Status != AncestryPathReader.Boundary.ChoiceRequired) break;
+                var selected = ChoosePathParentForTest is not null ? ChoosePathParentForTest(path) : ChoosePathParent(path);
+                if (selected is null) { _status.Text = "已放弃路径补载，原图未改变。"; return; }
+                choices[path.AtPerson] = selected.Value;
+            }
+            if (path.Status != AncestryPathReader.Boundary.Connected)
+            {
+                var boundary = path.Status switch {
+                    AncestryPathReader.Boundary.MissingParent => "没有记录父母，或未连接当前图",
+                    AncestryPathReader.Boundary.ChartNeedsReview => "图表选线需要复核",
+                    AncestryPathReader.Boundary.ChoiceConflict => "选线与现有候选冲突",
+                    AncestryPathReader.Boundary.Cycle => "关系形成循环",
+                    AncestryPathReader.Boundary.LimitReached => "已达到本次读取上限，路径未完成",
+                    _ => "关系需要处理"
+                };
+                var detail = $"路径止于人物 {path.AtPerson}：{boundary}。" + Environment.NewLine +
+                    string.Join(Environment.NewLine, path.Candidates.Select(p => $"{p.ParentName}｜人物 {p.ParentId}｜{RelationshipLabel(p.Kind)}｜关系 {p.RelationshipId}｜来源 {p.Source ?? "未记"}｜备注 {p.Note ?? "未记"}"));
+                if (path.ChartChoice is { NeedsReview: true } stale)
+                {
+                    detail = $"图表历史选线：{stale.PersonName} → {stale.ParentName}{Environment.NewLine}" +
+                        $"需要复核：{stale.Problem}。请先复核图表，或选择不使用图表后重新选择关系。{Environment.NewLine}{Environment.NewLine}候选明细：{Environment.NewLine}{detail}";
+                }
+                foreach (var step in path.Steps)
+                    foreach (var candidate in step.Candidates)
+                        detail += $"{Environment.NewLine}{step.Person.Name} 的父母候选：{candidate.ParentName}｜{RelationshipLabel(candidate.Kind)}｜关系 {candidate.RelationshipId}｜来源 {candidate.Source ?? "未记"}｜备注 {candidate.Note ?? "未记"}";
+                foreach (var personId in path.Steps.Select(s => s.Person.Id).Append(path.AtPerson).Distinct())
+                {
+                    var other = await Task.Run(() => _session!.ReadOtherRelationshipsAsync(_token, personId, null, 50, _lifetime.Token));
+                    if (!CurrentRequest()) return;
+                    foreach (var lost in other.Items.Where(r => r.Kind == PersonRelationshipKind.LostAncestry))
+                        detail += $"{Environment.NewLine}人物 {personId} 上系失考｜关系 {lost.Id}｜来源 {lost.Source ?? "未记"}";
+                    if (other.NextCursor is not null) detail += $"{Environment.NewLine}人物 {personId} 的其他关系未全部列出。";
+                }
+                _details.Text = detail;
+                _status.Text = path.Status == AncestryPathReader.Boundary.ChartNeedsReview
+                    ? "图表选线需要复核，未补载；原图未改变。"
+                    : "路径未连接当前图或需要处理关系；原图未改变。"; return;
+            }
+            var anchor = _nodes[path.AtPerson]; var ordered = path.Steps.Reverse().ToArray();
+            var needsDerivedConsent = ordered.Any(step => string.IsNullOrWhiteSpace(step.Person.RecordedGeneration)) && _allowDerived.IsChecked != true;
+            var proposed = new Dictionary<Guid, Node>(_nodes); var mapping = new Dictionary<string, int>(_generationMap, StringComparer.Ordinal);
+            var expanded = new HashSet<Guid>(_expanded); var parentId = anchor.Person.Id; var column = anchor.Column;
+            var siblings = proposed.Values.Where(n => n.Parent == parentId).OrderBy(n => n.Order).ToArray();
+            var siblingNames = siblings.Select(n => n.Person.Name).ToArray();
+            var insertion = siblings.Length == 0 ? 0 : ChooseInsertionForTest is not null ? ChooseInsertionForTest(siblingNames) : ChooseInsertion(siblingNames);
+            if (insertion is null) { _status.Text = "已放弃路径补载，原图未改变。"; return; }
+            for (var i = 0; i < siblings.Length; i++) proposed[siblings[i].Person.Id] = siblings[i] with { Order = i >= insertion ? i + 1 : i };
+            foreach (var step in ordered)
+            {
+                if (column == int.MaxValue) { _status.Text = "世代列超出范围；原图未改变。"; return; }
+                column++;
+                var generation = step.Person.RecordedGeneration;
+                if (!string.IsNullOrWhiteSpace(generation) && mapping.TryGetValue(generation, out var existing) && existing != column)
+                { _status.Text = $"{step.Person.Name} 谱载世代与现有列冲突；未绘制。"; return; }
+                if (!string.IsNullOrWhiteSpace(generation)) mapping.TryAdd(generation, column);
+                proposed.Add(step.Person.Id, new Node(step.Person, column, parentId, step.Parent.RelationshipId,
+                    parentId == anchor.Person.Id ? insertion.Value : 0, string.IsNullOrWhiteSpace(generation)));
+                expanded.Add(parentId); expanded.Add(step.Person.Id); parentId = step.Person.Id;
+            }
+            var diagnostics = new List<string>();
+            foreach (var step in ordered)
+            {
+                diagnostics.AddRange(step.Candidates.Select(p => $"{step.Person.Name} 的父母候选：{p.ParentName}｜{RelationshipLabel(p.Kind)}｜关系 {p.RelationshipId}｜来源 {p.Source ?? "未记"}｜备注 {p.Note ?? "未记"}"));
+                var other = await Task.Run(() => _session!.ReadOtherRelationshipsAsync(_token, step.Person.Id, null, 50, _lifetime.Token));
+                if (!CurrentRequest()) return;
+                diagnostics.AddRange(other.Items.Where(r => r.Kind == PersonRelationshipKind.LostAncestry).Select(r => $"{step.Person.Name} 上系失考｜关系 {r.Id}｜来源 {r.Source ?? "未记"}"));
+                if (other.NextCursor is not null) diagnostics.Add($"{step.Person.Name} 的其他关系未全部列出，请查看详情。");
+            }
+            var summary = string.Join(Environment.NewLine, ordered.Select(s => $"{s.Person.Name}：{(string.IsNullOrWhiteSpace(s.Person.RecordedGeneration) ? "世代未记，临时推导" : s.Person.RecordedGeneration)}"));
+            var confirmation = $"从 {anchor.Person.Name} 开始，按以下顺序显示：\n{summary}\n\n是否按此方式显示？";
+            if (needsDerivedConsent)
+            {
+                if (!ConfirmDerived(CurrentRequest, confirmation)) { if (CurrentRequest()) _status.Text = "未确认临时推导，原图未改变。"; return; }
+                mappingVersion = _mappingVersion;
+            }
+            else if (!(ConfirmPathForTest?.Invoke(confirmation) ?? (MessageBox.Show(this, confirmation, "确认只读路径", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)))
+            { _status.Text = "已放弃路径补载，原图未改变。"; return; }
+            HorizontalLineageLayout.Calculate(proposed.Values.Select(n => new HorizontalLayoutPerson(n.Person.Id, n.Column, n.Order, 180, 70)).ToArray(),
+                proposed.Values.Where(n => n.Parent.HasValue).Select(n => new HorizontalLayoutRelationship(n.Edge!.Value, n.Parent!.Value, n.Person.Id)).ToArray(), expanded);
+            if (BeforePathApplyForTest is not null) await BeforePathApplyForTest();
+            if (!CurrentRequest()) return;
+            await Task.Run(() => _session!.ValidateAsync(_token, _lifetime.Token));
+            if (!CurrentRequest()) return;
+            _nodes.Clear(); foreach (var pair in proposed) _nodes.Add(pair.Key, pair.Value);
+            _generationMap.Clear(); foreach (var pair in mapping) _generationMap.Add(pair.Key, pair.Value);
+            _expanded.Clear(); _expanded.UnionWith(expanded); _selected = target.Value.Id;
+            _candidates.Items.Clear(); _childCursor = null; _partners.Items.Clear(); _detailPerson = null;
+            Render(); _canvas.UpdateLayout();
+            var card = _canvas.Children.OfType<Border>().Single(item => item.Tag is Guid id && id == target.Value.Id);
+            _scroll.ScrollToHorizontalOffset(Math.Max(0, Canvas.GetLeft(card) * _scale.ScaleX - _scroll.ViewportWidth / 2));
+            _scroll.ScrollToVerticalOffset(Math.Max(0, Canvas.GetTop(card) * _scale.ScaleY - _scroll.ViewportHeight / 2));
+            _details.Text = string.Join(Environment.NewLine, diagnostics);
+            _status.Text = "路径已按确认结果补载；原始资料未改变。";
+        }
+        catch (HorizontalLayoutException ex) { if (Current(epoch)) _status.Text = $"路径无法布局，原图未改变：{ex.Message}"; }
+        catch (OperationCanceledException) { if (Current(epoch)) Invalidate("操作已取消，请重新打开。"); }
+        catch (Exception ex) { if (Current(epoch)) Invalidate($"路径读取失败：{ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private Guid? ChoosePathParent(AncestryPathReader.Result path)
+    {
+        var dialog = new Window { Owner = this, Title = "选择父母关系", Width = 720, Height = 320, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var panel = new DockPanel(); var button = new Button { Content = "确认选择", Margin = new Thickness(8), Padding = new Thickness(10, 4, 10, 4) };
+        DockPanel.SetDock(button, Dock.Bottom); panel.Children.Add(button);
+        var list = new ListBox { Margin = new Thickness(8) };
+        foreach (var candidate in path.Candidates) list.Items.Add(new ListBoxItem { Tag = candidate.RelationshipId,
+            Content = $"{candidate.ParentName}｜{candidate.ParentId}｜{RelationshipLabel(candidate.Kind)}｜关系 {candidate.RelationshipId}｜来源 {candidate.Source ?? "未记"}｜备注 {candidate.Note ?? "未记"}" });
+        panel.Children.Add(list); dialog.Content = panel;
+        button.Click += (_, _) => { if (list.SelectedItem is ListBoxItem) dialog.DialogResult = true; };
+        return dialog.ShowDialog() == true && list.SelectedItem is ListBoxItem item ? (Guid)item.Tag : null;
+    }
+
+    private int? ChooseInsertion(string[] siblings)
+    {
+        var dialog = new Window { Owner = this, Title = "选择同胞插入位置", Width = 520, Height = 200, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var panel = new StackPanel { Margin = new Thickness(12) };
+        panel.Children.Add(new TextBlock { Text = "请选择路径人物在已显示同胞中的位置：", TextWrapping = TextWrapping.Wrap });
+        var choices = new ComboBox { Margin = new Thickness(0, 8, 0, 8) };
+        for (var i = 0; i < siblings.Length; i++) choices.Items.Add($"在 {siblings[i]} 之前");
+        choices.Items.Add("在已显示同胞之后"); panel.Children.Add(choices);
+        var button = new Button { Content = "确认位置", Padding = new Thickness(8, 4, 8, 4) }; panel.Children.Add(button);
+        button.Click += (_, _) => { if (choices.SelectedIndex >= 0) dialog.DialogResult = true; };
+        dialog.Content = panel; return dialog.ShowDialog() == true ? choices.SelectedIndex : null;
+    }
+
+    private bool ConfirmDerived(Func<bool> stillCurrent, string? pathConfirmation = null)
+    {
+        if (_allowDerived.IsChecked == true) return true;
+        var message = "有些人物没有记录世代。可以根据已选父子关系临时推导显示位置，并标注“推导”；这不会修改族谱。\n\n本窗口内后续缺失世代也按此方式显示，关闭窗口后失效。";
+        message += pathConfirmation is null ? "\n\n是否继续？" : $"\n\n{pathConfirmation}";
+        var accepted = ConfirmDerivedForTest?.Invoke() ??
+            (MessageBox.Show(this, message, "缺失世代", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
+        if (!accepted || !stillCurrent()) return false;
+        _allowDerived.IsChecked = true;
+        return true;
+    }
     private async Task LocatePartnerAsync()
     {
         if (!CanStart() || _partners.SelectedItem is not PersonOption person) return;
@@ -349,7 +512,11 @@ public sealed class RealHorizontalLineageWindow : Window
         { _status.Text = "请确认子女的世代列为父母列加一；跨代冲突保留为待处理，未绘制。"; return; }
         if (_nodes.ContainsKey(child.ChildId)) { _status.Text = "人物已在图中；复杂关系待处理，未创建重复人物。"; return; }
         if (string.IsNullOrWhiteSpace(child.RecordedGeneration) && _allowDerived.IsChecked != true)
-        { _status.Text = "该人物缺少谱载世代；请先明确允许按父子链临时推导。"; return; }
+        {
+            var consentEpoch = _epoch; var consentSelection = _candidateChoiceVersion; var consentMapping = _mappingVersion;
+            bool ConsentCurrent() => Current(consentEpoch) && _selected == parent && consentSelection == _candidateChoiceVersion && consentMapping == _mappingVersion;
+            if (!ConfirmDerived(ConsentCurrent)) { if (ConsentCurrent()) _status.Text = "未确认临时推导，原图未改变。"; return; }
+        }
         if (!string.IsNullOrWhiteSpace(child.RecordedGeneration) && _generationMap.TryGetValue(child.RecordedGeneration, out var mapped) && mapped != column)
         { _status.Text = "该谱载世代已映射到其他列；请复核世代冲突，未绘制。"; return; }
         var epoch = _epoch; var selectionVersion = _candidateChoiceVersion; var mappingVersion = _mappingVersion; _busy = true;

@@ -173,10 +173,17 @@ internal static class WpfAppExitWorker
                 var genealogy = new Genealogy { Name = "隔离甲谱" }; var other = new Genealogy { Name = "隔离乙谱" };
                 var ancestor = new Person { GenealogyId = genealogy.Id, Name = "始祖", RecordedGeneration = "一世" };
                 var first = new Person { GenealogyId = genealogy.Id, Name = "长房", RecordedGeneration = "二世" };
-                var second = new Person { GenealogyId = genealogy.Id, Name = "次房", RecordedGeneration = scenario == "real-horizontal-rules" ? null : "二世" };
+                var second = new Person { GenealogyId = genealogy.Id, Name = "次房", RecordedGeneration = scenario is "real-horizontal-rules" or "real-horizontal-path-missing-generation" ? null : "二世" };
+                if (scenario == "real-horizontal-path-missing-generation") first.RecordedGeneration = null;
                 var firstRelation = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = first.Id, RelatedPersonId = ancestor.Id, Kind = PersonRelationshipKind.BiologicalParent };
                 var secondRelation = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = second.Id, RelatedPersonId = ancestor.Id, Kind = PersonRelationshipKind.BiologicalParent };
                 context.Genealogies.AddRange(genealogy, other); context.People.AddRange(ancestor, first, second);
+                if (scenario == "real-horizontal-path-multiple-parents")
+                {
+                    var alternate = new Person { GenealogyId = genealogy.Id, Name = "养父" };
+                    context.People.Add(alternate);
+                    context.PersonRelationships.Add(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = first.Id, RelatedPersonId = alternate.Id, Kind = PersonRelationshipKind.AdoptiveParent });
+                }
                 if (scenario == "real-horizontal-rules")
                 {
                     var conflict = new Person { GenealogyId = genealogy.Id, Name = "冲突人物", RecordedGeneration = "一世" };
@@ -189,13 +196,13 @@ internal static class WpfAppExitWorker
                     context.FamilyUnions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = ancestor.Id });
                 }
                 context.PersonRelationships.AddRange(firstRelation, secondRelation); await context.SaveChangesAsync();
-                if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid")
+                if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid" or "real-horizontal-path-stale-chart")
                 {
                     var snapshot = await new GenealogyDataService(context).GetGraphSnapshotAsync(genealogy.Id);
                     var chart = await new LineageChartService(context).SaveAsync(genealogy.Id, null, "旧图表", null, snapshot,
                         new Dictionary<Guid, Guid> { [first.Id] = firstRelation.Id });
                     chartId = chart.Id;
-                    if (scenario == "real-horizontal-chart")
+                    if (scenario is "real-horizontal-chart" or "real-horizontal-path-stale-chart")
                         await context.People.Where(p => p.Id == ancestor.Id).ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "改名始祖"));
                 }
                 (genealogyId, otherId, rootId, firstId, secondId, firstRelationId, secondRelationId) =
@@ -208,9 +215,81 @@ internal static class WpfAppExitWorker
             selector.SelectedItem = vm.Genealogies.Single(g => g.Id == genealogyId);
             var window = new RealHorizontalLineageWindow(coordinator, genealogyId) { Owner = main, Opacity = 0, ShowActivated = false, ShowInTaskbar = false };
             await window.InitializeAsync(); window.StopMonitorForTest(); window.Show();
-            if (window.PeopleCountForTest != (scenario == "real-horizontal-rules" ? 5 : 3)) throw new InvalidOperationException("真实窗口未读取隔离人物。");
-            if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid") window.SelectChartForTest(chartId!.Value);
-            window.SelectPersonForTest(rootId, 0); await window.SetRootAsync(); await window.LoadChildrenAsync(true);
+            if (window.PeopleCountForTest != (scenario == "real-horizontal-rules" ? 5 : scenario == "real-horizontal-path-multiple-parents" ? 4 : 3)) throw new InvalidOperationException("真实窗口未读取隔离人物。");
+            if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid" or "real-horizontal-path-stale-chart") window.SelectChartForTest(chartId!.Value);
+            window.SelectPersonForTest(rootId, 0); await window.SetRootAsync();
+            if (scenario == "real-horizontal-path-stale-chart")
+            {
+                window.ConfirmPathForTest = _ => throw new InvalidOperationException("失效图表不应进入确认。");
+                window.SelectPersonForTest(firstId, 1); await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 1 || !window.StatusForTest.Contains("需要复核") || !window.DetailsForTest.StartsWith("图表历史选线") || !window.DetailsForTest.Contains("始祖") || !window.DetailsForTest.Contains(firstRelationId.ToString()))
+                    throw new InvalidOperationException("失效图表未保留原图及历史身份。");
+                window.CancelForTest(); window.Close(); _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background); return;
+            }
+            if (scenario == "real-horizontal-path-missing-generation")
+            {
+                window.ConfirmPathForTest = _ => throw new InvalidOperationException("缺世代说明和路径确认不应分别弹出。"); var prompts = 0;
+                window.ConfirmDerivedForTest = () => { prompts++; return false; };
+                window.SelectPersonForTest(secondId, 1); await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 1 || prompts != 1 || !window.StatusForTest.Contains("未确认")) throw new InvalidOperationException("未允许推导时不应绘制。");
+                window.ConfirmDerivedForTest = () => { prompts++; return true; }; await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 2 || window.SelectedForTest != secondId || prompts != 2) throw new InvalidOperationException("确认推导后未补载。");
+                window.ConfirmPathForTest = _ => true;
+                window.ChooseInsertionForTest = _ => 1;
+                window.SelectPersonForTest(firstId, 1); await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 3 || prompts != 2) throw new InvalidOperationException("同一窗口重复确认或未继续推导。");
+                await using (var verify = coordinator.CreateContext()) if ((await verify.People.AsNoTracking().SingleAsync(p => p.Id == secondId)).RecordedGeneration is not null) throw new InvalidOperationException("推导意外写回谱载。");
+                window.CancelForTest(); window.Close(); _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background); return;
+            }
+            if (scenario == "real-horizontal-path-multiple-parents")
+            {
+                window.ConfirmPathForTest = _ => true; var prompted = false;
+                window.ChoosePathParentForTest = path => { prompted = true; if (path.Candidates.Count != 2) throw new InvalidOperationException("未显示完整父母候选。"); return firstRelationId; };
+                window.SelectPersonForTest(firstId, 1); await window.LoadPathForTest();
+                if (!prompted || window.VisibleNodeCount != 2 || !window.DetailsForTest.Contains("养父")) throw new InvalidOperationException("多父母未显式选择并保留诊断。");
+                window.CancelForTest(); window.Close(); _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background); return;
+            }
+            if (scenario == "real-horizontal-path-search-race")
+            {
+                window.ConfirmPathForTest = _ => true;
+                window.BeforePathApplyForTest = () => { window.ChangeSearchTextForTest("另一个搜索"); return Task.CompletedTask; };
+                window.SelectPersonForTest(firstId, 1); await window.LoadPathForTest();
+                if (window.IsInvalidForTest || window.VisibleNodeCount != 1 || window.SelectedForTest != rootId)
+                    throw new InvalidOperationException("搜索变化后旧路径被应用或原图丢失。");
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background); return;
+            }
+            if (scenario == "real-horizontal-path-stale")
+            {
+                window.ConfirmPathForTest = _ => true;
+                window.BeforePathApplyForTest = async () =>
+                {
+                    await using var writer = coordinator.CreateContext();
+                    await writer.People.Where(p => p.Id == firstId).ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "已变更"));
+                };
+                window.SelectPersonForTest(firstId, 1); await window.LoadPathForTest();
+                if (!window.IsInvalidForTest || window.VisibleNodeCount != 0 || window.CanvasCountForTest != 0)
+                    throw new InvalidOperationException("路径应用前变更未使旧图失效。");
+                window.Close(); _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background); return;
+            }
+            if (scenario == "real-horizontal-path")
+            {
+                window.ConfirmPathForTest = _ => false;
+                window.SelectPersonForTest(firstId, 1); await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 1 || !window.StatusForTest.Contains("放弃")) throw new InvalidOperationException("放弃路径时原图未保留。");
+                window.ConfirmPathForTest = _ => true;
+                await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 2 || window.SelectedForTest != firstId || window.CandidateCountForTest != 0 || window.CenterYForTest(rootId) != window.CenterYForTest(firstId))
+                    throw new InvalidOperationException("路径补载未正确定位或对齐。");
+                window.ChooseInsertionForTest = _ => 0;
+                window.SelectPersonForTest(secondId, 1); await window.LoadPathForTest();
+                if (window.VisibleNodeCount != 3 || window.CenterYForTest(rootId) != window.CenterYForTest(secondId) || window.CenterYForTest(firstId) <= window.CenterYForTest(secondId))
+                    throw new InvalidOperationException("路径插入顺序未保留。");
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            await window.LoadChildrenAsync(true);
             if (scenario == "real-horizontal-rules" &&
                 (!window.DetailsForTest.Contains("配偶甲") || !window.DetailsForTest.Contains("未详") || !window.DetailsForTest.Contains("上系失考") || window.PartnerCountForTest != 1))
                 throw new InvalidOperationException("婚配、未详或失考记录未完整显示。");
@@ -225,6 +304,7 @@ internal static class WpfAppExitWorker
             }
             if (scenario == "real-horizontal-rules")
             {
+                window.ConfirmDerivedForTest = () => false;
                 window.SelectChildForTest(secondRelationId, 1, false); await window.AddSelectedChildAsync();
                 if (window.VisibleNodeCount != 2) throw new InvalidOperationException("未授权推导时不应加入人物。");
                 window.SelectChildForTest(conflictingRelationId!.Value, 1, true); await window.AddSelectedChildAsync();
