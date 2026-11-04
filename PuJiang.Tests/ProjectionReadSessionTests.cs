@@ -10,6 +10,98 @@ public class ProjectionReadSessionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Chart_choice_preserves_historical_identity_when_subject_was_deleted()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid genealogyId, personId, chartId;
+        await using (var context = database.CreateContext())
+        {
+            var g = new Genealogy { Name = "谱" };
+            var parent = new Person { GenealogyId = g.Id, Name = "父" };
+            var child = new Person { GenealogyId = g.Id, Name = "已删人物" };
+            var relation = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent };
+            context.Genealogies.Add(g); context.People.AddRange(parent, child); context.PersonRelationships.Add(relation);
+            await context.SaveChangesAsync();
+            var snapshot = await new GenealogyDataService(context).GetGraphSnapshotAsync(g.Id);
+            var chart = await new LineageChartService(context).SaveAsync(g.Id, null, "图", null, snapshot,
+                new Dictionary<Guid, Guid> { [child.Id] = relation.Id });
+            (genealogyId, personId, chartId) = (g.Id, child.Id, chart.Id);
+            await context.PersonRelationships.Where(r => r.Id == relation.Id).ExecuteDeleteAsync();
+            await context.People.Where(p => p.Id == child.Id).ExecuteDeleteAsync();
+        }
+        await using var session = await ProjectionReadSession.OpenAsync(Coordinator(database), genealogyId);
+        var result = await session.ReadChartChoiceAsync(session.Token, chartId, personId);
+        Assert.NotNull(result); Assert.Equal("已删人物", result.PersonName);
+        Assert.True(result.NeedsReview); Assert.Null(result.ApplicableRelationshipId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Parent_union_and_chart_choice_are_scoped_paged_and_require_review_after_change()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid geneId, parentId, childId, relationId, chartId, foreignPersonId;
+        await using (var seed = database.CreateContext())
+        {
+            var g = new Genealogy { Name = "甲" }; var other = new Genealogy { Name = "乙" };
+            var parent = new Person { GenealogyId = g.Id, Name = "父" };
+            var adoptive = new Person { GenealogyId = g.Id, Name = "养母" };
+            var child = new Person { GenealogyId = g.Id, Name = "子" };
+            var foreign = new Person { GenealogyId = other.Id, Name = "外谱" };
+            var relation = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = parent.Id,
+                Kind = PersonRelationshipKind.BiologicalParent, SourceCitation = "谱页" };
+            seed.Genealogies.AddRange(g, other); seed.People.AddRange(parent, adoptive, child, foreign);
+            seed.PersonRelationships.Add(relation);
+            seed.PersonRelationships.Add(new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = adoptive.Id, Kind = PersonRelationshipKind.AdoptiveParent });
+            seed.PersonRelationships.Add(new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, Kind = PersonRelationshipKind.LostAncestry, SourceCitation = "失考谱页" });
+            seed.PersonRelationships.Add(new PersonRelationship { GenealogyId = g.Id, PersonId = parent.Id, RelatedPersonId = child.Id, Kind = PersonRelationshipKind.Spouse });
+            seed.FamilyUnions.Add(new FamilyUnion { GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = child.Id });
+            seed.FamilyUnions.Add(new FamilyUnion { GenealogyId = g.Id, PartnerOneId = child.Id, PartnerTwoId = null });
+            await seed.SaveChangesAsync();
+            var snapshot = await new GenealogyDataService(seed).GetGraphSnapshotAsync(g.Id);
+            var chart = await new LineageChartService(seed).SaveAsync(g.Id, null, "图", null, snapshot,
+                new Dictionary<Guid, Guid> { [child.Id] = relation.Id });
+            (geneId, parentId, childId, relationId, chartId, foreignPersonId) = (g.Id, parent.Id, child.Id, relation.Id, chart.Id, foreign.Id);
+        }
+        var coordinator = Coordinator(database);
+        await using (var session = await ProjectionReadSession.OpenAsync(coordinator, geneId))
+        {
+            var token = session.Token;
+            Assert.Equal("父", (await session.ReadPersonAsync(token, parentId)).Name);
+            var parents = await session.ReadParentCandidatesAsync(token, childId, null, 1);
+            Assert.Single(parents.Items); Assert.NotNull(parents.NextCursor);
+            var parentsNext = await session.ReadParentCandidatesAsync(token, childId, parents.NextCursor, 1);
+            Assert.Single(parentsNext.Items); Assert.Null(parentsNext.NextCursor);
+            Assert.Contains(parents.Items.Concat(parentsNext.Items), candidate => candidate.RelationshipId == relationId && candidate.Source == "谱页");
+            Assert.Equal(childId, Assert.Single((await session.ReadChildCandidatesAsync(token, parentId, null, 10)).Items).ChildId);
+            var firstUnion = await session.ReadUnionsAsync(token, childId, null, 1);
+            Assert.Single(firstUnion.Items); Assert.NotNull(firstUnion.NextCursor);
+            var secondUnion = await session.ReadUnionsAsync(token, childId, firstUnion.NextCursor, 1);
+            Assert.Single(secondUnion.Items); Assert.Null(secondUnion.NextCursor);
+            var otherRelations = await session.ReadOtherRelationshipsAsync(token, childId, null, 10);
+            Assert.Contains(otherRelations.Items, row => row.Kind == PersonRelationshipKind.LostAncestry && row.Source == "失考谱页");
+            Assert.Contains(otherRelations.Items, row => row.Kind == PersonRelationshipKind.Spouse && row.RelatedPersonId == childId);
+            var choice = await session.ReadChartChoiceAsync(token, chartId, childId);
+            Assert.NotNull(choice); Assert.False(choice.NeedsReview); Assert.Equal(relationId, choice.ApplicableRelationshipId);
+            Assert.Equal(chartId, Assert.Single((await session.ReadChartsAsync(token, null, 10)).Items).Id);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReadParentCandidatesAsync(token, foreignPersonId, null, 1));
+        }
+        await using (var writer = database.CreateContext())
+            await writer.People.Where(p => p.Id == childId).ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "新名"));
+        await using var refreshed = await ProjectionReadSession.OpenAsync(coordinator, geneId);
+        var stale = await refreshed.ReadChartChoiceAsync(refreshed.Token, chartId, childId);
+        Assert.NotNull(stale); Assert.True(stale.NeedsReview); Assert.Null(stale.ApplicableRelationshipId);
+        await refreshed.DisposeAsync();
+        await using (var writer = database.CreateContext())
+            await writer.PersonRelationships.Where(r => r.Id == relationId).ExecuteDeleteAsync();
+        await using var removed = await ProjectionReadSession.OpenAsync(coordinator, geneId);
+        var invalid = await removed.ReadChartChoiceAsync(removed.Token, chartId, childId);
+        Assert.NotNull(invalid); Assert.True(invalid.NeedsReview); Assert.Null(invalid.ApplicableRelationshipId);
+        Assert.Equal("人物或关系已变化", invalid.Problem);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Drain_signals_all_sessions_even_when_one_read_is_still_busy()
     {
         await using var database = new TestDatabase(); await database.MigrateAsync();
@@ -75,6 +167,7 @@ public class ProjectionReadSessionTests
             writer.FamilyBranches.Add(new FamilyBranch { GenealogyId = genealogyId, Name = "支" });
             await writer.SaveChangesAsync();
         }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.ValidateAsync(token));
         await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReadPeopleAsync(token, first.NextCursor, 1));
         Assert.Throws<InvalidOperationException>(() => session.Token);
         await using var replacement = await ProjectionReadSession.OpenAsync(coordinator, genealogyId);

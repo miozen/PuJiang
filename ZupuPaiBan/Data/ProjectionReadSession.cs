@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace ZupuPaiBan.Data;
 
 /// <summary>Single-connection, read-only, version-bound page reader. It is not a restore mechanism.</summary>
-public sealed class ProjectionReadSession : IAsyncDisposable
+public sealed partial class ProjectionReadSession : IAsyncDisposable
 {
     public sealed record PersonRow(Guid Id, string Name, string? RecordedGeneration, string? RecordedBirthOrder);
     public sealed record PersonPage(IReadOnlyList<PersonRow> Items, Guid? NextCursor);

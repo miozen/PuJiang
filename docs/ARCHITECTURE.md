@@ -8,7 +8,7 @@
 
 ## Current：源码已实现
 
-- 已新增 `ProjectionReadSession` 基础读取组件（尚无产品界面调用）：单谱只读 SQLite 连接、连接专属令牌、`data_version` 双次检查及人物有界分页；本机文件租约、连接失效、取消和协调器排空使旧令牌不可继续读取。`TargetContextCoordinator` 排空时先请求已登记长期会话关闭，再等待上下文释放。其作用域、验证及文件身份局限见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)；它不是完整真实谱系投影、生产恢复或实时 UI 失效机制。
+- 已新增 `ProjectionReadSession` 基础读取组件（尚无产品界面调用）：单谱只读 SQLite 连接、连接专属令牌、`data_version` 双次检查及人物、父母/子女候选、婚配、失考/有方向配偶关系及图表的有界分页；按人物读取图表选线时检查 D-022 版本和身份，需复核项不能直接作为可应用选线；本机文件租约、连接失效、取消和协调器排空使旧令牌不可继续读取。`TargetContextCoordinator` 排空时先请求已登记长期会话关闭，再等待上下文释放。其作用域、验证及文件身份局限见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)；它不是完整真实谱系投影、生产恢复或实时 UI 失效机制。
 
 - `PuJiang.slnx` 统一入口包含一个 `net10.0-windows` WPF 项目和 `PuJiang.Tests` xUnit 项目；`global.json` 固定 SDK `10.0.402`。依赖 CommunityToolkit.Mvvm、EF Core SQLite、ClosedXML、PdfSharpCore。
 - 界面位于 `Views/` 与 `MainWindow.xaml`；ViewModel 位于 `ViewModels/`；数据访问位于 `Data/`；布局、打印与交换位于 `Services/`。
