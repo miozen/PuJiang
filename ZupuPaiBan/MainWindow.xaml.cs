@@ -15,6 +15,9 @@ namespace ZupuPaiBan;
 
 public partial class MainWindow : Window
 {
+    private void WorkbenchPrototype_Click(object sender, RoutedEventArgs e) =>
+        new WorkbenchPrototypeWindow { Owner = this }.Show();
+
     private void HorizontalReal_Click(object sender, RoutedEventArgs e)
     {
         if (_genealogyViewModel?.SelectedGenealogy is not { } genealogy)
