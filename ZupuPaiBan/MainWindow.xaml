@@ -48,6 +48,7 @@
                 <MenuItem Header="协作导入..." Command="{Binding ImportCollaborationCommand}"/>
             </MenuItem>
             <MenuItem Header="视图(_V)">
+                <MenuItem Header="横向世系图（当前族谱）…" Click="HorizontalReal_Click"/>
                 <MenuItem Header="横向世系图（虚构示例）…" Click="HorizontalSample_Click"/>
             </MenuItem>
             <MenuItem Header="帮助(_H)">

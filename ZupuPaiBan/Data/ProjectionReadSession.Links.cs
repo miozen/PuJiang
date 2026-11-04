@@ -41,6 +41,27 @@ public sealed partial class ProjectionReadSession
         }, cancellationToken);
     }
 
+    public Task<LinkPage<PersonRow>> SearchPeopleAsync(Guid token, string query, Guid? after, int limit, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 200) throw new ArgumentException("搜索内容须为 1 至 200 字。", nameof(query));
+        if (limit is < 1 or > 200) throw new ArgumentOutOfRangeException(nameof(limit));
+        var text = query.Trim();
+        return ReadGuardedAsync(token, async (tx, cancellation) =>
+        {
+            await using var command = _connection.CreateCommand(); command.Transaction = tx;
+            command.CommandText = "SELECT Id, Name, RecordedGeneration, RecordedBirthOrder FROM People WHERE GenealogyId=$genealogy AND (instr(Name,$text)>0 OR Id=$id) AND ($after IS NULL OR Id>$after) ORDER BY Id LIMIT $limit";
+            command.Parameters.AddWithValue("$genealogy", SqlGuid(_genealogyId)); command.Parameters.AddWithValue("$text", text);
+            command.Parameters.AddWithValue("$id", Guid.TryParse(text, out var id) ? SqlGuid(id) : DBNull.Value);
+            command.Parameters.AddWithValue("$after", after is Guid cursor ? SqlGuid(cursor) : DBNull.Value); command.Parameters.AddWithValue("$limit", limit + 1);
+            var rows = new List<PersonRow>();
+            await using var reader = await command.ExecuteReaderAsync(cancellation);
+            while (await reader.ReadAsync(cancellation)) rows.Add(new PersonRow(Guid.Parse(reader.GetString(0)), reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3)));
+            var more = rows.Count > limit; if (more) rows.RemoveAt(rows.Count - 1);
+            return new LinkPage<PersonRow>(rows.AsReadOnly(), more ? rows[^1].Id : null);
+        }, cancellationToken);
+    }
+
     public Task<LinkPage<ParentCandidate>> ReadParentCandidatesAsync(Guid token, Guid personId, Guid? after, int limit, CancellationToken cancellationToken = default) =>
         ReadLinksAsync(token, personId, after, limit, false, reader => new ParentCandidate(
             Guid.Parse(reader.GetString(0)), Guid.Parse(reader.GetString(1)), Guid.Parse(reader.GetString(2)), reader.GetString(3),

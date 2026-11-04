@@ -2,13 +2,13 @@
 
 ## 产品与技术边界
 
-当前纯内存 `HorizontalLineageLayout` 已实现受限横向布局切片；主窗口“视图”菜单新增独立 WPF 横向画布，只使用固定虚构内存数据，复用该布局，不读取真实族谱或写数据库。此示例支持人物选择、展开折叠、配偶占位显示、滚轮缩放、滚动、空白拖动和示例搜索定位，尚非真实数据查询、编辑或统一工作台；输入限制见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。谱书资料与独立出版的目标边界见 [D-027](DECISIONS.md#d-027--世系谱书资料与出版边界)，候选技术尚未实现。
+当前纯内存 `HorizontalLineageLayout` 已实现受限横向布局切片；主窗口分别提供固定虚构样例和当前族谱的只读横向窗口。真实窗口通过同一只读会话分页取数，由用户指定根、世代列及子女顺序并逐支加入；其能力和限制见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。二者均非完整统一工作台或编辑功能。谱书资料与独立出版的目标边界见 [D-027](DECISIONS.md#d-027--世系谱书资料与出版边界)，候选技术尚未实现。
 
 谱匠（PuJiang）的目标是完全离线的 Windows 单机族谱管理系统，不是仅用于排版的工具。技术基线由 [D-001](DECISIONS.md#d-001--产品与技术基线) 约束：.NET 10、WPF、EF Core、SQLite；不依赖云端或服务器。源码目录与命名空间仍为 `ZupuPaiBan`，属于后续专项渐进重命名范围，见 [D-009](DECISIONS.md#d-009--项目名称仓库与分支策略)。
 
 ## Current：源码已实现
 
-- 已新增 `ProjectionReadSession` 基础读取组件（尚无产品界面调用）：单谱只读 SQLite 连接、连接专属令牌、`data_version` 双次检查及人物、父母/子女候选、婚配、失考/有方向配偶关系及图表的有界分页；按人物读取图表选线时检查 D-022 版本和身份，需复核项不能直接作为可应用选线；本机文件租约、连接失效、取消和协调器排空使旧令牌不可继续读取。`TargetContextCoordinator` 排空时先请求已登记长期会话关闭，再等待上下文释放。其作用域、验证及文件身份局限见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)；它不是完整真实谱系投影、生产恢复或实时 UI 失效机制。
+- `ProjectionReadSession` 为真实横向窗口提供单谱只读 SQLite 连接、连接专属令牌、`data_version` 双次检查及人物、关系、婚配和图表的分页读取；需复核图表选线不能直接应用。本机文件租约、连接失效、取消和协调器排空使旧令牌不可继续读取；主窗口排空前主动注销横向窗口。窗口在操作前后校验，并每秒轮询版本，发现失效即清空；这不是即时跨进程通知。作用域及文件身份局限见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 
 - `PuJiang.slnx` 统一入口包含一个 `net10.0-windows` WPF 项目和 `PuJiang.Tests` xUnit 项目；`global.json` 固定 SDK `10.0.402`。依赖 CommunityToolkit.Mvvm、EF Core SQLite、ClosedXML、PdfSharpCore。
 - 界面位于 `Views/` 与 `MainWindow.xaml`；ViewModel 位于 `ViewModels/`；数据访问位于 `Data/`；布局、打印与交换位于 `Services/`。

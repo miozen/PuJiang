@@ -15,6 +15,15 @@ namespace ZupuPaiBan;
 
 public partial class MainWindow : Window
 {
+    private void HorizontalReal_Click(object sender, RoutedEventArgs e)
+    {
+        if (_genealogyViewModel?.SelectedGenealogy is not { } genealogy)
+        {
+            MessageBox.Show("请先选择族谱。", "横向世系图", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        new RealHorizontalLineageWindow(_targetContexts, genealogy.Id) { Owner = this }.Show();
+    }
     private void HorizontalSample_Click(object sender, RoutedEventArgs e)
     {
         new HorizontalLineageSampleWindow { Owner = this }.Show();
@@ -103,6 +112,8 @@ public partial class MainWindow : Window
         _viewModel.StatusText = "正在等待数据库操作结束……";
         try
         {
+            foreach (var child in OwnedWindows.OfType<RealHorizontalLineageWindow>().ToArray())
+                child.InvalidateForShutdown();
             await _targetContexts.DrainAsync(cancellationToken);
             _viewModel.StatusText = "数据库操作已停止；恢复功能尚未开放。";
             return true;
@@ -152,7 +163,9 @@ public partial class MainWindow : Window
         if (await PrepareForExitAsync(timeout.Token))
         {
             _exitReady = true;
-            Close();
+            // Drain can complete synchronously while WPF is still raising Closing.
+            // Defer the final close so it never re-enters the current close event.
+            _ = Dispatcher.BeginInvoke(new Action(Close), System.Windows.Threading.DispatcherPriority.Background);
         }
     }
 
@@ -210,6 +223,8 @@ public partial class MainWindow : Window
     private async void GenealogySelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_genealogyViewModel == null) return;
+        foreach (var child in OwnedWindows.OfType<RealHorizontalLineageWindow>().ToArray())
+            child.InvalidateForSelectionChange();
         try { await _genealogyViewModel.SelectAsync(genealogySelector.SelectedItem as Genealogy); }
         catch (Exception ex) { _genealogyViewModel.Status = $"加载人物失败：{ex.Message}"; }
     }

@@ -163,6 +163,232 @@ internal static class WpfAppExitWorker
     private static async Task VerifyScenarioAsync(App app, MainWindow main, TargetContextCoordinator coordinator,
         string root, string scenario)
     {
+        if (scenario.StartsWith("real-horizontal-", StringComparison.Ordinal))
+        {
+            Guid genealogyId, otherId, rootId, firstId, secondId, firstRelationId, secondRelationId;
+            Guid? conflictingRelationId = null;
+            Guid? chartId = null;
+            await using (var context = coordinator.CreateContext())
+            {
+                var genealogy = new Genealogy { Name = "隔离甲谱" }; var other = new Genealogy { Name = "隔离乙谱" };
+                var ancestor = new Person { GenealogyId = genealogy.Id, Name = "始祖", RecordedGeneration = "一世" };
+                var first = new Person { GenealogyId = genealogy.Id, Name = "长房", RecordedGeneration = "二世" };
+                var second = new Person { GenealogyId = genealogy.Id, Name = "次房", RecordedGeneration = scenario == "real-horizontal-rules" ? null : "二世" };
+                var firstRelation = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = first.Id, RelatedPersonId = ancestor.Id, Kind = PersonRelationshipKind.BiologicalParent };
+                var secondRelation = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = second.Id, RelatedPersonId = ancestor.Id, Kind = PersonRelationshipKind.BiologicalParent };
+                context.Genealogies.AddRange(genealogy, other); context.People.AddRange(ancestor, first, second);
+                if (scenario == "real-horizontal-rules")
+                {
+                    var conflict = new Person { GenealogyId = genealogy.Id, Name = "冲突人物", RecordedGeneration = "一世" };
+                    var spouse = new Person { GenealogyId = genealogy.Id, Name = "配偶甲" };
+                    var conflictRelation = new PersonRelationship { GenealogyId = genealogy.Id, PersonId = conflict.Id, RelatedPersonId = ancestor.Id, Kind = PersonRelationshipKind.BiologicalParent };
+                    context.People.AddRange(conflict, spouse); context.PersonRelationships.Add(conflictRelation); conflictingRelationId = conflictRelation.Id;
+                    context.PersonRelationships.Add(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = ancestor.Id, Kind = PersonRelationshipKind.LostAncestry, SourceCitation = "旧谱" });
+                    context.PersonRelationships.Add(new PersonRelationship { GenealogyId = genealogy.Id, PersonId = ancestor.Id, RelatedPersonId = spouse.Id, Kind = PersonRelationshipKind.Spouse });
+                    context.FamilyUnions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = ancestor.Id, PartnerTwoId = spouse.Id });
+                    context.FamilyUnions.Add(new FamilyUnion { GenealogyId = genealogy.Id, PartnerOneId = ancestor.Id });
+                }
+                context.PersonRelationships.AddRange(firstRelation, secondRelation); await context.SaveChangesAsync();
+                if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid")
+                {
+                    var snapshot = await new GenealogyDataService(context).GetGraphSnapshotAsync(genealogy.Id);
+                    var chart = await new LineageChartService(context).SaveAsync(genealogy.Id, null, "旧图表", null, snapshot,
+                        new Dictionary<Guid, Guid> { [first.Id] = firstRelation.Id });
+                    chartId = chart.Id;
+                    if (scenario == "real-horizontal-chart")
+                        await context.People.Where(p => p.Id == ancestor.Id).ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "改名始祖"));
+                }
+                (genealogyId, otherId, rootId, firstId, secondId, firstRelationId, secondRelationId) =
+                    (genealogy.Id, other.Id, ancestor.Id, first.Id, second.Id, firstRelation.Id, secondRelation.Id);
+            }
+            var panel = (System.Windows.FrameworkElement)main.FindName("genealogyPanel");
+            var vm = (GenealogySelectionViewModel)panel.DataContext;
+            await vm.LoadAsync();
+            var selector = (System.Windows.Controls.ComboBox)main.FindName("genealogySelector");
+            selector.SelectedItem = vm.Genealogies.Single(g => g.Id == genealogyId);
+            var window = new RealHorizontalLineageWindow(coordinator, genealogyId) { Owner = main, Opacity = 0, ShowActivated = false, ShowInTaskbar = false };
+            await window.InitializeAsync(); window.StopMonitorForTest(); window.Show();
+            if (window.PeopleCountForTest != (scenario == "real-horizontal-rules" ? 5 : 3)) throw new InvalidOperationException("真实窗口未读取隔离人物。");
+            if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid") window.SelectChartForTest(chartId!.Value);
+            window.SelectPersonForTest(rootId, 0); await window.SetRootAsync(); await window.LoadChildrenAsync(true);
+            if (scenario == "real-horizontal-rules" &&
+                (!window.DetailsForTest.Contains("配偶甲") || !window.DetailsForTest.Contains("未详") || !window.DetailsForTest.Contains("上系失考") || window.PartnerCountForTest != 1))
+                throw new InvalidOperationException("婚配、未详或失考记录未完整显示。");
+            window.SelectChildForTest(firstRelationId, 1, false); await window.AddSelectedChildAsync();
+            if (scenario == "real-horizontal-chart")
+            {
+                if (window.VisibleNodeCount != 1 || !window.StatusForTest.Contains("需复核") || !window.DetailsForTest.Contains("图表历史选线") || !window.DetailsForTest.Contains("始祖"))
+                    throw new InvalidOperationException("失效图表选线未拒绝或历史身份未显示。");
+                window.SelectChartForTest(Guid.Empty);
+                window.SelectPersonForTest(rootId, 0); await window.SetRootAsync(); await window.LoadChildrenAsync(true);
+                window.SelectChildForTest(firstRelationId, 1, false); await window.AddSelectedChildAsync();
+            }
+            if (scenario == "real-horizontal-rules")
+            {
+                window.SelectChildForTest(secondRelationId, 1, false); await window.AddSelectedChildAsync();
+                if (window.VisibleNodeCount != 2) throw new InvalidOperationException("未授权推导时不应加入人物。");
+                window.SelectChildForTest(conflictingRelationId!.Value, 1, true); await window.AddSelectedChildAsync();
+                if (window.VisibleNodeCount != 2) throw new InvalidOperationException("谱载世代映射冲突未被拒绝。");
+            }
+            window.SelectChildForTest(secondRelationId, 1, scenario == "real-horizontal-rules"); await window.AddSelectedChildAsync();
+            if (window.VisibleNodeCount != 3 || window.CanvasCountForTest != 5 ||
+                window.CenterYForTest(rootId) != window.CenterYForTest(firstId) || window.CenterYForTest(secondId) <= window.CenterYForTest(firstId))
+                throw new InvalidOperationException("真实窗口未按明确顺序对齐或绘制关系。");
+            if (Environment.GetEnvironmentVariable("PUJIANG_CAPTURE_REAL_PROJECTION") == "1")
+            {
+                window.Opacity = 1; window.UpdateLayout();
+                var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                bitmap.Render(window);
+                var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+                using var output = File.Create(Path.Combine(root, "real-horizontal.png")); encoder.Save(output);
+                window.Opacity = 0;
+            }
+            if (scenario == "real-horizontal-rules")
+            {
+                await window.MovePersonForTest(secondId, -1);
+                if (window.CenterYForTest(rootId) != window.CenterYForTest(secondId) || window.CenterYForTest(firstId) <= window.CenterYForTest(secondId))
+                    throw new InvalidOperationException("手动调整同胞顺序后首子对齐错误。");
+                await window.ToggleForTest(rootId);
+                if (window.VisibleCardsForTest != 1) throw new InvalidOperationException("折叠未隐藏后代。");
+                await window.SelectNodeForTest(rootId, false);
+                if (window.VisibleCardsForTest != 1) throw new InvalidOperationException("右键语义不应展开后代。");
+                await window.SelectNodeForTest(rootId, true);
+                if (window.VisibleCardsForTest != 3) throw new InvalidOperationException("左键选择未恢复已加入的直接子女。");
+                await using (var verify = coordinator.CreateContext())
+                {
+                    var saved = await verify.People.AsNoTracking().SingleAsync(p => p.Id == secondId);
+                    if (saved.RecordedGeneration is not null || saved.DerivedGeneration is not null || saved.RecordedBirthOrder is not null ||
+                        !await verify.PersonRelationships.AnyAsync(r => r.Id == firstRelationId) || !await verify.PersonRelationships.AnyAsync(r => r.Id == secondRelationId))
+                        throw new InvalidOperationException("只读操作改变了原始谱载或关系。");
+                }
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario == "real-horizontal-selection")
+            {
+                var session = window.SessionForTest ?? throw new InvalidOperationException("只读会话未打开。");
+                var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var continueRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                session.AfterVersionChecked = async cancellation => { blocked.TrySetResult(); await continueRead.Task.WaitAsync(cancellation); };
+                window.SelectPersonForTest(firstId, 1);
+                var pendingRoot = window.SetRootAsync(); await blocked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                window.SelectPersonForTest(secondId, 1);
+                continueRead.SetResult(); await pendingRoot;
+                if (window.VisibleNodeCount != 3 || window.CanvasCountForTest != 5 || window.IsInvalidForTest)
+                    throw new InvalidOperationException("人物选择变化后旧请求覆盖了当前图。");
+                session.AfterVersionChecked = null;
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario is "real-horizontal-chart" or "real-horizontal-chart-valid")
+            {
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario == "real-horizontal-search")
+            {
+                await window.SearchForTest(firstId.ToString());
+                if (window.PeopleCountForTest != 1) throw new InvalidOperationException("按 ID 搜索未定位唯一人物。");
+                await window.LocateForTest(firstId);
+                if (window.SelectedForTest != firstId || !window.IsPathHighlightedForTest(rootId) || !window.IsPathHighlightedForTest(firstId))
+                    throw new InvalidOperationException("定位或已选路径高亮错误。");
+                await window.SearchForTest("无此人物");
+                if (window.PeopleCountForTest != 0) throw new InvalidOperationException("无匹配搜索未清空列表。");
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario == "real-horizontal-mapping-race")
+            {
+                var session = window.SessionForTest ?? throw new InvalidOperationException("只读会话未打开。");
+                var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var continueRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                session.AfterVersionChecked = async cancellation => { blocked.TrySetResult(); await continueRead.Task.WaitAsync(cancellation); };
+                window.SelectPersonForTest(firstId, 1);
+                var pendingRoot = window.SetRootAsync(); await blocked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                window.ChangeColumnForTest(2);
+                continueRead.SetResult(); await pendingRoot;
+                if (window.VisibleNodeCount != 3 || window.CanvasCountForTest != 5 || window.IsInvalidForTest)
+                    throw new InvalidOperationException("世代列变化后旧请求覆盖了当前图。");
+                session.AfterVersionChecked = null;
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario == "real-horizontal-search-race")
+            {
+                var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var continueRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                window.BeforeApplyForTest = _ => { blocked.TrySetResult(); return continueRead.Task; };
+                var pendingSearch = window.SearchForTest("长房"); await blocked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                window.ChangeSearchTextForTest("次房"); continueRead.SetResult(); await pendingSearch;
+                if (window.PeopleCountForTest != 0 || window.VisibleNodeCount != 3 || !window.StatusForTest.Contains("搜索内容已变化"))
+                    throw new InvalidOperationException("搜索输入变化后旧结果被回填。");
+                window.CancelForTest(); window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario == "real-horizontal-watch")
+            {
+                await using (var writer = coordinator.CreateContext())
+                    await writer.People.Where(p => p.Id == rootId).ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "已变更"));
+                window.StartMonitorForTest();
+                var watch = Stopwatch.StartNew();
+                while (!window.IsInvalidForTest && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(50);
+                if (!window.IsInvalidForTest || window.VisibleNodeCount != 0 || window.CanvasCountForTest != 0 || window.PeopleCountForTest != 0)
+                    throw new InvalidOperationException("空闲窗口未自动检测版本变化并清除旧内容。");
+                window.Close();
+                _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+                return;
+            }
+            if (scenario == "real-horizontal-exit")
+            {
+                var session = window.SessionForTest ?? throw new InvalidOperationException("只读会话未打开。");
+                var token = session.Token;
+                using var sqlEntered = new ManualResetEventSlim(); using var sqlRelease = new ManualResetEventSlim();
+                session.BeforePeopleQueryForTest = connection => connection.CreateFunction<string, long>("projection_test_wait", _ =>
+                {
+                    sqlEntered.Set();
+                    if (!sqlRelease.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("测试 SQL 等待超时。");
+                    return 1;
+                });
+                var read = Task.Run(() => session.ReadPeopleAsync(token, null, 1));
+                if (!await Task.Run(() => sqlEntered.Wait(TimeSpan.FromSeconds(10)))) throw new TimeoutException("未进入 SQL。");
+                var finalHold = coordinator.CreateContext();
+                main.Close();
+                if (!window.IsInvalidForTest || window.CanvasCountForTest != 0 || !main.IsVisible || main.IsEnabled)
+                    throw new InvalidOperationException("排空前未清除真实窗口旧内容。");
+                sqlRelease.Set();
+                try { await read; throw new InvalidOperationException("退出后 SQL 意外返回结果。"); }
+                catch (OperationCanceledException) { }
+                _ = main.Dispatcher.BeginInvoke(() => finalHold.Dispose(), DispatcherPriority.Background);
+                return;
+            }
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            window.BeforeApplyForTest = _ => { entered.TrySetResult(); return release.Task; };
+            var pending = window.LoadPeopleAsync(true);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (scenario == "real-horizontal-switch") selector.SelectedItem = vm.Genealogies.Single(g => g.Id == otherId);
+            else if (scenario == "real-horizontal-cancel") window.CancelForTest();
+            else if (scenario == "real-horizontal-close") window.Close();
+            else if (scenario == "real-horizontal-change")
+            {
+                await using var writer = coordinator.CreateContext();
+                await writer.People.Where(p => p.Id == rootId).ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "新名"));
+            }
+            else throw new InvalidOperationException("未知横向窗口场景。");
+            release.SetResult(); await pending;
+            if (!window.IsInvalidForTest || window.VisibleNodeCount != 0 || window.CanvasCountForTest != 0 || window.PeopleCountForTest != 0)
+                throw new InvalidOperationException("真实窗口未清除旧内容，或接受了旧结果。");
+            if (window.IsVisible) window.Close();
+            _ = main.Dispatcher.BeginInvoke(() => main.Close(), DispatcherPriority.Background);
+            return;
+        }
         if (scenario == "projection-inflight")
         {
             Guid genealogyId;

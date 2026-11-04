@@ -68,6 +68,8 @@ public class ProjectionReadSessionTests
         {
             var token = session.Token;
             Assert.Equal("父", (await session.ReadPersonAsync(token, parentId)).Name);
+            Assert.Equal(childId, Assert.Single((await session.SearchPeopleAsync(token, childId.ToString(), null, 10)).Items).Id);
+            Assert.Empty((await session.SearchPeopleAsync(token, "外谱", null, 10)).Items);
             var parents = await session.ReadParentCandidatesAsync(token, childId, null, 1);
             Assert.Single(parents.Items); Assert.NotNull(parents.NextCursor);
             var parentsNext = await session.ReadParentCandidatesAsync(token, childId, parents.NextCursor, 1);
