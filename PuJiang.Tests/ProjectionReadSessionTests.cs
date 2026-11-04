@@ -1,0 +1,247 @@
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Xunit;
+using ZupuPaiBan.Data;
+using ZupuPaiBan.Models;
+
+namespace PuJiang.Tests;
+
+public class ProjectionReadSessionTests
+{
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Drain_signals_all_sessions_even_when_one_read_is_still_busy()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext()) { var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        var coordinator = Coordinator(database);
+        var first = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var second = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var token = first.Token; var secondToken = second.Token;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        first.AfterVersionChecked = async _ => { entered.SetResult(); await release.Task; };
+        var read = first.ReadPeopleAsync(token, null, 1);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var drain = coordinator.DrainAsync();
+        try
+        {
+            Assert.False(drain.IsCompleted);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => second.ReadPeopleAsync(secondToken, null, 1));
+        }
+        finally { release.TrySetResult(); }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+        await drain.WaitAsync(TimeSpan.FromSeconds(10));
+        await first.DisposeAsync(); await second.DisposeAsync();
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Failed_open_releases_file_and_coordinator_lease()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        var coordinator = Coordinator(database);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ProjectionReadSession.OpenAsync(coordinator, Guid.NewGuid()));
+        await coordinator.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        File.Move(database.DatabasePath, database.DatabasePath + ".moved");
+        File.Move(database.DatabasePath + ".moved", database.DatabasePath);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Pages_are_scoped_and_change_permanently_invalidates_session()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid genealogyId;
+        await using (var seed = database.CreateContext())
+        {
+            var a = new Genealogy { Name = "甲" }; var b = new Genealogy { Name = "乙" };
+            genealogyId = a.Id; seed.Genealogies.AddRange(a, b);
+            seed.People.AddRange(new Person { GenealogyId = a.Id, Name = "甲一", RecordedGeneration = "三世" },
+                new Person { GenealogyId = a.Id, Name = "甲二" }, new Person { GenealogyId = b.Id, Name = "外谱" });
+            await seed.SaveChangesAsync();
+        }
+        var coordinator = Coordinator(database);
+        await using var session = await ProjectionReadSession.OpenAsync(coordinator, genealogyId);
+        var token = session.Token;
+        var first = await session.ReadPeopleAsync(token, null, 1);
+        Assert.Single(first.Items); Assert.NotNull(first.NextCursor);
+        var second = await session.ReadPeopleAsync(token, first.NextCursor, 1);
+        Assert.Single(second.Items); Assert.Null(second.NextCursor);
+        Assert.DoesNotContain(new[] { first.Items[0], second.Items[0] }, row => row.Name == "外谱");
+        await using (var writer = database.CreateContext())
+        {
+            writer.FamilyBranches.Add(new FamilyBranch { GenealogyId = genealogyId, Name = "支" });
+            await writer.SaveChangesAsync();
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReadPeopleAsync(token, first.NextCursor, 1));
+        Assert.Throws<InvalidOperationException>(() => session.Token);
+        await using var replacement = await ProjectionReadSession.OpenAsync(coordinator, genealogyId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => replacement.ReadPeopleAsync(token, null, 1));
+        Assert.Single((await replacement.ReadPeopleAsync(replacement.Token, null, 1)).Items);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Active_file_lease_prevents_replacement_by_parent_directory_rename()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext()) { var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        var coordinator = Coordinator(database);
+        await using var session = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var directory = Path.GetDirectoryName(database.DatabasePath)!;
+        var moved = directory + "-moved";
+        try { Assert.ThrowsAny<IOException>(() => Directory.Move(directory, moved)); }
+        finally { if (Directory.Exists(moved)) Directory.Move(moved, directory); }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Drain_waits_for_actual_sql_callback_then_discards_cancelled_result()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext())
+        {
+            var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g);
+            seed.People.Add(new Person { GenealogyId = id, Name = "测试人物" }); await seed.SaveChangesAsync();
+        }
+        var coordinator = Coordinator(database);
+        await using var session = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var token = session.Token;
+        using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim();
+        session.BeforePeopleQueryForTest = connection => connection.CreateFunction<string, long>("projection_test_wait", _ =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("测试 SQL 等待超时。");
+            return 1;
+        });
+        var read = Task.Run(() => session.ReadPeopleAsync(token, null, 1));
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "未进入实际 SQL 回调。");
+            var draining = coordinator.DrainAsync();
+            Assert.False(draining.IsCompleted);
+            release.Set();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+            await draining.WaitAsync(TimeSpan.FromSeconds(10));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReadPeopleAsync(token, null, 1));
+        }
+        finally { release.Set(); }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Cancellation_of_queued_read_invalidates_inflight_result()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext()) { var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        await using var session = await ProjectionReadSession.OpenAsync(Coordinator(database), id);
+        var token = session.Token;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.AfterVersionChecked = async _ => { entered.SetResult(); await release.Task; };
+        var first = session.ReadPeopleAsync(token, null, 1);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.ReadPeopleAsync(token, null, 1, cancellation.Token));
+        release.SetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first);
+        Assert.Throws<InvalidOperationException>(() => session.Token);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Concurrent_dispose_and_drain_wait_for_the_same_inflight_read()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext()) { var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        var coordinator = Coordinator(database);
+        var session = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var token = session.Token;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.AfterVersionChecked = async _ => { entered.SetResult(); await release.Task; };
+        var read = session.ReadPeopleAsync(token, null, 1);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var closing = session.DisposeAsync().AsTask();
+        var draining = coordinator.DrainAsync();
+        Assert.False(closing.IsCompleted); Assert.False(draining.IsCompleted);
+        release.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+        await closing.WaitAsync(TimeSpan.FromSeconds(10));
+        await draining.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Drain_cancels_inflight_read_before_releasing_database()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext()) { var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        var coordinator = Coordinator(database);
+        await using var session = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var token = session.Token;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.AfterVersionChecked = async cancellation => { entered.SetResult(); await Task.Delay(Timeout.Infinite, cancellation); };
+        var read = session.ReadPeopleAsync(token, null, 1);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await coordinator.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReadPeopleAsync(token, null, 1));
+        File.Move(database.DatabasePath, database.DatabasePath + ".moved");
+        File.Move(database.DatabasePath + ".moved", database.DatabasePath);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Commit_during_read_discards_page_and_invalidates_token()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext())
+        {
+            await seed.Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL");
+            var g = new Genealogy { Name = "谱" }; id = g.Id;
+            seed.Genealogies.Add(g); seed.People.Add(new Person { GenealogyId = id, Name = "原名" }); await seed.SaveChangesAsync();
+        }
+        var coordinator = Coordinator(database);
+        await using var session = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var token = session.Token;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.AfterVersionChecked = async cancellation => { entered.SetResult(); await resume.Task.WaitAsync(cancellation); };
+        var read = session.ReadPeopleAsync(token, null, 1);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await using (var writer = database.CreateContext()) await writer.People.ExecuteUpdateAsync(p => p.SetProperty(x => x.Name, "新名"));
+        resume.SetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => read);
+        Assert.Throws<InvalidOperationException>(() => session.Token);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Drain_closes_session_releases_file_and_rejects_old_token()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        Guid id;
+        await using (var seed = database.CreateContext()) { var g = new Genealogy { Name = "谱" }; id = g.Id; seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        var coordinator = Coordinator(database);
+        var session = await ProjectionReadSession.OpenAsync(coordinator, id);
+        var token = session.Token;
+        Assert.ThrowsAny<IOException>(() => File.Move(database.DatabasePath, database.DatabasePath + ".moved"));
+        await coordinator.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReadPeopleAsync(token, null, 1));
+        await session.DisposeAsync();
+        File.Move(database.DatabasePath, database.DatabasePath + ".moved");
+        File.Move(database.DatabasePath + ".moved", database.DatabasePath);
+    }
+
+    private static TargetContextCoordinator Coordinator(TestDatabase database) => new(new DbContextOptionsBuilder<ZupuDbContext>()
+        .UseSqlite(new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Pooling = false }.ToString()).Options);
+}

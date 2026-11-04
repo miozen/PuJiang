@@ -48,6 +48,7 @@ public class WpfLifecycleTests
 
     [Theory]
     [InlineData("success")]
+    [InlineData("projection-inflight")]
     [InlineData("native-dialog")]
     [InlineData("native-dialog-idle")]
     [InlineData("native-dialog-accept")]

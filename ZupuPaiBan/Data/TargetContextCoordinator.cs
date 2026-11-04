@@ -14,6 +14,7 @@ public sealed class TargetContextCoordinator
     private readonly AsyncLocal<Operation?> _currentOperation = new();
     private int _active;
     private int _operations;
+    private readonly HashSet<Func<Task>> _longLivedClosers = new();
     private State _state = State.Running;
 
     private enum State { Running, Draining, Stopped, Failed }
@@ -51,6 +52,7 @@ public sealed class TargetContextCoordinator
 
     public async Task DrainAsync(CancellationToken cancellationToken = default)
     {
+        Func<Task>[] closers;
         lock (_sync)
         {
             if (IsCurrentOperationActive())
@@ -58,11 +60,19 @@ public sealed class TargetContextCoordinator
             if (_state != State.Running)
                 throw new InvalidOperationException("目标族谱数据库停用已开始或失败。");
             _state = State.Draining;
+            closers = _longLivedClosers.ToArray();
             SignalDrainedIfReady();
         }
 
         try
         {
+            // Close long-lived readers before waiting for their tracked contexts.
+            var closing = closers.Select(close =>
+            {
+                try { return close(); }
+                catch (Exception error) { return Task.FromException(error); }
+            }).ToArray();
+            await Task.WhenAll(closing).WaitAsync(cancellationToken);
             await _drained.Task.WaitAsync(cancellationToken);
             lock (_sync)
             {
@@ -76,6 +86,22 @@ public sealed class TargetContextCoordinator
             lock (_sync) _state = State.Failed;
             throw;
         }
+    }
+
+    internal IDisposable RegisterLongLivedCloser(Func<Task> close)
+    {
+        ArgumentNullException.ThrowIfNull(close);
+        lock (_sync)
+        {
+            if (_state != State.Running) throw new InvalidOperationException("数据库正在停用，不能打开只读会话。");
+            _longLivedClosers.Add(close);
+        }
+        return new CloserRegistration(this, close);
+    }
+
+    private sealed class CloserRegistration(TargetContextCoordinator owner, Func<Task> close) : IDisposable
+    {
+        public void Dispose() { lock (owner._sync) owner._longLivedClosers.Remove(close); }
     }
 
     private void Release(bool failed)

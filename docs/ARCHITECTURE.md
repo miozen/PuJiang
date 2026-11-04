@@ -8,6 +8,8 @@
 
 ## Current：源码已实现
 
+- 已新增 `ProjectionReadSession` 基础读取组件（尚无产品界面调用）：单谱只读 SQLite 连接、连接专属令牌、`data_version` 双次检查及人物有界分页；本机文件租约、连接失效、取消和协调器排空使旧令牌不可继续读取。`TargetContextCoordinator` 排空时先请求已登记长期会话关闭，再等待上下文释放。其作用域、验证及文件身份局限见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)；它不是完整真实谱系投影、生产恢复或实时 UI 失效机制。
+
 - `PuJiang.slnx` 统一入口包含一个 `net10.0-windows` WPF 项目和 `PuJiang.Tests` xUnit 项目；`global.json` 固定 SDK `10.0.402`。依赖 CommunityToolkit.Mvvm、EF Core SQLite、ClosedXML、PdfSharpCore。
 - 界面位于 `Views/` 与 `MainWindow.xaml`；ViewModel 位于 `ViewModels/`；数据访问位于 `Data/`；布局、打印与交换位于 `Services/`。
 - 旧成员树及其操作仍以 `FamilyMember`（可空 `FatherId`、字符串 `SpouseName`、代数、排行）为界面数据模型。WPF 另提供目标模型族谱的创建、会话内选择、按谱人物列表、姓名及基础档案编辑、无关系人物的确认删除，以及生物子女事务新增、已有子女关联、列表和指定生物父母关系的确认解除。目标成员树和列表删除入口先预览人物及同谱关系、婚配；存在关联时禁用删除并引导逐条解除。无关联时确认删除，写入原子核对人物姓名、全库代数和关联不存在条件；选择或数据变化时拒绝。解除会删除该关系记录（含备注和来源），但保留人物及其他关系；重新关联建立新关系，不能恢复旧备注和来源。其他人物档案编辑、复杂删除和关系管理尚未切换；这不表示 P1 管理功能已完成。

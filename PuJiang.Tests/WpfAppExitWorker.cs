@@ -163,6 +163,41 @@ internal static class WpfAppExitWorker
     private static async Task VerifyScenarioAsync(App app, MainWindow main, TargetContextCoordinator coordinator,
         string root, string scenario)
     {
+        if (scenario == "projection-inflight")
+        {
+            Guid genealogyId;
+            await using (var context = coordinator.CreateContext())
+            {
+                var genealogy = new Genealogy { Name = "隔离谱" };
+                context.Genealogies.Add(genealogy);
+                context.People.Add(new Person { GenealogyId = genealogy.Id, Name = "隔离人物" });
+                await context.SaveChangesAsync(); genealogyId = genealogy.Id;
+            }
+            var session = await ProjectionReadSession.OpenAsync(coordinator, genealogyId);
+            var token = session.Token;
+            using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim();
+            session.BeforePeopleQueryForTest = connection => connection.CreateFunction<string, long>("projection_test_wait", _ =>
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("测试 SQL 等待超时。");
+                return 1;
+            });
+            var child = new Window { Owner = main, Opacity = 0, ShowActivated = false, ShowInTaskbar = false };
+            var childClosed = false; child.Closed += (_, _) => childClosed = true; child.Show();
+            main.Closed += (_, _) => { if (!childClosed) throw new InvalidOperationException("主窗口关闭时子窗口仍未关闭。"); };
+            var read = Task.Run(() => session.ReadPeopleAsync(token, null, 1));
+            if (!await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(10)))) throw new TimeoutException("未进入 SQL。");
+            var finalHold = coordinator.CreateContext();
+            main.Close();
+            if (!main.IsVisible || main.IsEnabled || childClosed) throw new InvalidOperationException("SQL 在途时窗口未保持排空状态。");
+            release.Set();
+            try { await read; throw new InvalidOperationException("退出时在途读取意外成功。"); }
+            catch (OperationCanceledException) { }
+            if (!child.IsVisible || childClosed) throw new InvalidOperationException("排空期间子窗口不应提前关闭。");
+            AssertNewOperationRejected(coordinator);
+            _ = main.Dispatcher.BeginInvoke(() => finalHold.Dispose(), DispatcherPriority.Background);
+            return;
+        }
         if (scenario is "modal-photo-cancel" or "modal-excel-import-cancel" or "modal-gedcom-import-cancel" or "modal-collaboration-import-cancel" or "modal-collaboration-confirm-cancel" or "modal-internal-json-import-cancel" or "modal-external-exchange-import-cancel")
         {
             const string photoTitle = "选择照片";
