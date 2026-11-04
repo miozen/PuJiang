@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+using ZupuPaiBan.Data;
 using ZupuPaiBan.Models;
 
 namespace PuJiang.Tests;
@@ -68,6 +69,133 @@ public class ProjectionReadVersionPrototypeTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Wal_version_read_pins_snapshot_before_concurrent_commit()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var rw = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Pooling = false }.ToString();
+        var ro = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        await using var writer = new SqliteConnection(rw); await writer.OpenAsync();
+        await Execute(writer, "PRAGMA journal_mode = WAL");
+        await Execute(writer, "CREATE TABLE ProjectionVersionProbe (Id INTEGER PRIMARY KEY, Value TEXT NOT NULL)");
+        await Execute(writer, "INSERT INTO ProjectionVersionProbe VALUES (1, 'old')");
+        await using var reader = new SqliteConnection(ro); await reader.OpenAsync();
+        var baseline = await Version(reader);
+        await using var transaction = reader.BeginTransaction(deferred: true);
+        Assert.Equal(baseline, await Version(reader, transaction));
+        await Execute(writer, "UPDATE ProjectionVersionProbe SET Value = 'new' WHERE Id = 1");
+        await using var command = reader.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = "SELECT Value FROM ProjectionVersionProbe WHERE Id = 1";
+        var value = (string)(await command.ExecuteScalarAsync())!;
+        await transaction.CommitAsync();
+        // On this SQLite build the version read in the transaction pinned the old snapshot.
+        Assert.Equal("old", value);
+        Assert.NotEqual(baseline, await Version(reader));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task File_lease_blocks_replacement_until_closed_on_windows()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var moved = database.DatabasePath + ".moved";
+        await using (var lease = new FileStream(database.DatabasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            var options = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Pooling = false }.ToString();
+            await using var concurrent = new SqliteConnection(options); await concurrent.OpenAsync();
+            await Execute(concurrent, "CREATE TABLE ProjectionLeaseProbe (Id INTEGER PRIMARY KEY)");
+            Assert.ThrowsAny<IOException>(() => File.Move(database.DatabasePath, moved));
+        }
+        File.Move(database.DatabasePath, moved);
+        File.Move(moved, database.DatabasePath);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Session_token_cannot_cross_dispose_or_new_connection_even_if_versions_match()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var options = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        var first = await PrototypeSession.Open(options);
+        var token = await first.Token();
+        await first.Read(token);
+        await first.DisposeAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first.Read(token));
+        await using var reopened = await PrototypeSession.Open(options);
+        var newToken = await reopened.Token();
+        // Equal PRAGMA numbers do not authorize a token issued by a different session.
+        Assert.Equal(token.Version, newToken.Version);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => reopened.Read(token));
+        await reopened.Read(newToken);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Session_holds_coordinator_until_closed_and_cancellation_invalidates_token()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var contextOptions = new DbContextOptionsBuilder<ZupuDbContext>()
+            .UseSqlite(new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Pooling = false }.ToString()).Options;
+        var coordinator = new TargetContextCoordinator(contextOptions);
+        var lease = coordinator.CreateContext();
+        var options = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        await using var session = await PrototypeSession.Open(options, lease);
+        var token = await session.Token();
+        var draining = coordinator.DrainAsync();
+        Assert.False(draining.IsCompleted);
+        Assert.Throws<InvalidOperationException>(() => coordinator.CreateContext());
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.Read(token, cancellation.Token));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.Read(token));
+        await draining.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Session_rejects_second_page_after_change_and_does_not_reuse_old_token()
+    {
+        await using var database = new TestDatabase();
+        await database.MigrateAsync();
+        var rw = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Pooling = false }.ToString();
+        var ro = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        await using var writer = new SqliteConnection(rw); await writer.OpenAsync();
+        await Execute(writer, "CREATE TABLE ProjectionVersionProbe (Id INTEGER PRIMARY KEY, Value TEXT NOT NULL)");
+        await Execute(writer, "INSERT INTO ProjectionVersionProbe VALUES (1, 'old first'), (2, 'old second')");
+        await using var oldSession = await PrototypeSession.Open(ro);
+        var oldToken = await oldSession.Token();
+        Assert.Equal("old first", await oldSession.Page(oldToken, 1));
+        await Execute(writer, "UPDATE ProjectionVersionProbe SET Value = 'new second' WHERE Id = 2");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => oldSession.Page(oldToken, 2));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => oldSession.Token());
+        await using var newSession = await PrototypeSession.Open(ro);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => newSession.Page(oldToken, 2));
+        var newToken = await newSession.Token();
+        Assert.Equal("new second", await newSession.Page(newToken, 2));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Session_discards_page_when_commit_occurs_after_version_check()
+    {
+        await using var database = new TestDatabase(); await database.MigrateAsync();
+        var rw = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Pooling = false }.ToString();
+        var ro = new SqliteConnectionStringBuilder { DataSource = database.DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        await using var writer = new SqliteConnection(rw); await writer.OpenAsync();
+        await Execute(writer, "PRAGMA journal_mode = WAL");
+        await Execute(writer, "CREATE TABLE ProjectionVersionProbe (Id INTEGER PRIMARY KEY, Value TEXT NOT NULL)");
+        await Execute(writer, "INSERT INTO ProjectionVersionProbe VALUES (1, 'old')");
+        await using var session = await PrototypeSession.Open(ro);
+        var token = await session.Token();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.Page(token, 1,
+            () => Execute(writer, "UPDATE ProjectionVersionProbe SET Value = 'new' WHERE Id = 1")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.Page(token, 1));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Commits_to_each_actual_projection_table_invalidate_the_reader()
     {
         await using var database = new TestDatabase();
@@ -107,6 +235,59 @@ public class ProjectionReadVersionPrototypeTests
     {
         await using var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = "PRAGMA data_version";
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private readonly record struct SessionToken(Guid Owner, long Version);
+    private sealed class PrototypeSession(SqliteConnection connection, ZupuDbContext? coordinatorLease, long initialVersion) : IAsyncDisposable
+    {
+        private readonly Guid _owner = Guid.NewGuid();
+        private bool _closed;
+        private bool _invalid;
+        public static async Task<PrototypeSession> Open(string options, ZupuDbContext? coordinatorLease = null)
+        {
+            var connection = new SqliteConnection(options);
+            await connection.OpenAsync();
+            return new PrototypeSession(connection, coordinatorLease, await Version(connection));
+        }
+        public Task<SessionToken> Token() => _closed || _invalid
+            ? Task.FromException<SessionToken>(new InvalidOperationException("stale session"))
+            : Task.FromResult(new SessionToken(_owner, initialVersion));
+        public async Task Read(SessionToken token, CancellationToken cancellationToken = default)
+        {
+            if (_closed || _invalid || token.Owner != _owner) throw new InvalidOperationException("stale session");
+            if (cancellationToken.IsCancellationRequested)
+            {
+                await DisposeAsync();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            await using var tx = connection.BeginTransaction(deferred: true);
+            if (await Version(connection, tx) != token.Version) { _invalid = true; throw new InvalidOperationException("stale version"); }
+            await using var command = connection.CreateCommand(); command.Transaction = tx;
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master";
+            await command.ExecuteScalarAsync();
+            await tx.CommitAsync();
+        }
+        public async Task<string> Page(SessionToken token, long id, Func<Task>? afterVersion = null)
+        {
+            if (_closed || _invalid || token.Owner != _owner) throw new InvalidOperationException("stale session");
+            await using var tx = connection.BeginTransaction(deferred: true);
+            if (await Version(connection, tx) != token.Version) { _invalid = true; throw new InvalidOperationException("stale version"); }
+            if (afterVersion is not null) await afterVersion();
+            await using var command = connection.CreateCommand(); command.Transaction = tx;
+            command.CommandText = "SELECT Value FROM ProjectionVersionProbe WHERE Id = $id";
+            command.Parameters.AddWithValue("$id", id);
+            var value = (string)(await command.ExecuteScalarAsync())!;
+            await tx.CommitAsync();
+            if (await Version(connection) != token.Version) { _invalid = true; throw new InvalidOperationException("stale version"); }
+            return value;
+        }
+        public async ValueTask DisposeAsync()
+        {
+            if (_closed) return;
+            _closed = true;
+            try { await connection.DisposeAsync(); }
+            finally { if (coordinatorLease is not null) await coordinatorLease.DisposeAsync(); }
+        }
     }
     private static async Task<string> FirstPage(SqliteConnection connection, long expected)
     {
