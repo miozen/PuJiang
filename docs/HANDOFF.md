@@ -6,11 +6,11 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** P2-3 单人物画布、可重建只读会话及档案草稿已接入试用工作台；多人物连线和完整横向画布尚未实现，D-014 不变。
+- **Current Task：** P2-3 直接画布编修：新增兄妹切片已实现并获得用户体验反馈；同胞上下移动和右侧排行、复杂关系与性能为后续小切片，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
-- **Validation Pending：** 代码提交 `599b1ca` 的远端 CI、本轮未提交代码的远端 CI 及横向大谱 Performance 尚未核实或验收；先前 `eeb845f` CI 结果按用户要求等待用户告知。失效图表、缺世代的真实交互窗口用户验收及跨支等完整矩阵尚未全部验收；多根同画布和视口虚拟化尚未实现。D-028 具体文本解析与跨支规则仍待确认，D-014 关闭项不变。
+- **Validation Pending：** 本轮远端 CI 未查询；横向大谱 Performance、直接画布编修用户验收及复杂关系完整矩阵尚未完成，视口虚拟化尚未实现。常见世代文字识别已获用户确认，其他跨支规则仍待明确；D-014 关闭项不变。
 - **Known Issues / Blockers：** 失效图表路径结果的底部提示较笼统，详细原因与身份混有长 ID，需改善可读性；全库代数造成无关变更也需重新确认；不能防护第三方有意篡改代数或替换数据库；未来重建受保护表的 Migration 必须显式重建触发器；SQLite 快照仅含数据库；ImageSharp 1.0.4 存在已知高、中危告警。
 - **本机用户验收：** `artifacts/p2-acceptance-20261104/data` 为独立测试目录，生成 11 位虚构人物、四代、三个房支及失考、未详婚配和方向配偶记录；以 `PUJIANG_TEST_DATA_ROOT` 启动真实只读窗口。助手逐支加入始祖、三房、两房子女及长房四世后代，观察首子水平对齐、子树占位及正交连线。用户对所请求的世代列、同胞顺序、长房及次房折叠/展开、占位、连线和诊断反馈“通过”；不推断其单独操作了顺序调整或其他未展示场景。该目录及临时种子工程均被 Git 忽略，未使用正式用户数据。种子工程构建成功，出现既有 ImageSharp 安全警告及 NuGet 漏洞信息源不可用警告；本轮未运行测试。
 - **本轮接力：** 用户要求整理并推送原型检查点；实际 Git 状态与远端同步以本机核对为准，测试数据目录不随 Git 同步。
@@ -27,7 +27,13 @@
 - **本机人工验收反馈：** 用户对请求的档案试用体验反馈“通过了，没有发现什么问题”。这是该试用窗口的人工反馈，不推断目标横向画布或 P2 完整验收通过。
 - **横向会话基础验证：** 新增可重建的单谱只读会话封装，尚未连接工作台。Windows Release 解决方案构建成功（0 错误、15 警告）；同源码日常测试 404/404 通过、无跳过，其中三项隔离 SQLite 测试覆盖保存后旧版本失效与重开、取消重建、并发重建时在途旧结果拒绝和会话排空。本轮未运行 UI 或性能测试，未等待远端 CI。
 - **单人物画布验证：** Windows `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、16 警告）；同源码日常测试 405/405、显式 WPF 专项 5/5 通过，均无跳过。独立 SQLite 与实际 WPF 覆盖明确世代列、画布选人取消、切谱、主窗口退出、保存后重开并恢复节点、刷新失败及谱载世代变化时拒绝恢复、外部变化清空节点并保留草稿；单人物读取在途被重建取代时拒绝返回。未进行用户人工验收、性能测试或完整多节点图验收，不使用正式数据，未等待远端 CI。
-- **Exact Next Action：** 在独立测试数据目录协助用户验收单人物画布的明确世代列、节点选中、草稿切换与保存后恢复；再将多人物和明确关系接入工作台，保留未决关系诊断及既有入口，遵守 D-014。
+- **用户反馈（2026-11-05）：** 用户否定单人物额外确认世代的流程，希望像 AutoCAD 或 Photoshop 一样在画布右键编辑、新建人物，确定首节点后直接增加子女、配偶和资料；允许识别常见世代写法，无法识别或冲突时保留原文。旧单人物画布体验未通过，本次调整尚待用户验收。
+- **画布编修检查点：** 新试用窗口可在空白处右键或 Ctrl+N 新建、人物右键编辑或新增生物/收养子女及配偶；草稿保存时人物和新增关系同事务提交，失败保留草稿，保存后重建画布并拒绝旧结果。仅前 100 人参与投影，未知世代、排序歧义、多父母和跨页关系保留诊断，复杂关系与同胞排序未完成；配偶附于人物卡片。独立测试数据和临时种子不进入 Git，不使用正式用户数据。
+- **画布编修本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、16 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 429/429，通过、无跳过。显式 WPF 专项（`Category=UI&FullyQualifiedName~WorkbenchProfileWindowTests|Category=UI&DisplayName~real-horizontal-exit`）9/9 通过、无跳过；覆盖真实窗口右键新建、子女及配偶、切换、退出和刷新失败，事务失败回滚与旧结果失效由隔离测试覆盖。性能未测试；依赖 ImageSharp 已知漏洞告警仍在，远端 CI 未查询。
+- **用户反馈（2026-11-05，本次）：** 新增人物、新增子女和配偶“基本上符合预期”，指出遗漏新增兄妹；要求 P2-3 分小功能切片推进。同胞排序期望右键上移、下移，右侧设置排第几；无父母可直接保留兄妹关系，多个父母候选由用户选择共同父母及关系类型。此反馈不等于完整 P2-3 验收。
+- **兄妹体验反馈：** 使用 `artifacts/p2-direct-acceptance-20261105/data` 独立虚构测试库，用户对要求体验的右键新增兄妹反馈“符合预期”。不推断用户分别操作了全部无父母及多父母分支；后者由自动化覆盖。
+- **兄妹切片本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 通过（0 错误、16 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 430/430 通过；WPF 专项 `Category=UI&FullyQualifiedName~WorkbenchProfileWindowTests|Category=UI&DisplayName~real-horizontal-exit` 11/11 通过，均无跳过。验证无父母创建、多父母选择、世代预填、跨谱拒绝、版本守卫及事务故障回滚；未测性能，未查询远端 CI。旧版对新增关系类型及交换文件的兼容尚未验收。
+- **Exact Next Action：** 将同胞右键上移、下移和右侧设置排行作为下一个独立切片，先明确未排序、谱载原文及失效边界，再实施并用独立数据验收；遵守 D-014。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -35,4 +41,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`按最新 HANDOFF，在独立测试数据目录协助验收 P2-3 单人物画布和草稿联动，再推进多人物与明确关系；遵守 D-014。`
+- 可直接交给本机后续 Codex：`按最新 HANDOFF，在独立测试数据目录验收 P2-3 新增兄妹并处理反馈，再分小切片实现同胞上下移动和右侧排行；遵守 D-014，本地验证后不等待远端 CI。`

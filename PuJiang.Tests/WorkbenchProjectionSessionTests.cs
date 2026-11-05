@@ -94,4 +94,26 @@ public class WorkbenchProjectionSessionTests
         var next = await reopen; projection.BeforeReadForTest = null;
         Assert.Equal(person.Id, (await projection.ReadPersonAsync(next, person.Id)).Person.Id);
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Relationship_pages_are_scoped_and_rejected_after_reopen()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "甲" }; var other = new Genealogy { Name = "乙" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父" }; var child = new Person { GenealogyId = g.Id, Name = "子" };
+        var outside = new Person { GenealogyId = other.Id, Name = "另谱" };
+        var edge = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.AdoptiveParent };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.AddRange(g, other); seed.People.AddRange(parent, child, outside); seed.PersonRelationships.Add(edge); await seed.SaveChangesAsync(); }
+        await using var projection = new WorkbenchProjectionSession(Coordinator(db), g.Id);
+        var revision = await projection.ReopenAsync();
+        var children = await projection.ReadChildrenAsync(revision, parent.Id, null, 20);
+        Assert.Equal(edge.Id, Assert.Single(children.Page.Items).RelationshipId);
+        var parents = await projection.ReadParentsAsync(revision, child.Id, null, 20);
+        Assert.Equal(parent.Id, Assert.Single(parents.Page.Items).ParentId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => projection.ReadChildrenAsync(revision, outside.Id, null, 20));
+        var next = await projection.ReopenAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => projection.ReadParentsAsync(revision, child.Id, null, 20));
+        Assert.Equal(edge.Id, Assert.Single((await projection.ReadParentsAsync(next, child.Id, null, 20)).Page.Items).RelationshipId);
+    }
 }

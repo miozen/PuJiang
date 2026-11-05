@@ -7,6 +7,7 @@ public sealed class WorkbenchProjectionSession(TargetContextCoordinator coordina
 {
     public sealed record PeopleResult(long Revision, ProjectionReadSession.PersonPage Page);
     public sealed record PersonResult(long Revision, ProjectionReadSession.PersonRow Person);
+    public sealed record LinkResult<T>(long Revision, ProjectionReadSession.LinkPage<T> Page);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ProjectionReadSession? _session;
     private long _revision;
@@ -99,6 +100,38 @@ public sealed class WorkbenchProjectionSession(TargetContextCoordinator coordina
                 var person = await _session.ReadPersonAsync(_session.Token, personId, cancellationToken);
                 if (!IsCurrent(revision)) throw new InvalidOperationException("读取结果已失效。");
                 return new PersonResult(revision, person);
+            }
+            catch { Interlocked.CompareExchange(ref _readyRevision, 0, revision); throw; }
+        }
+        finally { _gate.Release(); }
+    }
+
+    public Task<LinkResult<ProjectionReadSession.ChildCandidate>> ReadChildrenAsync(long revision, Guid parentId, Guid? after, int limit, CancellationToken cancellationToken = default) =>
+        ReadLinksAsync(revision, (session, token, cancellation) => session.ReadChildCandidatesAsync(token, parentId, after, limit, cancellation), cancellationToken);
+
+    public Task<LinkResult<ProjectionReadSession.ParentCandidate>> ReadParentsAsync(long revision, Guid personId, Guid? after, int limit, CancellationToken cancellationToken = default) =>
+        ReadLinksAsync(revision, (session, token, cancellation) => session.ReadParentCandidatesAsync(token, personId, after, limit, cancellation), cancellationToken);
+
+    public Task<LinkResult<ProjectionReadSession.UnionRow>> ReadUnionsAsync(long revision, Guid personId, Guid? after, int limit, CancellationToken cancellationToken = default) =>
+        ReadLinksAsync(revision, (session, token, cancellation) => session.ReadUnionsAsync(token, personId, after, limit, cancellation), cancellationToken);
+
+    public Task<LinkResult<ProjectionReadSession.SiblingRow>> ReadSiblingsAsync(long revision, Guid personId, Guid? after, int limit, CancellationToken cancellationToken = default) =>
+        ReadLinksAsync(revision, (session, token, cancellation) => session.ReadSiblingsAsync(token, personId, after, limit, cancellation), cancellationToken);
+
+    private async Task<LinkResult<T>> ReadLinksAsync<T>(long revision,
+        Func<ProjectionReadSession, Guid, CancellationToken, Task<ProjectionReadSession.LinkPage<T>>> read, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!IsCurrent(revision) || _session is null) throw new InvalidOperationException("读取会话已失效，请重新打开。");
+            using var operation = coordinator.EnterOperation();
+            try
+            {
+                if (BeforeReadForTest is not null) await BeforeReadForTest();
+                var page = await read(_session, _session.Token, cancellationToken);
+                if (!IsCurrent(revision)) throw new InvalidOperationException("读取结果已失效。");
+                return new LinkResult<T>(revision, page);
             }
             catch { Interlocked.CompareExchange(ref _readyRevision, 0, revision); throw; }
         }

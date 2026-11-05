@@ -1,6 +1,6 @@
 namespace ZupuPaiBan.Services;
 
-// This engine only accepts an explicitly ordered, adjacent-generation forest.
+// This engine accepts an explicitly ordered forest; cross-generation edges require explicit opt-in.
 public sealed record HorizontalLayoutPerson(Guid Id, int Generation, int SiblingOrder, double Width, double Height);
 public sealed record HorizontalLayoutRelationship(Guid Id, Guid ParentId, Guid ChildId);
 public readonly record struct HorizontalLayoutPoint(double X, double Y);
@@ -18,7 +18,8 @@ public static class HorizontalLineageLayout
     public static HorizontalLayoutResult Calculate(
         IReadOnlyCollection<HorizontalLayoutPerson> persons,
         IReadOnlyCollection<HorizontalLayoutRelationship> relationships,
-        IReadOnlySet<Guid> expandedIds)
+        IReadOnlySet<Guid> expandedIds,
+        bool allowSkippedGenerations = false)
     {
         ArgumentNullException.ThrowIfNull(persons);
         ArgumentNullException.ThrowIfNull(relationships);
@@ -49,8 +50,10 @@ public static class HorizontalLineageLayout
                 throw new HorizontalLayoutException($"Relationship {edge.Id} references a missing person.");
             if (!childIds.Add(child.Id))
                 throw new HorizontalLayoutException($"Person {child.Id} has multiple parent edges.");
-            if ((long)child.Generation != (long)parent.Generation + 1)
-                throw new HorizontalLayoutException($"Relationship {edge.Id} must join adjacent generations.");
+            if (allowSkippedGenerations ? child.Generation <= parent.Generation : (long)child.Generation != (long)parent.Generation + 1)
+                throw new HorizontalLayoutException(allowSkippedGenerations
+                    ? $"Relationship {edge.Id} must advance to a later generation."
+                    : $"Relationship {edge.Id} must join adjacent generations.");
             children[parent.Id].Add(edge);
         }
         foreach (var group in children.Values)

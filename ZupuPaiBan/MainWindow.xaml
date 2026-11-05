@@ -48,7 +48,7 @@
                 <MenuItem Header="协作导入..." Command="{Binding ImportCollaborationCommand}"/>
             </MenuItem>
             <MenuItem Header="视图(_V)">
-                <MenuItem Header="世系编修工作台（单人物画布试用）…" Click="WorkbenchProfile_Click"/>
+                <MenuItem Header="世系编修工作台（画布试用）…" Click="WorkbenchProfile_Click"/>
                 <MenuItem Header="世系编修工作台（内存原型）…" Click="WorkbenchPrototype_Click"/>
                 <MenuItem Header="横向世系图（当前族谱）…" Click="HorizontalReal_Click"/>
                 <MenuItem Header="横向世系图（虚构示例）…" Click="HorizontalSample_Click"/>

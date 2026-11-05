@@ -34,6 +34,7 @@ public static class TargetMemberTreeProjection
                 PersonRelationshipKind.AdoptiveParent => "收养父母",
                 PersonRelationshipKind.HeirParent => "嗣继父母",
                 PersonRelationshipKind.Spouse => "配偶关系",
+                PersonRelationshipKind.Sibling => "兄妹关系",
                 PersonRelationshipKind.LostAncestry => "上系失考",
                 _ => $"未知关系类型 {(int)relation.Kind}"
             };
@@ -51,6 +52,10 @@ public static class TargetMemberTreeProjection
             else if (relation.Kind == PersonRelationshipKind.Spouse && relation.RelatedPersonId is Guid spouseId && spouseId != relation.PersonId)
             {
                 details[spouseId].Add(new($"配偶关系（原记录方向：{Display(relation.PersonId)} → {Display(spouseId)}）：{Display(relation.PersonId)}{preferred}{note}{source}（关系 ID: {relation.Id}）", relation.PersonId));
+            }
+            else if (relation.Kind == PersonRelationshipKind.Sibling && relation.RelatedPersonId is Guid siblingId)
+            {
+                details[siblingId].Add(new($"兄妹关系：{Display(relation.PersonId)}{note}{source}（关系 ID: {relation.Id}）", relation.PersonId));
             }
         }
 

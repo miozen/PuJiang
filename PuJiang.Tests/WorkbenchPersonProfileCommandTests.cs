@@ -53,4 +53,112 @@ public class WorkbenchPersonProfileCommandTests
         await using var verify = db.CreateContext(); var saved = await verify.People.SingleAsync();
         Assert.Equal("原名", saved.Name); Assert.Null(saved.Biography);
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task New_person_is_a_scoped_draft_until_saved_and_stale_insert_is_rejected()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var genealogy = new Genealogy { Name = "虚构谱" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(genealogy); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(genealogy.Id));
+        Assert.True(draft.IsDirty); Assert.Equal(0, await context.People.CountAsync());
+        draft.Values = draft.Values with { Name = "新人物", RecordedGeneration = "2" };
+        await draft.SaveAsync(command);
+        await using (var verify = db.CreateContext())
+        {
+            var person = await verify.People.SingleAsync(); Assert.Equal(genealogy.Id, person.GenealogyId);
+            Assert.Equal("2", person.RecordedGeneration); Assert.Empty(await verify.PersonRelationships.ToListAsync());
+        }
+        var stale = new WorkbenchPersonDraft(await command.BeginNewAsync(genealogy.Id));
+        stale.Values = stale.Values with { Name = "过期草稿", RecordedGeneration = "3" };
+        await using (var other = db.CreateContext()) await other.People.ExecuteUpdateAsync(s => s.SetProperty(p => p.Name, "外部变更"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => stale.SaveAsync(command));
+        Assert.True(stale.IsDirty); Assert.False(stale.IsSaved);
+        await using var final = db.CreateContext(); Assert.Equal(1, await final.People.CountAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Editing_without_generation_change_preserves_unrecognized_source()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var p = new Person { GenealogyId = g.Id, Name = "旧名", RecordedGeneration = "待考" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(p); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, p.Id));
+        draft.Values = draft.Values with { Name = "新名" }; await draft.SaveAsync(command);
+        await using var verify = db.CreateContext(); Assert.Equal("待考", (await verify.People.SingleAsync()).RecordedGeneration);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Child_prefills_next_generation_and_failure_rolls_back_person_and_relation()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var parent = new Person { GenealogyId = g.Id, Name = "父", RecordedGeneration = "第二世" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(parent); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id, parent.Id, PersonRelationshipKind.BiologicalParent));
+        Assert.Equal("3", draft.Values.RecordedGeneration); draft.Values = draft.Values with { Name = "子" };
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectChild BEFORE INSERT ON PersonRelationships BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using (var verify = db.CreateContext()) { Assert.Equal(1, await verify.People.CountAsync()); Assert.Empty(await verify.PersonRelationships.ToListAsync()); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectChild");
+        await draft.SaveAsync(command);
+        await using var final = db.CreateContext(); Assert.Equal(2, await final.People.CountAsync()); Assert.Single(await final.PersonRelationships.ToListAsync());
+    }
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task New_spouse_and_union_commit_together_and_failure_leaves_no_person()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var person = new Person { GenealogyId = g.Id, Name = "人物", RecordedGeneration = "1" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(person); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id, partnerId: person.Id, unionKind: FamilyUnionKind.Marriage));
+        draft.Values = draft.Values with { Name = "配偶" }; Assert.Null(draft.Values.RecordedGeneration);
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectUnion BEFORE INSERT ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using (var verify = db.CreateContext()) { Assert.Equal(1, await verify.People.CountAsync()); Assert.Empty(await verify.FamilyUnions.ToListAsync()); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectUnion"); await draft.SaveAsync(command);
+        await using var final = db.CreateContext(); Assert.Equal(2, await final.People.CountAsync());
+        var union = await final.FamilyUnions.SingleAsync();
+        Assert.Contains(person.Id, new Guid?[] { union.PartnerOneId, union.PartnerTwoId });
+        Assert.Contains(draft.Original.PersonId, new Guid?[] { union.PartnerOneId, union.PartnerTwoId });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task New_sibling_and_selected_parent_are_atomic_and_stale_choices_fail()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var other = new Genealogy { Name = "另一谱" };
+        var person = new Person { GenealogyId = g.Id, Name = "人物", RecordedGeneration = "第二世" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父", RecordedGeneration = "一世" };
+        var foreign = new Person { GenealogyId = other.Id, Name = "异谱", RecordedGeneration = "一世" };
+        await using (var seed = db.CreateContext())
+        {
+            seed.Genealogies.AddRange(g, other); seed.People.AddRange(person, parent, foreign);
+            seed.PersonRelationships.Add(new PersonRelationship { GenealogyId = g.Id, PersonId = person.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.AdoptiveParent });
+            await seed.SaveChangesAsync();
+        }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => command.BeginNewAsync(g.Id, siblingId: foreign.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => command.BeginNewAsync(g.Id, person.Id, PersonRelationshipKind.BiologicalParent, siblingId: person.Id));
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id, parent.Id, PersonRelationshipKind.AdoptiveParent, siblingId: person.Id));
+        Assert.Equal("2", draft.Values.RecordedGeneration); draft.Values = draft.Values with { Name = "兄妹" };
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectSibling BEFORE INSERT ON PersonRelationships WHEN NEW.Kind=6 BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using (var verify = db.CreateContext()) { Assert.Equal(3, await verify.People.CountAsync()); Assert.Single(await verify.PersonRelationships.ToListAsync()); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectSibling");
+        var forged = new WorkbenchPersonDraft(draft.Original with { ParentId = person.Id }); forged.Values = draft.Values;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => forged.SaveAsync(command));
+        Assert.True(forged.IsDirty); await draft.SaveAsync(command);
+        await using var final = db.CreateContext();
+        var relations = await final.PersonRelationships.Where(r => r.PersonId == draft.Original.PersonId).ToListAsync();
+        Assert.Contains(relations, r => r.Kind == PersonRelationshipKind.AdoptiveParent && r.RelatedPersonId == parent.Id);
+        Assert.Contains(relations, r => r.Kind == PersonRelationshipKind.Sibling && r.RelatedPersonId == person.Id);
+    }
 }

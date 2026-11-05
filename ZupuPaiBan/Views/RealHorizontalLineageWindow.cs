@@ -179,6 +179,7 @@ public sealed class RealHorizontalLineageWindow : Window
         PersonRelationshipKind.AdoptiveParent => "养父母",
         PersonRelationshipKind.HeirParent => "继嗣父母",
         PersonRelationshipKind.Spouse => "配偶关系",
+        PersonRelationshipKind.Sibling => "兄妹关系",
         PersonRelationshipKind.LostAncestry => "上系失考",
         _ => "未知关系"
     };

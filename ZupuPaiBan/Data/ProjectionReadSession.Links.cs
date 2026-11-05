@@ -13,6 +13,7 @@ public sealed partial class ProjectionReadSession
         string? Start, string? End, string? Note);
     public sealed record OtherRelationshipRow(Guid Id, Guid PersonId, Guid? RelatedPersonId,
         PersonRelationshipKind Kind, string? Note, string? Source);
+    public sealed record SiblingRow(Guid RelationshipId, Guid PersonId, string Name);
     public sealed record LinkPage<T>(IReadOnlyList<T> Items, Guid? NextCursor);
     public sealed record ChartRow(Guid Id, string Name, long Revision, long Generation);
     public sealed record ChartChoiceState(Guid ChartId, Guid PersonId, Guid ParentId, Guid RelationshipId,
@@ -94,6 +95,24 @@ public sealed partial class ProjectionReadSession
         }, cancellationToken);
     }
 
+    public Task<LinkPage<SiblingRow>> ReadSiblingsAsync(Guid token, Guid personId, Guid? after, int limit, CancellationToken cancellationToken = default)
+    {
+        if (personId == Guid.Empty || limit is < 1 or > 200) throw new ArgumentException("人物或分页参数无效。");
+        return ReadGuardedAsync(token, async (tx, cancellation) =>
+        {
+            await RequirePersonAsync(tx, personId, cancellation);
+            await using var command = _connection.CreateCommand(); command.Transaction = tx;
+            command.CommandText = "SELECT r.Id, p.Id, p.Name FROM PersonRelationships r JOIN People p ON p.GenealogyId=r.GenealogyId AND p.Id=CASE WHEN r.PersonId=$person THEN r.RelatedPersonId ELSE r.PersonId END WHERE r.GenealogyId=$genealogy AND r.Kind=6 AND (r.PersonId=$person OR r.RelatedPersonId=$person) AND ($after IS NULL OR r.Id>$after) ORDER BY r.Id LIMIT $limit";
+            command.Parameters.AddWithValue("$genealogy", SqlGuid(_genealogyId)); command.Parameters.AddWithValue("$person", SqlGuid(personId));
+            command.Parameters.AddWithValue("$after", after is Guid cursor ? SqlGuid(cursor) : DBNull.Value); command.Parameters.AddWithValue("$limit", limit + 1);
+            var rows = new List<SiblingRow>();
+            await using var reader = await command.ExecuteReaderAsync(cancellation);
+            while (await reader.ReadAsync(cancellation)) rows.Add(new SiblingRow(Guid.Parse(reader.GetString(0)), Guid.Parse(reader.GetString(1)), reader.GetString(2)));
+            var more = rows.Count > limit; if (more) rows.RemoveAt(rows.Count - 1);
+            return new LinkPage<SiblingRow>(rows.AsReadOnly(), more ? rows[^1].RelationshipId : null);
+        }, cancellationToken);
+    }
+
     public Task<LinkPage<ChartRow>> ReadChartsAsync(Guid token, Guid? after, int limit, CancellationToken cancellationToken = default)
     {
         if (limit is < 1 or > 200) throw new ArgumentOutOfRangeException(nameof(limit));
@@ -119,7 +138,7 @@ public sealed partial class ProjectionReadSession
         {
             await RequirePersonAsync(tx, personId, cancellation);
             await using var command = _connection.CreateCommand(); command.Transaction = tx;
-            command.CommandText = "SELECT Id, PersonId, RelatedPersonId, Kind, Note, SourceCitation FROM PersonRelationships WHERE GenealogyId=$genealogy AND ((Kind=5 AND PersonId=$person) OR (Kind=4 AND (PersonId=$person OR RelatedPersonId=$person))) AND ($after IS NULL OR Id>$after) ORDER BY Id LIMIT $limit";
+            command.CommandText = "SELECT Id, PersonId, RelatedPersonId, Kind, Note, SourceCitation FROM PersonRelationships WHERE GenealogyId=$genealogy AND ((Kind=5 AND PersonId=$person) OR (Kind IN (4,6) AND (PersonId=$person OR RelatedPersonId=$person))) AND ($after IS NULL OR Id>$after) ORDER BY Id LIMIT $limit";
             command.Parameters.AddWithValue("$genealogy", SqlGuid(_genealogyId)); command.Parameters.AddWithValue("$person", SqlGuid(personId));
             command.Parameters.AddWithValue("$after", after is Guid id ? SqlGuid(id) : DBNull.Value); command.Parameters.AddWithValue("$limit", limit + 1);
             var rows = new List<OtherRelationshipRow>();

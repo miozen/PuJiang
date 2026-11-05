@@ -30,6 +30,19 @@ public class HorizontalLineageLayoutTests
     }
 
     [Fact]
+    public void ExplicitCrossGenerationEdgeRetainsColumnsAndFirstChildAlignment()
+    {
+        var result = HorizontalLineageLayout.Calculate([P(1, 0), P(2, 3, 0), P(3, 1, 1)],
+            [E(11, 1, 2), E(12, 1, 3)], new HashSet<Guid> { Id(1) }, allowSkippedGenerations: true);
+        Assert.Equal(3, result.Nodes.Count); Assert.Equal(2, result.Edges.Count); AssertEdges(result);
+        var parent = result.Nodes.Single(n => n.PersonId == Id(1));
+        var first = result.Nodes.Single(n => n.PersonId == Id(2));
+        Assert.Equal(parent.Y + parent.Height / 2, first.Y + first.Height / 2);
+        Assert.Equal(3, first.Generation);
+        Assert.Throws<HorizontalLayoutException>(() => HorizontalLineageLayout.Calculate([P(1, 2), P(2, 1)], [E(11, 1, 2)], new HashSet<Guid> { Id(1) }, true));
+    }
+
+    [Fact]
     public void BranchesAreOrderedAndDoNotOverlapOrCrossOtherBranches()
     {
         var p = new[] { P(1, 0), P(2, 1, 0, 100, 60), P(3, 1, 1), P(4, 2, 0), P(5, 2, 1), P(6, 2, 0), P(7, 2, 1) };

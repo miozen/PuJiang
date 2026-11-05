@@ -6,11 +6,12 @@ public enum PersonRelationshipKind
     AdoptiveParent = 2,
     HeirParent = 3,
     Spouse = 4,
-    LostAncestry = 5
+    LostAncestry = 5,
+    Sibling = 6
 }
 
 /// <summary>
-/// 有方向的关系：Person 是谱载主体，RelatedPerson 是其父母或配偶。
+/// 有方向的记录：Person 是谱载主体；兄妹关系以一条记录表达两人的明确关系。
 /// LostAncestry 用于记录主体的上系失考，因此没有对方人物。
 /// </summary>
 public class PersonRelationship
