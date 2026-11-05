@@ -6,7 +6,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** P2-3 同胞排序：右侧逐人指定会话顺序和右键上下移动已实现并获用户体验反馈；持久化排序和复杂关系仍为后续切片，D-014 不变。
+- **Current Task：** P2-3 同胞排序：会话排序已获体验反馈；持久保存与失效复核方案已规划，存储、迁移和业务接入尚未实施，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -35,7 +35,9 @@
 - **兄妹切片本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 通过（0 错误、16 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 430/430 通过；WPF 专项 `Category=UI&FullyQualifiedName~WorkbenchProfileWindowTests|Category=UI&DisplayName~real-horizontal-exit` 11/11 通过，均无跳过。验证无父母创建、多父母选择、世代预填、跨谱拒绝、版本守卫及事务故障回滚；未测性能，未查询远端 CI。旧版对新增关系类型及交换文件的兼容尚未验收。
 - **同胞排序本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 通过（0 错误、8 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 430/430，通过；显式 WPF 专项 `Category=UI&FullyQualifiedName~WorkbenchProfileWindowTests|Category=UI&DisplayName~real-horizontal-exit` 13/13 通过；均无跳过。覆盖完整与无父母同胞组、重复位置拒绝、右键移动、不写谱载原文和外部失效。初次构建出现局部变量未赋值编译错误并已修复，初次专项有旧诊断断言失败，恢复诊断后重跑通过。尚未测性能，未查询远端 CI。
 - **同胞排序人工验收：** `artifacts/p2-sibling-order-20261105/data` 为独立虚构库，含一位父母及三名世代明确的虚构子女；用户对右侧指定位置和右键上下移动的请求反馈“符合预期”，并选择“先按会话排序验收”。不推断持久排序、复杂关系或完整 P2 已通过；该目录和启动器不进入 Git。
-- **Exact Next Action：** 按用户的小切片节奏，设计并实现同胞排序的持久保存及失效复核方案，先核对 D-028 并在需要时确认数据语义；保留谱载原文，使用独立数据验证，遵守 D-014。
+- **本轮持久排序规划：** 用户确认每张图表分别保存；新增/删除同胞或父母关系变化时保留旧顺序、复核前不自动应用。决策见 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则)，分步模型、并发、复核及验收见[方案](SIBLING_ORDER_PERSISTENCE_DESIGN.md)。这是规划，不表示持久存储、迁移或界面已实现。
+- **本轮规划验证：** 纯文档修改已执行 `git diff --check` 和相关文档本地相对链接存在性检查，均通过；未修改应用源码，未运行构建、测试或远端 CI，也未访问数据库。
+- **Exact Next Action：** 按持久化方案先实施单图表、单个完整唯一父母子女组的隔离存储和复核服务；验证迁移、并发、失败回滚、旧选线及备份交换边界，暂不接工作台 UI，遵守 D-014。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -43,4 +45,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`按最新 HANDOFF，以独立小切片规划 P2-3 同胞排序持久保存和失效复核；遵守 D-014，本地验证后不等待远端 CI。`
+- 可直接交给本机后续 Codex：`按最新 HANDOFF 和持久化方案，实施 P2-3 同胞顺序单组隔离存储与复核服务；暂不接 UI，遵守 D-014，本地验证后不等待远端 CI。`
