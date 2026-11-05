@@ -16,6 +16,7 @@ namespace ZupuPaiBan.Views;
 public sealed class WorkbenchProfileWindow : Window
 {
     private sealed record Option(Guid Id, string Name);
+    private sealed record OrderGroup(string Key, IReadOnlyList<Guid> People, Guid? ParentId);
     private sealed record PartnerOption(Guid? Id, string Name, FamilyUnionKind Kind)
     {
         public string Label => $"{(Kind == FamilyUnionKind.Marriage ? "婚配" : Kind == FamilyUnionKind.Partnership ? "伴侣" : "类型未详")}：{Name}";
@@ -27,6 +28,8 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly ListBox _diagnostics = new() { Height = 90 };
     private readonly TextBox _name = new();
     private readonly TextBox _generation = new();
+    private readonly TextBox _displayRank = new();
+    private readonly Button _applyRank = new() { Content = "设置显示顺序", Margin = new Thickness(0, 4, 0, 0) };
     private readonly TextBlock _recordedGeneration = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Gray };
     private readonly TextBox _birth = new();
     private readonly TextBox _death = new();
@@ -45,6 +48,9 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly Dictionary<Guid, IReadOnlyList<PartnerOption>> _canvasPartners = new();
     private readonly Dictionary<Guid, IReadOnlyList<ProjectionReadSession.SiblingRow>> _canvasSiblings = new();
     private readonly List<HorizontalLayoutRelationship> _canvasEdges = [];
+    private readonly Dictionary<Guid, OrderGroup> _orderGroups = new();
+    private readonly Dictionary<string, Dictionary<Guid, int>> _sessionOrders = new();
+    private readonly Dictionary<Guid, int> _layoutOrders = new();
     private int _unresolvedCount;
     private bool _canvasTruncated;
     private bool _generationEdited;
@@ -90,6 +96,8 @@ public sealed class WorkbenchProfileWindow : Window
     internal Task SelectCanvasForTest(Guid id) => SelectCanvasPersonAsync(id);
     internal Border CanvasCardForTest(Guid id) => _canvas.Children.OfType<Border>().Single(item => item.Tag is Guid value && value == id);
     internal Canvas CanvasForTest => _canvas;
+    internal Task SetDisplayRankForTest(int rank) { _displayRank.Text = rank.ToString(); return SetDisplayRankAsync(); }
+    internal Task MoveForTest(int delta) => MoveSiblingAsync(delta);
 
     public WorkbenchProfileWindow(TargetContextCoordinator coordinator) : this(coordinator, WorkbenchDraftSession.Create(coordinator)) { }
     internal WorkbenchProfileWindow(TargetContextCoordinator coordinator, WorkbenchDraftSession session)
@@ -125,6 +133,8 @@ public sealed class WorkbenchProfileWindow : Window
         var right = new StackPanel { Margin = new Thickness(12) };
         right.Children.Add(new TextBlock { Text = "人物资料", FontSize = 17 });
         AddField(right, "姓名", _name); AddField(right, "世代（1–1000）", _generation); right.Children.Add(_recordedGeneration);
+        AddField(right, "同胞显示顺序（仅本次会话）", _displayRank); right.Children.Add(_applyRank);
+        _applyRank.Click += async (_, _) => await SetDisplayRankAsync();
         AddField(right, "性别", _sex); AddField(right, "出生", _birth);
         AddField(right, "逝世", _death); AddField(right, "生平", _biography);
         var save = new Button { Content = "保存档案", Margin = new Thickness(0, 12, 0, 0), Padding = new Thickness(8) };
@@ -179,14 +189,14 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private void ClearCanvas()
     {
-        _canvasPeople.Clear(); _canvasPartners.Clear(); _canvasSiblings.Clear(); _canvasEdges.Clear(); _diagnosticMessages.Clear(); _diagnostics.ItemsSource = null;
+        _canvasPeople.Clear(); _canvasPartners.Clear(); _canvasSiblings.Clear(); _canvasEdges.Clear(); _orderGroups.Clear(); _sessionOrders.Clear(); _layoutOrders.Clear(); _diagnosticMessages.Clear(); _diagnostics.ItemsSource = null;
         _unresolvedCount = 0; _canvasTruncated = false; _canvas.Children.Clear();
     }
     private void RenderCanvas()
     {
         _canvas.Children.Clear();
         if (_canvasPeople.Count == 0) return;
-        var people = _canvasPeople.Values.Select(p => new HorizontalLayoutPerson(p.Id, ParseGeneration(p) - 1, 0, 170,
+        var people = _canvasPeople.Values.Select(p => new HorizontalLayoutPerson(p.Id, ParseGeneration(p) - 1, _layoutOrders.GetValueOrDefault(p.Id), 170,
             85 + (_canvasPartners.TryGetValue(p.Id, out var partners) ? partners.Count * 20 : 0) + (_canvasSiblings.TryGetValue(p.Id, out var siblings) ? siblings.Count * 20 : 0))).ToArray();
         var layout = HorizontalLineageLayout.Calculate(people, _canvasEdges, _canvasPeople.Keys.ToHashSet(), allowSkippedGenerations: true);
         if (HasUnsafeCrossing(layout))
@@ -247,6 +257,8 @@ public sealed class WorkbenchProfileWindow : Window
                 var child = new MenuItem { Header = "新增子女（生物关系）" }; child.Click += async (_, _) => await BeginNewAsync(person.Id, PersonRelationshipKind.BiologicalParent); menu.Items.Add(child);
                 var adopted = new MenuItem { Header = "新增子女（收养关系）" }; adopted.Click += async (_, _) => await BeginNewAsync(person.Id, PersonRelationshipKind.AdoptiveParent); menu.Items.Add(adopted);
                 var sibling = new MenuItem { Header = "新增兄妹" }; sibling.Click += async (_, _) => await BeginSiblingAsync(person.Id); menu.Items.Add(sibling);
+                var up = new MenuItem { Header = "同胞上移", IsEnabled = CanMove(person.Id, -1) }; up.Click += async (_, _) => await MoveSiblingAsync(-1); menu.Items.Add(up);
+                var down = new MenuItem { Header = "同胞下移", IsEnabled = CanMove(person.Id, 1) }; down.Click += async (_, _) => await MoveSiblingAsync(1); menu.Items.Add(down);
                 var spouse = new MenuItem { Header = "新增配偶（婚配）" }; spouse.Click += async (_, _) => await BeginNewAsync(partnerId: person.Id, unionKind: FamilyUnionKind.Marriage); menu.Items.Add(spouse);
                 var target = _canvas.Children.OfType<Border>().FirstOrDefault(item => item.Tag is Guid id && id == person.Id);
                 if (target is null) return;
@@ -398,11 +410,13 @@ public sealed class WorkbenchProfileWindow : Window
         var candidates = new List<HorizontalLayoutRelationship>();
         var partners = new Dictionary<Guid, IReadOnlyList<PartnerOption>>();
         var siblings = new Dictionary<Guid, IReadOnlyList<ProjectionReadSession.SiblingRow>>();
+        var parentCounts = new Dictionary<Guid, int>();
+        var incompleteSiblings = new HashSet<Guid>();
         foreach (var child in rows.Values)
         {
             var siblingPage = await projection.ReadSiblingsAsync(revision, child.Id, null, 100);
             siblings.Add(child.Id, siblingPage.Page.Items);
-            if (siblingPage.Page.NextCursor is not null) { unresolved++; diagnostics.Add($"{child.Name}：兄妹关系未全部加载。"); }
+            if (siblingPage.Page.NextCursor is not null) { incompleteSiblings.Add(child.Id); unresolved++; diagnostics.Add($"{child.Name}：兄妹关系未全部加载。"); }
             var unions = await projection.ReadUnionsAsync(revision, child.Id, null, 100);
             var labels = new List<PartnerOption>();
             foreach (var union in unions.Page.Items)
@@ -414,6 +428,7 @@ public sealed class WorkbenchProfileWindow : Window
             partners.Add(child.Id, labels.AsReadOnly());
             if (unions.Page.NextCursor is not null) { unresolved++; diagnostics.Add($"{child.Name}：婚配记录未全部加载。"); }
             var parents = await projection.ReadParentsAsync(revision, child.Id, null, 100);
+            parentCounts[child.Id] = parents.Page.NextCursor is not null ? -1 : parents.Page.Items.Count;
             if (parents.Page.NextCursor is not null || parents.Page.Items.Count > 1)
             {
                 unresolved++; diagnostics.Add($"{child.Name}：父母候选存在多项或未全部加载，暂不连线。"); continue;
@@ -424,10 +439,53 @@ public sealed class WorkbenchProfileWindow : Window
             { unresolved++; diagnostics.Add($"{child.Name}：父母 {parent.ParentName} 未显示或世代列冲突，暂不连线。"); continue; }
             candidates.Add(new HorizontalLayoutRelationship(parent.RelationshipId, parent.ParentId, child.Id));
         }
-        var ambiguousParents = candidates.GroupBy(edge => edge.ParentId).Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
-        unresolved += candidates.Count(edge => ambiguousParents.Contains(edge.ParentId));
-        foreach (var parent in ambiguousParents) diagnostics.Add($"{rows[parent].Name}：多名子女的顺序尚未确认，暂不连线。");
-        var edges = candidates.Where(edge => !ambiguousParents.Contains(edge.ParentId)).ToArray();
+        var groups = new List<OrderGroup>(); var blockedParents = new HashSet<Guid>();
+        foreach (var group in candidates.GroupBy(edge => edge.ParentId))
+        {
+            var all = await projection.ReadChildrenAsync(revision, group.Key, null, 100);
+            if (all.Page.NextCursor is not null || !group.Select(e => e.Id).ToHashSet().SetEquals(all.Page.Items.Select(e => e.RelationshipId)))
+            {
+                blockedParents.Add(group.Key); unresolved += group.Count();
+                diagnostics.Add($"{rows[group.Key].Name}：子女关系未完整显示或存在歧义，暂不排序和连线。"); continue;
+            }
+            if (group.Count() > 1)
+            {
+                var members = group.Select(e => e.ChildId).ToArray();
+                groups.Add(MakeOrderGroup(group.Key, members, group.Select(e => e.Id), rows));
+            }
+        }
+        var visited = new HashSet<Guid>();
+        foreach (var start in rows.Keys.Where(id => parentCounts[id] == 0 && siblings[id].Count > 0))
+        {
+            if (!visited.Add(start)) continue;
+            var members = new List<Guid>(); var relationIds = new HashSet<Guid>(); var queue = new Queue<Guid>(); queue.Enqueue(start); var incomplete = false;
+            while (queue.TryDequeue(out var id))
+            {
+                members.Add(id); if (incompleteSiblings.Contains(id)) incomplete = true;
+                foreach (var link in siblings[id])
+                {
+                    relationIds.Add(link.RelationshipId);
+                    if (!rows.ContainsKey(link.PersonId) || parentCounts[link.PersonId] != 0 || ParseGeneration(rows[link.PersonId]) != ParseGeneration(rows[id])) { incomplete = true; continue; }
+                    if (visited.Add(link.PersonId)) queue.Enqueue(link.PersonId);
+                }
+            }
+            if (incomplete) { unresolved++; diagnostics.Add($"{rows[start].Name}：兄妹关系未完整显示或父母情况不一致，暂不排序。"); }
+            else if (members.Count > 1) groups.Add(MakeOrderGroup(null, members, relationIds, rows));
+        }
+        var layoutOrders = new Dictionary<Guid, int>(); var groupByPerson = new Dictionary<Guid, OrderGroup>();
+        foreach (var group in groups)
+        {
+            foreach (var id in group.People) groupByPerson.Add(id, group);
+            if (!_sessionOrders.TryGetValue(group.Key, out var order) || !IsComplete(group, order))
+            {
+                if (group.ParentId is Guid parent) blockedParents.Add(parent);
+                unresolved++; diagnostics.Add(group.ParentId is Guid p
+                    ? $"{rows[p].Name}：多名子女的顺序尚未确认，请分别指定本次显示顺序。"
+                    : $"{rows[group.People[0]].Name} 等 {group.People.Count} 人：请分别指定本次显示顺序。"); continue;
+            }
+            foreach (var (id, rank) in order) layoutOrders[id] = rank - 1;
+        }
+        var edges = candidates.Where(edge => !blockedParents.Contains(edge.ParentId)).ToArray();
         await projection.ValidateAsync(revision);
         if (!ReferenceEquals(projection, _projection) || !projection.IsCurrent(revision)) throw new InvalidOperationException("画布读取结果已失效。");
         if (previous is not null)
@@ -445,9 +503,57 @@ public sealed class WorkbenchProfileWindow : Window
         _canvasPeople.Clear(); foreach (var row in rows.Values) _canvasPeople.Add(row.Id, row);
         _canvasPartners.Clear(); foreach (var pair in partners) _canvasPartners.Add(pair.Key, pair.Value);
         _canvasSiblings.Clear(); foreach (var pair in siblings) _canvasSiblings.Add(pair.Key, pair.Value);
+        _orderGroups.Clear(); foreach (var pair in groupByPerson) _orderGroups.Add(pair.Key, pair.Value);
+        _layoutOrders.Clear(); foreach (var pair in layoutOrders) _layoutOrders.Add(pair.Key, pair.Value);
+        foreach (var key in _sessionOrders.Keys.Except(groups.Select(g => g.Key)).ToArray()) _sessionOrders.Remove(key);
         _canvasEdges.Clear(); _canvasEdges.AddRange(edges); _unresolvedCount = unresolved; _canvasTruncated = page.Page.NextCursor is not null;
         _diagnosticMessages.Clear(); _diagnosticMessages.AddRange(diagnostics); _diagnostics.ItemsSource = _diagnosticMessages.ToArray();
         RenderCanvas();
+    }
+    private static OrderGroup MakeOrderGroup(Guid? parent, IEnumerable<Guid> people, IEnumerable<Guid> relations, IReadOnlyDictionary<Guid, ProjectionReadSession.PersonRow> rows)
+    {
+        var members = people.OrderBy(id => id).ToArray();
+        var key = System.Text.Json.JsonSerializer.Serialize(new { Parent = parent, Relations = relations.OrderBy(id => id).ToArray(),
+            People = members.Select(id => new { Id = id, rows[id].RecordedGeneration, rows[id].RecordedBirthOrder }).ToArray() });
+        return new OrderGroup(key, members, parent);
+    }
+    private static bool IsComplete(OrderGroup group, IReadOnlyDictionary<Guid, int> order) =>
+        order.Count == group.People.Count && group.People.All(order.ContainsKey) && order.Values.Order().SequenceEqual(Enumerable.Range(1, group.People.Count));
+    private bool CanMove(Guid person, int delta)
+    {
+        if (!_orderGroups.TryGetValue(person, out var group) || !_sessionOrders.TryGetValue(group.Key, out var order) || !IsComplete(group, order)) return false;
+        return order[person] + delta >= 1 && order[person] + delta <= group.People.Count;
+    }
+    private async Task SetDisplayRankAsync()
+    {
+        if (_busy || _person is not Guid person || !_orderGroups.TryGetValue(person, out var group)) return;
+        if (!int.TryParse(_displayRank.Text, out var rank) || rank < 1 || rank > group.People.Count)
+        { _status.Text = $"请输入 1 至 {group.People.Count} 的显示位置。"; return; }
+        var order = _sessionOrders.TryGetValue(group.Key, out var prior) ? new Dictionary<Guid, int>(prior) : new Dictionary<Guid, int>();
+        if (order.Any(pair => pair.Key != person && pair.Value == rank))
+        { _status.Text = "该位置已指定给另一人，请输入未使用的位置，或在全部指定后使用上移、下移。"; return; }
+        order[person] = rank;
+        await ApplyOrderAsync(person, group, order);
+    }
+    private async Task MoveSiblingAsync(int delta)
+    {
+        if (_busy || _person is not Guid person || !CanMove(person, delta) || !_orderGroups.TryGetValue(person, out var group)) return;
+        var order = new Dictionary<Guid, int>(_sessionOrders[group.Key]); var rank = order[person];
+        var other = order.Single(pair => pair.Value == rank + delta).Key; order[person] = rank + delta; order[other] = rank;
+        await ApplyOrderAsync(person, group, order);
+    }
+    private async Task ApplyOrderAsync(Guid person, OrderGroup group, Dictionary<Guid, int> order)
+    {
+        _busy = true; IsEnabled = false;
+        try
+        {
+            await ValidateCanvasIdentityAsync(person);
+            _sessionOrders[group.Key] = order;
+            await LoadCanvasAsync(); ShowDraft();
+            _status.Text = IsComplete(group, order) ? "已调整本次显示顺序，未修改谱载排行。" : $"已指定 {order.Count}/{group.People.Count} 人；请继续指定其余人物。";
+        }
+        catch (Exception ex) { ClearCanvas(); _canvasMonitor.Stop(); ShowDraft(); _status.Text = $"画布已失效，草稿保留：{ex.Message}"; }
+        finally { _busy = false; IsEnabled = true; }
     }
     private async Task ReopenCanvasAsync()
     {
@@ -528,6 +634,12 @@ public sealed class WorkbenchProfileWindow : Window
             _generation.Text = RecordedGenerationParser.TryParse(v?.RecordedGeneration, out var generation) ? generation.ToString() : "";
             _generationEdited = _birthEdited = _deathEdited = _biographyEdited = false;
             _recordedGeneration.Text = $"谱载原文：{_session.Draft?.Original.Values.RecordedGeneration ?? "未记"}";
+            _displayRank.Text = ""; _displayRank.IsEnabled = _applyRank.IsEnabled = false;
+            if (_person is Guid person && _orderGroups.TryGetValue(person, out var group))
+            {
+                _displayRank.IsEnabled = _applyRank.IsEnabled = true;
+                if (_sessionOrders.TryGetValue(group.Key, out var order) && order.TryGetValue(person, out var rank)) _displayRank.Text = rank.ToString();
+            }
             _name.IsEnabled = _generation.IsEnabled = _sex.IsEnabled = _birth.IsEnabled = _death.IsEnabled = _biography.IsEnabled = v is not null;
         }
         finally { _updating = false; }
