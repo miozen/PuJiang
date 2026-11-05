@@ -75,4 +75,23 @@ public class WorkbenchProjectionSessionTests
         var next = await reopen; projection.BeforeReadForTest = null;
         Assert.Single((await projection.ReadPeopleAsync(next, null, 10)).Page.Items);
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Reopen_rejects_an_inflight_single_person_result()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var genealogy = new Genealogy { Name = "虚构谱" }; var person = new Person { GenealogyId = genealogy.Id, Name = "虚构人物" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(genealogy); seed.People.Add(person); await seed.SaveChangesAsync(); }
+        await using var projection = new WorkbenchProjectionSession(Coordinator(db), genealogy.Id);
+        var revision = await projection.ReopenAsync();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        projection.BeforeReadForTest = async () => { entered.TrySetResult(); await release.Task; };
+        var read = projection.ReadPersonAsync(revision, person.Id); await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var reopen = projection.ReopenAsync(); release.TrySetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => read);
+        var next = await reopen; projection.BeforeReadForTest = null;
+        Assert.Equal(person.Id, (await projection.ReadPersonAsync(next, person.Id)).Person.Id);
+    }
 }

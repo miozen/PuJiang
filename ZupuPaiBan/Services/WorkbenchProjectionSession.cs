@@ -6,6 +6,7 @@ namespace ZupuPaiBan.Services;
 public sealed class WorkbenchProjectionSession(TargetContextCoordinator coordinator, Guid genealogyId) : IAsyncDisposable
 {
     public sealed record PeopleResult(long Revision, ProjectionReadSession.PersonPage Page);
+    public sealed record PersonResult(long Revision, ProjectionReadSession.PersonRow Person);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ProjectionReadSession? _session;
     private long _revision;
@@ -79,6 +80,25 @@ public sealed class WorkbenchProjectionSession(TargetContextCoordinator coordina
             {
                 await _session.ValidateAsync(_session.Token, cancellationToken);
                 if (!IsCurrent(revision)) throw new InvalidOperationException("读取结果已失效。");
+            }
+            catch { Interlocked.CompareExchange(ref _readyRevision, 0, revision); throw; }
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<PersonResult> ReadPersonAsync(long revision, Guid personId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!IsCurrent(revision) || _session is null) throw new InvalidOperationException("读取会话已失效，请重新打开。");
+            using var operation = coordinator.EnterOperation();
+            try
+            {
+                if (BeforeReadForTest is not null) await BeforeReadForTest();
+                var person = await _session.ReadPersonAsync(_session.Token, personId, cancellationToken);
+                if (!IsCurrent(revision)) throw new InvalidOperationException("读取结果已失效。");
+                return new PersonResult(revision, person);
             }
             catch { Interlocked.CompareExchange(ref _readyRevision, 0, revision); throw; }
         }
