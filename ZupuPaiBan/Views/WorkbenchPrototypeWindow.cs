@@ -60,7 +60,7 @@ public sealed class WorkbenchPrototypeWindow : Window
         var left = new StackPanel { Margin = new Thickness(12) };
         left.Children.Add(new TextBlock { Text = "谱系管理", FontSize = 17, FontWeight = FontWeights.SemiBold });
         left.Children.Add(new TextBlock { Text = "虚构示例", Foreground = Brushes.Gray, Margin = new Thickness(0, 12, 0, 5) });
-        var list = new ListBox { MinHeight = 90, ItemsSource = new[] { "示例谱 · 多代过继", "示例谱 · 空白" }, SelectedIndex = 0 };
+        var list = new ListBox { Height = 240, ItemsSource = new[] { "示例谱 · 多代过继", "示例谱 · 空白" }, SelectedIndex = 0 };
         list.SelectionChanged += (_, _) => { _sample = list.SelectedIndex; _selected = null; Render(); };
         left.Children.Add(list);
         left.Children.Add(new TextBlock { Text = "新增、重命名谱系将在后续接入。", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Gray, Margin = new Thickness(0, 12, 0, 0) });
