@@ -52,7 +52,7 @@ P2 当前开发顺序以 [阶段计划](docs/CURRENT_PLAN.md#p2--交互式世系
 - 日常测试入口为 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --filter "Category!=Performance&Category!=UI"`；`Performance` 和 `UI` 测试须显式单独执行，人工验收另行记录。
 - 代码修改完成后，优先按[开发验证规范](docs/OPERATIONS.md#本地验证与远端-ci)在 Windows 本地执行与 CI 等效的 Release 解决方案构建和日常测试；构建或测试失败先定位并修复，无法完成时明确报告阻塞，不得报告任务完成。纯文档修改执行适用的文档和差异检查，不要求运行应用测试。
 - 已验证的本地依赖还原可在条件满足时复用，避免重复恢复；只能在同一源码状态和 Release 构建成功后使用 `--no-build` 测试。具体命令和还原条件见[开发验证规范](docs/OPERATIONS.md#本地验证与远端-ci)。
-- 本地验证通过后可按既有 Git 授权提交并继续后续工作，不必每轮等待 GitHub Actions。远端 CI 是独立验证；阶段验收、PR 合并和重要里程碑须确认对应提交的远端 CI 通过。CI 失败时先区分环境差异和真实回归，不得通过删除测试、放宽断言或忽略失败来获得通过。
+- 本地验证通过后可按既有 Git 授权提交并继续后续工作，无须等待 GitHub Actions。远端 CI 是独立验证，未确认时如实报告；发现 CI 失败时先区分环境差异和真实回归，不得通过删除测试、放宽断言或忽略失败来获得通过。
 - 报告中区分本地通过、远端通过、远端运行中、未验证，并列明实际失败或跳过；本地日常测试不替代单独执行的 UI、Performance 和人工验收。
 
 ## Handoff 与 Git 安全
