@@ -276,6 +276,82 @@ namespace ZupuPaiBan.Data.Migrations
                     b.ToTable("LineageChartChoices");
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ChartId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("EvidenceGeneration")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ParentGeneration")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ParentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChartId", "ParentId")
+                        .IsUnique();
+
+                    b.ToTable("LineageSiblingOrders");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrderItem", b =>
+                {
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PersonId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PersonName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RecordedBirthOrder")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RecordedGeneration")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RelationshipId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("GroupId", "PersonId");
+
+                    b.HasIndex("GroupId", "Position")
+                        .IsUnique();
+
+                    b.HasIndex("GroupId", "RelationshipId")
+                        .IsUnique();
+
+                    b.ToTable("LineageSiblingOrderItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_LineageSiblingOrderItems_Position", "Position > 0");
+                        });
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.Person", b =>
                 {
                     b.Property<Guid>("Id")
@@ -470,6 +546,24 @@ namespace ZupuPaiBan.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrder", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageChart", null)
+                        .WithMany()
+                        .HasForeignKey("ChartId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrderItem", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageSiblingOrder", null)
+                        .WithMany("Items")
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.Person", b =>
                 {
                     b.HasOne("ZupuPaiBan.Models.Genealogy", "Genealogy")
@@ -539,6 +633,11 @@ namespace ZupuPaiBan.Data.Migrations
             modelBuilder.Entity("ZupuPaiBan.Models.LineageChart", b =>
                 {
                     b.Navigation("Choices");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrder", b =>
+                {
+                    b.Navigation("Items");
                 });
 #pragma warning restore 612, 618
         }

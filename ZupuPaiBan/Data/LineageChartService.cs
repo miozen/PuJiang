@@ -67,13 +67,17 @@ public sealed class LineageChartService(ZupuDbContext context)
         }
         else
         {
+            if (expectedRevision is null || expectedRevision == long.MaxValue) throw new InvalidOperationException("图表配置版本无效。");
+            var changed = await context.LineageCharts.Where(c => c.Id == chartId && c.GenealogyId == genealogyId && c.Revision == expectedRevision)
+                .Where(c => context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(v => v == snapshot.UnlinkGeneration))
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.Revision, c => c.Revision + 1));
+            if (changed != 1) throw new InvalidOperationException("图表配置或谱系已变化，请重新打开。");
             chart = await context.LineageCharts.Include(c => c.Choices).SingleAsync(c => c.Id == chartId && c.GenealogyId == genealogyId);
-            if (chart.Revision != expectedRevision) throw new InvalidOperationException("图表配置已变化，请重新打开。");
             context.LineageChartChoices.RemoveRange(chart.Choices);
             chart.Choices.Clear();
             chart.Name = name;
             chart.Generation = generation;
-            chart.Revision = checked(chart.Revision + 1);
+            chart.Revision = checked(expectedRevision.Value + 1);
             await context.SaveChangesAsync();
         }
         foreach (var choice in choices) chart.Choices.Add(choice);

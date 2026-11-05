@@ -17,6 +17,8 @@ public class ZupuDbContext : DbContext
     public DbSet<GenealogyImportRecord> GenealogyImportRecords => Set<GenealogyImportRecord>();
     public DbSet<LineageChart> LineageCharts => Set<LineageChart>();
     public DbSet<LineageChartChoice> LineageChartChoices => Set<LineageChartChoice>();
+    public DbSet<LineageSiblingOrder> LineageSiblingOrders => Set<LineageSiblingOrder>();
+    public DbSet<LineageSiblingOrderItem> LineageSiblingOrderItems => Set<LineageSiblingOrderItem>();
 
     private readonly string _dbPath;
     private readonly Action<bool>? _onDispose;
@@ -85,6 +87,25 @@ public class ZupuDbContext : DbContext
 
     private static void ConfigureTargetModel(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<LineageSiblingOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ChartId, e.ParentId }).IsUnique();
+            entity.Property(e => e.ParentName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ParentGeneration).HasMaxLength(100);
+            entity.HasOne<LineageChart>().WithMany().HasForeignKey(e => e.ChartId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(e => e.Items).WithOne().HasForeignKey(e => e.GroupId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<LineageSiblingOrderItem>(entity =>
+        {
+            entity.HasKey(e => new { e.GroupId, e.PersonId });
+            entity.HasIndex(e => new { e.GroupId, e.Position }).IsUnique();
+            entity.HasIndex(e => new { e.GroupId, e.RelationshipId }).IsUnique();
+            entity.Property(e => e.PersonName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.RecordedGeneration).HasMaxLength(100);
+            entity.Property(e => e.RecordedBirthOrder).HasMaxLength(100);
+            entity.ToTable(t => t.HasCheckConstraint("CK_LineageSiblingOrderItems_Position", "Position > 0"));
+        });
         modelBuilder.Entity<LineageChart>(entity =>
         {
             entity.HasKey(e => e.Id);

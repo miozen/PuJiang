@@ -6,7 +6,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** P2-3 同胞排序：会话排序已获体验反馈；持久保存与失效复核方案已规划，存储、迁移和业务接入尚未实施，D-014 不变。
+- **Current Task：** P2-3 同胞排序：唯一父母子女组的持久化存储、迁移和复核服务已实施，尚未接入工作台 UI；D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -37,7 +37,9 @@
 - **同胞排序人工验收：** `artifacts/p2-sibling-order-20261105/data` 为独立虚构库，含一位父母及三名世代明确的虚构子女；用户对右侧指定位置和右键上下移动的请求反馈“符合预期”，并选择“先按会话排序验收”。不推断持久排序、复杂关系或完整 P2 已通过；该目录和启动器不进入 Git。
 - **本轮持久排序规划：** 用户确认每张图表分别保存；新增/删除同胞或父母关系变化时保留旧顺序、复核前不自动应用。决策见 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则)，分步模型、并发、复核及验收见[方案](SIBLING_ORDER_PERSISTENCE_DESIGN.md)。这是规划，不表示持久存储、迁移或界面已实现。
 - **本轮规划验证：** 纯文档修改已执行 `git diff --check` 和相关文档本地相对链接存在性检查，均通过；未修改应用源码，未运行构建、测试或远端 CI，也未访问数据库。
-- **Exact Next Action：** 按持久化方案先实施单图表、单个完整唯一父母子女组的隔离存储和复核服务；验证迁移、并发、失败回滚、旧选线及备份交换边界，暂不接工作台 UI，遵守 D-014。
+- **本轮持久排序存储：** 新增迁移、按图表的排序组及历史项、受保护独立会话的完整子女组捕获、事务保存和差异复核；图表修订条件更新，旧图表选线保存不覆盖排序，旧人物/关系身份保留供复核。成功保存后必须重新打开会话；数据或图表变化使旧结果失效。全库代数变化即使无关也保守要求复核；超过 2000、缺失世代或多父母拒绝捕获。此切片未接 UI、无父母兄妹或复杂关系。
+- **本轮存储本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、32 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 443/443 通过；单独筛选 `FullyQualifiedName~SiblingOrderStorageTests|FullyQualifiedName~LineageChartTests` 为 15/15 通过，均无跳过。覆盖旧库迁移、图表与谱隔离、并发竞争、取消与 SQLite 注入回滚、历史/ABA 复核、超过 100 人、图表选线保留、关闭排空及备份预检；EF `migrations has-pending-model-changes` 检查无差异。最初 EF 工具构建因 NuGet 网络不可用失败，使用本机缓存 `dotnet restore --ignore-failed-sources` 后恢复成功。未运行 UI、Performance 或人工验收，未查询远端 CI；未使用真实数据。
+- **Exact Next Action：** 按持久化方案将单图表、完整唯一父母子女组的排序草稿、显式保存、复核及关闭协调安全接入工作台；在独立数据中验证切谱/切图表/退出、提交后刷新失败与旧结果失效，遵守 D-014。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -45,4 +47,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`按最新 HANDOFF 和持久化方案，实施 P2-3 同胞顺序单组隔离存储与复核服务；暂不接 UI，遵守 D-014，本地验证后不等待远端 CI。`
+- 可直接交给本机后续 Codex：`按最新 HANDOFF 和持久化方案，安全接入 P2-3 单组排序草稿、保存和复核工作台；使用独立数据，遵守 D-014，本地验证后不等待远端 CI。`
