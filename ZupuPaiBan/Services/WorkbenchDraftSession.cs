@@ -3,7 +3,7 @@ using ZupuPaiBan.Data;
 namespace ZupuPaiBan.Services;
 
 public enum DraftLeaveChoice { Save, Discard, Cancel }
-public enum DraftTransitionResult { Completed, Cancelled, SaveFailed, SavedRefreshFailed, ReadFailed }
+public enum DraftTransitionResult { Completed, Cancelled, SaveFailed, SavedRefreshFailed, ReadFailed, SavedThenReadFailed }
 
 /// <summary>Serializes a single-person editing session and makes commit and refresh outcomes explicit.</summary>
 public sealed class WorkbenchDraftSession
@@ -14,6 +14,7 @@ public sealed class WorkbenchDraftSession
     private readonly SemaphoreSlim _gate = new(1, 1);
     public WorkbenchPersonDraft? Draft { get; private set; }
     public string? Error { get; private set; }
+    public Func<Guid, Task>? AfterCommitAsync { get; set; }
 
     public WorkbenchDraftSession(Func<IDisposable> enterOperation,
         Func<Guid, Guid, Task<WorkbenchProfileSnapshot>> read, Func<WorkbenchPersonDraft, Task> save)
@@ -41,10 +42,11 @@ public sealed class WorkbenchDraftSession
             if (Draft is { } current && current.Original.GenealogyId == genealogyId && current.Original.PersonId == personId)
                 return DraftTransitionResult.Completed;
             using var operation = _enterOperation();
+            var saved = Draft?.IsDirty == true && choice == DraftLeaveChoice.Save;
             var result = await LeaveCoreAsync(choice);
             if (result != DraftTransitionResult.Completed) return result;
             try { Draft = new WorkbenchPersonDraft(await _read(genealogyId, personId)); Error = null; return DraftTransitionResult.Completed; }
-            catch (Exception error) { Error = error.Message; return DraftTransitionResult.ReadFailed; }
+            catch (Exception error) { Error = error.Message; return saved ? DraftTransitionResult.SavedThenReadFailed : DraftTransitionResult.ReadFailed; }
         }
         finally { _gate.Release(); }
     }
@@ -88,6 +90,7 @@ public sealed class WorkbenchDraftSession
         Draft = null;
         try
         {
+            if (AfterCommitAsync is not null) await AfterCommitAsync(draft.Original.GenealogyId);
             Draft = new WorkbenchPersonDraft(await _read(draft.Original.GenealogyId, draft.Original.PersonId));
             Error = null;
             return DraftTransitionResult.Completed;

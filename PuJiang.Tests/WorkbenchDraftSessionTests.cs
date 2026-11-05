@@ -66,4 +66,22 @@ public class WorkbenchDraftSessionTests
 
     private static TargetContextCoordinator Coordinator(TestDatabase db) => new(new DbContextOptionsBuilder<ZupuDbContext>()
         .UseSqlite(new SqliteConnectionStringBuilder { DataSource = db.DatabasePath, Pooling = false }.ToString()).Options);
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Switching_after_commit_reports_target_read_failure_as_already_saved()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var genealogy = new Genealogy { Name = "谱" }; var a = new Person { GenealogyId = genealogy.Id, Name = "甲" }; var b = new Person { GenealogyId = genealogy.Id, Name = "乙" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(genealogy); seed.People.AddRange(a, b); await seed.SaveChangesAsync(); }
+        var coordinator = Coordinator(db);
+        var session = new WorkbenchDraftSession(coordinator.EnterOperation,
+            async (g, p) => { if (p == b.Id) throw new InvalidOperationException("目标读取失败"); await using var context = coordinator.CreateContext(); return await new WorkbenchPersonProfileCommand(context).ReadAsync(g, p); },
+            async draft => { await using var context = coordinator.CreateContext(); await draft.SaveAsync(new WorkbenchPersonProfileCommand(context)); });
+        await session.SelectAsync(genealogy.Id, a.Id, DraftLeaveChoice.Cancel);
+        session.Draft!.Values = session.Draft.Values with { Name = "已保存" };
+        Assert.Equal(DraftTransitionResult.SavedThenReadFailed, await session.SelectAsync(genealogy.Id, b.Id, DraftLeaveChoice.Save));
+        Assert.Null(session.Draft);
+        await using var verify = db.CreateContext(); Assert.Equal("已保存", (await verify.People.SingleAsync(p => p.Id == a.Id)).Name);
+    }
 }

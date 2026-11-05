@@ -18,6 +18,21 @@ public partial class MainWindow : Window
     private void WorkbenchPrototype_Click(object sender, RoutedEventArgs e) =>
         new WorkbenchPrototypeWindow { Owner = this }.Show();
 
+    private void WorkbenchProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var existing = OwnedWindows.OfType<WorkbenchProfileWindow>().FirstOrDefault();
+        if (existing is not null) { existing.Activate(); return; }
+        new WorkbenchProfileWindow(_targetContexts) { Owner = this, AfterCommitAsync = RefreshAfterWorkbenchCommitAsync }.Show();
+    }
+
+    private async Task RefreshAfterWorkbenchCommitAsync(Guid genealogyId)
+    {
+        foreach (var child in OwnedWindows.OfType<RealHorizontalLineageWindow>().ToArray())
+            child.InvalidateForSelectionChange();
+        if (_genealogyViewModel?.SelectedGenealogy is { } selected && selected.Id == genealogyId)
+            await _genealogyViewModel.SelectAsync(selected);
+    }
+
     private void HorizontalReal_Click(object sender, RoutedEventArgs e)
     {
         if (_genealogyViewModel?.SelectedGenealogy is not { } genealogy)
@@ -133,6 +148,11 @@ public partial class MainWindow : Window
     {
         try
         {
+            foreach (var child in OwnedWindows.OfType<WorkbenchProfileWindow>().ToArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!await child.PrepareForOwnerExitAsync()) return false;
+            }
             if (!await QuiesceForMaintenanceAsync(cancellationToken)) return false;
             foreach (Window child in OwnedWindows.Cast<Window>().ToArray())
             {
@@ -170,6 +190,7 @@ public partial class MainWindow : Window
             // Defer the final close so it never re-enters the current close event.
             _ = Dispatcher.BeginInvoke(new Action(Close), System.Windows.Threading.DispatcherPriority.Background);
         }
+        else if (Volatile.Read(ref _quiescenceStarted) == 0) _exitStarted = false;
     }
 
     private void DatabaseBackup_Click(object sender, RoutedEventArgs e)

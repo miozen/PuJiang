@@ -6,7 +6,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** P2-3 单人物档案草稿、受版本守卫的保存命令与服务层离开协调已实现，尚未连接工作台；D-014 不变。
+- **Current Task：** P2-3 单人物档案草稿已接入独立的真实数据试用窗口；目标横向画布编辑和人工验收尚未完成，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -22,7 +22,8 @@
 - **本轮验证：** Windows Release 解决方案构建成功（0 错误、16 条既有依赖警告）；同源码日常测试 396/396、原型 UI 测试 1/1 通过，均无失败或跳过。首次构建曾因测试实例占用可执行文件失败，关闭本轮隔离实例后重试通过；远端 CI 未验证。
 - **P2-3 基础验证：** Windows `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、31 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 398/398 通过、无跳过。新增两项隔离 SQLite 测试覆盖校验、同谱、ABA 版本冲突、注入失败和草稿保留；尚未覆盖工作台切换/关闭、提交后刷新失败、操作排空或人工验收。当前未接入产品界面。
 - **P2-3 会话验证：** 本轮同命令 Release 构建成功（0 错误、31 警告），日常测试 400/400 通过、无跳过；新增隔离测试覆盖服务层切谱/离开的保存、放弃、取消、校验失败、提交后刷新失败和在途操作排空。真实 WPF 窗口、主窗口退出顺序与人工验收尚未覆盖。用户要求今后不等待远端 CI；本轮未查询远端结果。
-- **Exact Next Action：** 将草稿决策接入真实工作台及主窗口退出：排空前处理保存/放弃/取消，真实 WPF 验证切人、切谱、关闭、退出及提交后刷新失败，再完成安全业务接入；保留既有入口，遵守 D-014。
+- **P2-3 试用窗口验证：** 同源码 Windows Release 解决方案构建通过（0 错误、31 警告），日常测试 401/401 通过；显式 UI 专项 3/3 通过（两项试用窗口及一项既有横向窗口退出），无跳过。独立 SQLite 与实际 WPF 窗口覆盖切人取消/放弃、切谱取消、关闭取消、主窗口真实关闭事件取消后再保存退出、提交后通知刷新失败及旧令牌不重试。尚未人工验收，也未验证横向画布编辑或大谱性能；不使用正式用户数据，未等待远端 CI。
+- **Exact Next Action：** 在独立测试数据目录协助用户验收单人物档案试用窗口的切人、切谱、保存、放弃、取消和退出体验；之后按目标横向画布评估接入及按需读取，保留既有入口，遵守 D-014。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -30,4 +31,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`按最新 HANDOFF 和 D-026，完成 P2-3 单人物草稿切换/关闭协调及提交后刷新失败的隔离验证，再评估工作台接入；遵守 D-014。`
+- 可直接交给本机后续 Codex：`按最新 HANDOFF，在独立测试数据目录协助验收 P2-3 单人物档案试用窗口的草稿和退出体验；遵守 D-014。`
