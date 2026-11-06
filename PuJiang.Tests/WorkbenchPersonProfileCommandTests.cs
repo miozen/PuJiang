@@ -8,6 +8,69 @@ namespace PuJiang.Tests;
 public class WorkbenchPersonProfileCommandTests
 {
     [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(2)]
+    [Trait("Category", "Integration")]
+    public async Task Ordinary_sibling_inherits_only_known_biological_parents_atomically(int count)
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var sibling = new Person { GenealogyId = g.Id, Name = "原人物", RecordedGeneration = "2" };
+        var father = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male };
+        var mother = new Person { GenealogyId = g.Id, Name = "母", Sex = PersonSex.Female };
+        var adoptive = new Person { GenealogyId = g.Id, Name = "养父", Sex = PersonSex.Male };
+        await using (var seed = db.CreateContext())
+        {
+            seed.Genealogies.Add(g); seed.People.AddRange(sibling, father, mother, adoptive);
+            if (count > 0) seed.PersonRelationships.Add(new() { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = father.Id, Kind = PersonRelationshipKind.BiologicalParent });
+            if (count > 1) seed.PersonRelationships.Add(new() { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent });
+            seed.PersonRelationships.Add(new() { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = adoptive.Id, Kind = PersonRelationshipKind.AdoptiveParent }); await seed.SaveChangesAsync();
+        }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginOrdinarySiblingAsync(g.Id, sibling.Id));
+        Assert.Equal(PersonSex.Male, draft.Values.Sex); Assert.Equal(count, draft.Original.Parents!.Count);
+        draft.Values = draft.Values with { Name = "新兄妹" };
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectOrdinarySibling BEFORE INSERT ON PersonRelationships WHEN NEW.Kind=6 BEGIN SELECT RAISE(ABORT, 'failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command));
+        await using (var verify = db.CreateContext()) { Assert.False(await verify.People.AnyAsync(p => p.Id == draft.Original.PersonId)); Assert.Equal(count + 1, await verify.PersonRelationships.CountAsync()); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectOrdinarySibling"); await draft.SaveAsync(command);
+        await using var final = db.CreateContext(); var links = await final.PersonRelationships.Where(r => r.PersonId == draft.Original.PersonId).ToListAsync();
+        Assert.Equal(count, links.Count(r => r.Kind == PersonRelationshipKind.BiologicalParent));
+        Assert.DoesNotContain(links, r => r.RelatedPersonId == adoptive.Id);
+        Assert.Contains(links, r => r.Kind == PersonRelationshipKind.Sibling && r.RelatedPersonId == sibling.Id);
+        Assert.Equal(count + 1, await final.PersonRelationships.CountAsync(r => r.PersonId == sibling.Id));
+    }
+
+    [Theory]
+    [InlineData(PersonSex.Unknown)] [InlineData(PersonSex.Male)]
+    [Trait("Category", "Integration")]
+    public async Task Ordinary_sibling_rejects_unknown_or_duplicate_parent_roles(PersonSex secondSex)
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var sibling = new Person { GenealogyId = g.Id, Name = "人物", RecordedGeneration = "2" };
+        var a = new Person { GenealogyId = g.Id, Name = "父一", Sex = PersonSex.Male }; var b = new Person { GenealogyId = g.Id, Name = "另一父母", Sex = secondSex };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(sibling, a, b); seed.PersonRelationships.AddRange(
+            new PersonRelationship { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.BiologicalParent },
+            new PersonRelationship { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = b.Id, Kind = PersonRelationshipKind.BiologicalParent }); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => command.BeginOrdinarySiblingAsync(g.Id, sibling.Id));
+        Assert.Equal(3, await context.People.CountAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Ordinary_sibling_rejects_stale_parent_snapshot_without_partial_write()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var sibling = new Person { GenealogyId = g.Id, Name = "人物", RecordedGeneration = "2" };
+        var father = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male };
+        var mother = new Person { GenealogyId = g.Id, Name = "母", Sex = PersonSex.Female };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(sibling, father, mother); seed.PersonRelationships.Add(new() { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = father.Id, Kind = PersonRelationshipKind.BiologicalParent }); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginOrdinarySiblingAsync(g.Id, sibling.Id)); draft.Values = draft.Values with { Name = "新兄妹" };
+        await using (var changed = db.CreateContext()) { changed.PersonRelationships.Add(new() { GenealogyId = g.Id, PersonId = sibling.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent }); await changed.SaveChangesAsync(); }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using var verify = db.CreateContext(); Assert.False(await verify.People.AnyAsync(p => p.Id == draft.Original.PersonId)); Assert.Equal(2, await verify.PersonRelationships.CountAsync());
+    }
+    [Theory]
     [InlineData(PersonSex.Male, PersonSex.Female)]
     [InlineData(PersonSex.Female, PersonSex.Male)]
     [InlineData(PersonSex.Unknown, PersonSex.Unknown)]

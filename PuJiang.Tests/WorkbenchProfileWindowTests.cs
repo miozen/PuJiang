@@ -508,8 +508,20 @@ public class WorkbenchProfileWindowTests
             var sibling = window.CanvasCardForTest(person.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增兄妹"));
             sibling.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             await WaitUntil(() => window.SessionForTest.Draft?.Original.IsNew == true);
+            await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
+            var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); editor.Input.Text = "取消";
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            await WaitUntil(() => window.SessionForTest.Draft?.Original.PersonId == person.Id);
+            await using (var check = db.CreateContext()) { Assert.Single(await check.People.ToListAsync()); Assert.Empty(await check.PersonRelationships.ToListAsync()); }
+            card = window.CanvasCardForTest(person.Id);
+            card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            await WaitUntil(() => window.CanvasCardForTest(person.Id).ContextMenu is not null);
+            window.CanvasCardForTest(person.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增兄妹")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
             siblingId = window.SessionForTest.Draft!.Original.PersonId; Assert.Equal("2", window.SessionForTest.Draft.Values.RecordedGeneration);
-            window.SetNameForTest("兄妹"); await window.SaveForTest();
+            editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); editor.Input.Text = "兄妹";
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            Assert.Equal(PersonSex.Male, window.SessionForTest.Draft.Values.Sex); await window.SaveForTest();
             Assert.True(window.CanvasContainsForTest(siblingId)); Assert.Contains("人物", window.CanvasSiblingsForTest(siblingId));
             Assert.Contains("兄妹", window.CanvasSiblingsForTest(person.Id));
             Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
@@ -519,17 +531,19 @@ public class WorkbenchProfileWindowTests
     }
     [Fact]
     [Trait("Category", "UI")]
-    public async Task Sibling_with_multiple_parents_requires_explicit_choice()
+    public async Task Sibling_inherits_biological_parents_without_special_relationships()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync();
         var g = new Genealogy { Name = "谱" }; var person = new Person { GenealogyId = g.Id, Name = "人物", RecordedGeneration = "二世" };
-        var a = new Person { GenealogyId = g.Id, Name = "生父", RecordedGeneration = "一世" };
-        var b = new Person { GenealogyId = g.Id, Name = "嗣父", RecordedGeneration = "一世" };
+        var father = new Person { GenealogyId = g.Id, Name = "生父", Sex = PersonSex.Male, RecordedGeneration = "一世" };
+        var mother = new Person { GenealogyId = g.Id, Name = "生母", Sex = PersonSex.Female, RecordedGeneration = "一世" };
+        var heir = new Person { GenealogyId = g.Id, Name = "嗣父", Sex = PersonSex.Male, RecordedGeneration = "一世" };
         await using (var seed = db.CreateContext())
         {
-            seed.Genealogies.Add(g); seed.People.AddRange(person, a, b);
-            seed.PersonRelationships.AddRange(new PersonRelationship { GenealogyId = g.Id, PersonId = person.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.BiologicalParent },
-                new PersonRelationship { GenealogyId = g.Id, PersonId = person.Id, RelatedPersonId = b.Id, Kind = PersonRelationshipKind.HeirParent });
+            seed.Genealogies.Add(g); seed.People.AddRange(person, father, mother, heir);
+            seed.PersonRelationships.AddRange(new PersonRelationship { GenealogyId = g.Id, PersonId = person.Id, RelatedPersonId = father.Id, Kind = PersonRelationshipKind.BiologicalParent },
+                new PersonRelationship { GenealogyId = g.Id, PersonId = person.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent },
+                new PersonRelationship { GenealogyId = g.Id, PersonId = person.Id, RelatedPersonId = heir.Id, Kind = PersonRelationshipKind.HeirParent });
             await seed.SaveChangesAsync();
         }
         Guid siblingId = default;
@@ -539,27 +553,21 @@ public class WorkbenchProfileWindowTests
             var card = window.CanvasCardForTest(person.Id);
             card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
             await WaitUntil(() => window.CanvasCardForTest(person.Id).ContextMenu is not null);
-            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
-            timer.Tick += (_, _) =>
-            {
-                var dialog = window.OwnedWindows.OfType<Window>().FirstOrDefault(w => w.Title == "选择共同父母");
-                if (dialog?.Content is not StackPanel panel) return;
-                var boxes = panel.Children.OfType<ComboBox>().ToArray(); var list = boxes[0]; var confirm = panel.Children.OfType<Button>().Single();
-                Assert.False(confirm.IsEnabled);
-                list.SelectedIndex = list.Items.Cast<object>().ToList().FindIndex(x => x.ToString()!.Contains("嗣父"));
-                boxes[1].SelectedIndex = 2;
-                Assert.True(confirm.IsEnabled); timer.Stop(); confirm.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            };
-            timer.Start();
-            var sibling = window.CanvasCardForTest(person.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增兄妹"));
-            sibling.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-            await WaitUntil(() => window.SessionForTest.Draft?.Original.IsNew == true);
-            siblingId = window.SessionForTest.Draft!.Original.PersonId; window.SetNameForTest("兄妹"); await window.SaveForTest();
-            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+            window.CanvasCardForTest(person.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增兄妹")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
+            var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single();
+            Assert.Equal(Canvas.GetLeft(window.CanvasCardForTest(person.Id)), Canvas.GetLeft(editor));
+            Assert.Contains("生父", window.SessionForTest.Draft!.Original.Parents!.Select(p => p.Name));
+            Assert.Contains("生母", window.SessionForTest.Draft.Original.Parents!.Select(p => p.Name));
+            siblingId = window.SessionForTest.Draft.Original.PersonId; editor.Input.Text = "兄妹";
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            Assert.Equal(siblingId, window.SessionForTest.Draft.Original.PersonId); Assert.Contains("生父", window.DraftParentsForTest); Assert.Contains("生母", window.DraftParentsForTest);
+            await window.SaveForTest(); Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
         });
         await using var verify = db.CreateContext(); var relations = await verify.PersonRelationships.Where(r => r.PersonId == siblingId).ToListAsync();
-        Assert.Contains(relations, r => r.Kind == PersonRelationshipKind.HeirParent && r.RelatedPersonId == b.Id);
-        Assert.DoesNotContain(relations, r => r.RelatedPersonId == a.Id);
+        Assert.Contains(relations, r => r.Kind == PersonRelationshipKind.BiologicalParent && r.RelatedPersonId == father.Id);
+        Assert.Contains(relations, r => r.Kind == PersonRelationshipKind.BiologicalParent && r.RelatedPersonId == mother.Id);
+        Assert.DoesNotContain(relations, r => r.RelatedPersonId == heir.Id);
         Assert.Contains(relations, r => r.Kind == PersonRelationshipKind.Sibling && r.RelatedPersonId == person.Id);
     }
     [Fact]

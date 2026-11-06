@@ -11,11 +11,39 @@ public sealed record WorkbenchProfileSnapshot(Guid GenealogyId, Guid PersonId, l
     bool IsNew = false, Guid? ParentId = null, PersonRelationshipKind? ParentKind = null,
     Guid? PartnerId = null, FamilyUnionKind? UnionKind = null, Guid? SiblingId = null,
     Guid? SecondParentId = null, bool IsOrdinaryChild = false, PersonSex? ParentSex = null,
-    IReadOnlyList<WorkbenchParentInfo>? Parents = null);
+    IReadOnlyList<WorkbenchParentInfo>? Parents = null, bool IsOrdinarySibling = false);
 
 /// <summary>Single-person command boundary. No UI or view state is used as data authority.</summary>
 public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
 {
+    public async Task<WorkbenchProfileSnapshot> BeginOrdinarySiblingAsync(Guid genealogyId, Guid siblingId, CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var generation = await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync(cancellationToken);
+        var sibling = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == siblingId, cancellationToken)
+            ?? throw new InvalidOperationException("所选兄妹不属于当前族谱。");
+        var parents = await ReadOrdinarySiblingParentsAsync(genealogyId, siblingId, cancellationToken);
+        var recorded = RecordedGenerationParser.TryParse(sibling.RecordedGeneration, out var number) ? number.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        await transaction.CommitAsync(cancellationToken);
+        return new(genealogyId, Guid.NewGuid(), generation, new("", PersonSex.Male, null, null, null, recorded), IsNew: true,
+            ParentId: parents.FirstOrDefault()?.PersonId, ParentKind: parents.Count > 0 ? PersonRelationshipKind.BiologicalParent : null,
+            SiblingId: siblingId, SecondParentId: parents.Skip(1).FirstOrDefault()?.PersonId, Parents: parents, IsOrdinarySibling: true);
+    }
+
+    private async Task<IReadOnlyList<WorkbenchParentInfo>> ReadOrdinarySiblingParentsAsync(Guid genealogyId, Guid siblingId, CancellationToken cancellationToken)
+    {
+        var relationships = await context.PersonRelationships.AsNoTracking().Where(r => r.GenealogyId == genealogyId && r.PersonId == siblingId && r.Kind == PersonRelationshipKind.BiologicalParent).ToListAsync(cancellationToken);
+        var parents = new List<WorkbenchParentInfo>();
+        foreach (var relationship in relationships)
+        {
+            var person = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == relationship.RelatedPersonId, cancellationToken)
+                ?? throw new InvalidOperationException("生父母记录不完整或跨谱，请先核实。");
+            if (person.Id == siblingId || person.Sex is not (PersonSex.Male or PersonSex.Female) || parents.Any(p => p.Sex == person.Sex))
+                throw new InvalidOperationException("生父母角色不明确或存在重复候选，请先核实。");
+            parents.Add(new(person.Id, person.Name, person.Sex, PersonRelationshipKind.BiologicalParent));
+        }
+        return parents.OrderBy(p => p.Sex).ToArray();
+    }
     /// <summary>Reads the complete marriage set under the same version as the new-person draft.</summary>
     public async Task<WorkbenchProfileSnapshot> BeginOrdinaryChildAsync(Guid genealogyId, Guid parentId, CancellationToken cancellationToken = default)
     {
@@ -123,13 +151,23 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             if (original.IsOrdinaryChild && (original.ParentId is null || original.ParentKind != PersonRelationshipKind.BiologicalParent ||
                 original.SiblingId is not null || original.PartnerId is not null || original.SecondParentId == original.ParentId))
                 throw new InvalidOperationException("普通子女草稿的父母上下文无效。");
-            if (!original.IsOrdinaryChild && original.SecondParentId is not null)
+            if (original.IsOrdinarySibling && (original.SiblingId is null || original.PartnerId is not null || original.IsOrdinaryChild ||
+                (original.ParentId is null && original.SecondParentId is not null) || (original.ParentId is not null && original.ParentKind != PersonRelationshipKind.BiologicalParent)))
+                throw new InvalidOperationException("普通兄妹草稿的父母上下文无效。");
+            if (!original.IsOrdinaryChild && !original.IsOrdinarySibling && original.SecondParentId is not null)
                 throw new InvalidOperationException("第二位父母只允许用于普通子女草稿。");
             if ((original.ParentId is null) != (original.ParentKind is null) || (original.ParentKind is not null && original.ParentKind is not (PersonRelationshipKind.BiologicalParent or PersonRelationshipKind.AdoptiveParent or PersonRelationshipKind.HeirParent)))
                 throw new InvalidOperationException("父母关系类型无效。");
             if ((original.PartnerId is null) != (original.UnionKind is null) || (original.UnionKind is not null && !Enum.IsDefined(original.UnionKind.Value)) || (original.PartnerId is not null && (original.ParentId is not null || original.SiblingId is not null)))
                 throw new InvalidOperationException("婚配关系类型无效。");
             await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+            if (original.IsOrdinarySibling)
+            {
+                var parents = await ReadOrdinarySiblingParentsAsync(original.GenealogyId, original.SiblingId!.Value, cancellationToken);
+                if (!parents.Select(p => p.PersonId).SequenceEqual((original.Parents ?? []).Select(p => p.PersonId)) ||
+                    parents.FirstOrDefault()?.PersonId != original.ParentId || parents.Skip(1).FirstOrDefault()?.PersonId != original.SecondParentId)
+                    throw new InvalidOperationException("生父母候选已变化，请重新开始新增兄妹。");
+            }
             if (original.IsOrdinaryChild)
             {
                 var parent = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == original.GenealogyId && p.Id == original.ParentId, cancellationToken)
@@ -157,6 +195,7 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             {
                 var relationship = new PersonRelationship { GenealogyId = original.GenealogyId, PersonId = original.PersonId,
                     RelatedPersonId = parentId, Kind = original.ParentKind!.Value };
+                if (original.IsOrdinarySibling) await new PersonRelationshipValidator(context).ValidateForCreateAsync(relationship, cancellationToken);
                 try { context.PersonRelationships.Add(relationship); await context.SaveChangesAsync(cancellationToken); }
                 catch { context.Entry(relationship).State = EntityState.Detached; throw; }
             }
