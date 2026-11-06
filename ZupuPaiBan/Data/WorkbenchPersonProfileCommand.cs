@@ -119,7 +119,7 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             if (RecordedGenerationParser.TryParse(parent.RecordedGeneration, out var number) && number < 1000)
                 recorded = (number + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
-        var defaultSex = PersonSex.Unknown;
+        var defaultSex = parentId is null && partnerId is null && siblingId is null ? PersonSex.Male : PersonSex.Unknown;
         if (partnerId is Guid partner)
         {
             var existingPartner = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == partner, cancellationToken)

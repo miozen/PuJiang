@@ -104,6 +104,7 @@ public sealed class WorkbenchProfileWindow : Window
     internal IReadOnlyList<string> CanvasPartnersForTest(Guid id) => _canvasPartners.TryGetValue(id, out var partners) ? partners.Select(p => p.Label).ToArray() : [];
     internal IReadOnlyList<string> CanvasSiblingsForTest(Guid id) => _canvasSiblings.TryGetValue(id, out var siblings) ? siblings.Select(p => p.Name).ToArray() : [];
     internal Task BeginNewForTest(Guid? parentId = null, PersonRelationshipKind? kind = null) => BeginNewAsync(parentId, kind);
+    internal Task BeginInlineRootForTest(int generation) => BeginInlineRootAsync(generation);
     internal void SetGenerationForTest(string value) => _generation.Text = value;
     internal Task PollCanvasForTest() => PollCanvasAsync();
     internal Task ReopenCanvasForTest() => ReopenCanvasAsync();
@@ -136,7 +137,7 @@ public sealed class WorkbenchProfileWindow : Window
         DockPanel.SetDock(notice, Dock.Top); center.Children.Add(notice);
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         var create = new Button { Content = "新建人物", Padding = new Thickness(6) };
-        create.Click += async (_, _) => await BeginNewAsync(); tools.Children.Add(create);
+        create.Click += async (_, _) => await BeginInlineRootAsync(1); tools.Children.Add(create);
         var reopen = new Button { Content = "重新打开画布", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
         reopen.Click += async (_, _) => await ReopenCanvasAsync(); tools.Children.Add(reopen);
         DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
@@ -161,14 +162,14 @@ public sealed class WorkbenchProfileWindow : Window
         _genealogies.SelectionChanged += async (_, _) => await ChangeGenealogyAsync();
         _people.SelectionChanged += async (_, _) => await ChangePersonAsync();
         _name.TextChanged += (_, _) => UpdateDraft();
-        _generation.TextChanged += (_, _) => { if (!_updating) _generationEdited = true; UpdateDraft(); };
+        _generation.TextChanged += (_, _) => { if (!_updating) _generationEdited = true; UpdateDraft(); if (!_updating && IsInlineRootDraft() && _inlineNameEditor is null) RenderCanvas(); };
         _birth.TextChanged += (_, _) => { if (!_updating) _birthEdited = true; UpdateDraft(); };
         _death.TextChanged += (_, _) => { if (!_updating) _deathEdited = true; UpdateDraft(); };
         _biography.TextChanged += (_, _) => { if (!_updating) _biographyEdited = true; UpdateDraft(); };
         _sex.SelectionChanged += (_, _) => UpdateDraft();
         Loaded += async (_, _) => { try { await LoadGenealogiesAsync(); } finally { _loaded.TrySetResult(); } };
         _canvasMonitor.Tick += async (_, _) => await PollCanvasAsync();
-        _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas) return; e.Handled = true; ShowCanvasMenu(); };
+        _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas) return; e.Handled = true; ShowCanvasMenu(e.GetPosition(_canvas)); };
         _canvasScroll.PreviewMouseWheel += OnCanvasWheel;
         _canvas.MouseLeftButtonDown += OnCanvasDown; _canvas.MouseMove += OnCanvasMove; _canvas.MouseLeftButtonUp += OnCanvasUp;
         _canvas.LostMouseCapture += (_, _) => _panStart = null;
@@ -180,7 +181,7 @@ public sealed class WorkbenchProfileWindow : Window
                     e.Handled = true;
                 return;
             }
-            if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; await BeginNewAsync(); }
+            if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; await BeginInlineRootAsync(1); }
         };
         PreviewMouseDown += (_, e) =>
         {
@@ -245,10 +246,13 @@ public sealed class WorkbenchProfileWindow : Window
         var editor = _inlineNameEditor;
         var restoreFocus = editor?.IsKeyboardFocusWithin == true;
         _canvas.Children.Clear();
-        if (_canvasPeople.Count == 0) { RestoreInlineEditor(editor, restoreFocus); return; }
         var people = CanvasLayoutPeople().ToList();
         var nodeHeight = CanvasLayoutHeight();
         var edges = _canvasEdges.ToList();
+        var rootDraft = IsInlineRootDraft() && _session.Draft is { } pendingRoot && _person == pendingRoot.Original.PersonId ? pendingRoot : null;
+        if (rootDraft is not null && RecordedGenerationParser.TryParse(rootDraft.Values.RecordedGeneration, out var rootGeneration))
+            people.Add(new HorizontalLayoutPerson(rootDraft.Original.PersonId, rootGeneration - 1, RootOrder(), CanvasNodeWidth, nodeHeight));
+        if (people.Count == 0) { RestoreInlineEditor(editor, restoreFocus); return; }
         var childDraft = _session.Draft is { Original.IsOrdinaryChild: true, Original.IsNew: true } pending &&
             (_person == pending.Original.PersonId || (_inlineNameEditor is not null && _person == pending.Original.ParentId)) ? pending : null;
         var siblingDraft = _session.Draft is { Original.IsOrdinarySibling: true, Original.IsNew: true } siblingPending &&
@@ -294,7 +298,7 @@ public sealed class WorkbenchProfileWindow : Window
         {
             if (childDraft is not null && node.PersonId == childDraft.Original.PersonId && _person != node.PersonId) continue;
             if (siblingDraft is not null && node.PersonId == siblingDraft.Original.PersonId && _person != node.PersonId) continue;
-            var newDraft = childDraft ?? siblingDraft;
+            var newDraft = childDraft ?? siblingDraft ?? rootDraft;
             var person = _canvasPeople.TryGetValue(node.PersonId, out var existing) ? existing :
                 new ProjectionReadSession.PersonRow(node.PersonId, newDraft!.Values.Name, newDraft.Values.RecordedGeneration, null, newDraft.Values.Sex);
             var displayedName = _person == person.Id && _session.Draft is { } draft &&
@@ -369,6 +373,8 @@ public sealed class WorkbenchProfileWindow : Window
         RestoreInlineEditor(editor, restoreFocus);
     }
     private static string SexIcon(PersonSex sex) => sex switch { PersonSex.Male => "♂", PersonSex.Female => "♀", _ => "○" };
+    private bool IsInlineRootDraft() => _session.Draft?.Original is { IsNew: true, ParentId: null, PartnerId: null, SiblingId: null };
+    private int RootOrder() => _layoutOrders.Values.DefaultIfEmpty(-1).Max() + 1;
     private double CanvasLayoutHeight()
     {
         var count = _canvasPartners.Where(pair => pair.Key == _person || pair.Value.Any(p => p.Id == _person) ||
@@ -461,10 +467,12 @@ public sealed class WorkbenchProfileWindow : Window
         }
         return false;
     }
-    private void ShowCanvasMenu()
+    internal static int CanvasGenerationAt(double x) => Math.Clamp((int)Math.Floor(Math.Max(0, x - 20) / (CanvasNodeWidth + 64)) + 1, 1, 1000);
+    private void ShowCanvasMenu(Point position)
     {
         var menu = new ContextMenu(); var create = new MenuItem { Header = "新建人物" };
-        create.Click += async (_, _) => await BeginNewAsync(); menu.Items.Add(create); _canvas.ContextMenu = menu; menu.PlacementTarget = _canvas; menu.IsOpen = true;
+        var generation = CanvasGenerationAt(position.X);
+        create.Click += async (_, _) => await BeginInlineRootAsync(generation); menu.Items.Add(create); _canvas.ContextMenu = menu; menu.PlacementTarget = _canvas; menu.IsOpen = true;
     }
     private async Task BeginInlineSpouseFromCanvasAsync(Guid personId)
     {
@@ -617,6 +625,64 @@ public sealed class WorkbenchProfileWindow : Window
         {
             if (started && _session.Draft is { } draft) await CancelNewRelatedPersonAsync(genealogy, siblingId, draft, "兄妹");
             _status.Text = $"无法新增兄妹：{ex.Message}";
+        }
+        finally { IsEnabled = true; _busy = false; _inlineNameEditor?.Input.Focus(); }
+    }
+    private async Task BeginInlineRootAsync(int generation)
+    {
+        if (BlockWhileInlineEditing() || _busy || _genealogy is not Guid genealogy || _projection is null) return;
+        var previousPerson = _person; var projection = _projection; var revision = _projectionRevision;
+        _busy = true; IsEnabled = false; var started = false;
+        async Task CancelAsync(WorkbenchPersonDraft draft)
+        {
+            _busy = true; IsEnabled = false;
+            try
+            {
+                if (!ReferenceEquals(_session.Draft, draft)) return;
+                var result = previousPerson is Guid previous
+                    ? await _session.SelectAsync(genealogy, previous, DraftLeaveChoice.Discard)
+                    : await _session.LeaveAsync(DraftLeaveChoice.Discard);
+                if (result != DraftTransitionResult.Completed) { Report(result); RestoreSelection(); ShowDraft(); return; }
+                _person = previousPerson; RestoreSelection(); ShowDraft(); RenderCanvas(); _status.Text = "已取消新建人物，没有创建记录。";
+            }
+            catch (Exception ex) { _status.Text = $"取消后无法恢复人物：{ex.Message}"; }
+            finally { IsEnabled = true; _busy = false; }
+        }
+        try
+        {
+            await projection.ValidateAsync(revision);
+            if (!ReferenceEquals(projection, _projection) || !projection.IsCurrent(revision)) throw new InvalidOperationException("画布已失效，请重新打开。");
+            var prior = _session.Draft;
+            var result = await _session.BeginNewAsync(genealogy, Choose()); SyncSavedPerson(prior);
+            if (result != DraftTransitionResult.Completed) { Report(result); RestoreSelection(); ShowDraft(); return; }
+            started = true;
+            projection = _projection ?? throw new InvalidOperationException("画布已失效，请重新打开。"); revision = _projectionRevision;
+            await projection.ValidateAsync(revision);
+            if (!ReferenceEquals(projection, _projection) || !projection.IsCurrent(revision)) throw new InvalidOperationException("画布已失效，请重新打开。");
+            var draft = _session.Draft!;
+            draft.Values = draft.Values with { RecordedGeneration = generation.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            HorizontalLayoutNode Project()
+            {
+                var people = CanvasLayoutPeople().ToList();
+                people.Add(new HorizontalLayoutPerson(draft.Original.PersonId, generation - 1, RootOrder(), CanvasNodeWidth, CanvasLayoutHeight()));
+                return InlineNamePlacement.Project(people, _canvasEdges, people.Select(p => p.Id).ToHashSet(), draft.Original.PersonId);
+            }
+            var location = Project();
+            _status.Text = $"在第 {generation} 世输入姓名：Enter 或单击画布空白确认，Esc 取消；世代可在右侧修改，保存后才写入数据库。";
+            ShowInlineNameEditor(() => { var node = Project(); return new Point(node.X + 20, ProjectedNameTop(node)); }, "", name =>
+            {
+                draft.Values = draft.Values with { Name = name }; _person = draft.Original.PersonId;
+                _updating = true; _people.SelectedItem = null; _updating = false; ShowDraft();
+                _status.Text = "已创建人物草稿；世代可修改，请显式保存。";
+            }, RenderCanvas, async () => await CancelAsync(draft));
+            if (_inlineNameEditor is null) throw new InvalidOperationException("无法显示姓名输入框。");
+            RenderCanvas(); _canvas.Width = Math.Max(_canvas.Width, location.X + location.Width + 40);
+            _canvas.Height = Math.Max(_canvas.Height, location.Y + location.Height + 60);
+        }
+        catch (Exception ex)
+        {
+            if (started && _session.Draft is { } draft) await CancelAsync(draft);
+            _status.Text = $"无法新建人物：{ex.Message}";
         }
         finally { IsEnabled = true; _busy = false; _inlineNameEditor?.Input.Focus(); }
     }
@@ -896,7 +962,7 @@ public sealed class WorkbenchProfileWindow : Window
     private bool CanvasContainsIdentity(Guid id) => _canvasPeople.ContainsKey(id) || _canvasPartners.Values.Any(items => items.Any(item => item.Id == id));
     private async Task PollCanvasAsync()
     {
-        if (_busy || _canvasPolling || _canvasPeople.Count == 0 || _projection is null) return;
+        if (_busy || _canvasPolling || (_canvasPeople.Count == 0 && _inlineNameEditor is null && !IsInlineRootDraft()) || _projection is null) return;
         _canvasPolling = true;
         var projection = _projection; var revision = _projectionRevision;
         try { await projection.ValidateAsync(revision); }

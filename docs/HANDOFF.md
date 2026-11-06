@@ -1,5 +1,7 @@
 # 接力状态
 
+- **WB-B-05 验收（2026-11-06）：** 空谱或有谱画布右键按位置预填世代，工具栏/快捷键初始一世但右侧可改；原位姓名 Enter/空白确认、Esc 取消，默认男性，确认后即时选中显示，显式保存且不创建父母。空谱输入期间监测投影失效；不改数据库结构。Release 构建通过（0 错误、17 警告），定向 4/4、WPF 专项 24/24、日常回归 460/460 通过，均无失败或跳过。用户对隔离测试数据 `artifacts/wb-b05-review/data` 的空谱首节点体验反馈“符合预期”，列明范围已验收；不推断其他切片或阶段通过。`docs/references/` 用户素材保留本机。
+
 - **WB-B-04 验收（2026-11-06）：** 已接入普通兄妹原位新增，继承零、一或两位明确生父母，保留原人物关系并独立保留兄妹关系；未知或重复生父母角色阻止并提示，养父母/继嗣不自动继承。Enter/空白确认、Esc 取消，显式事务保存；不修改数据结构。Release 构建通过（0 错误、25 警告），定向 11/11、WPF 专项 23/23、日常回归 459/459 通过，均无失败或跳过。用户对隔离虚构库 `artifacts/wb-b04-review/data` 的新增兄妹体验反馈“符合预期”，列明范围已验收；不据此推断其他切片或整个阶段通过。历史多父母主线仍须复核，性别图标外观仍待后续优化。
 
 - **WB-B-03 复验过程（2026-11-06，已完成）：** 用户未接受配偶滚动隐藏，要求按 `docs/references/多配偶.png` 将配偶以姓名框和连线逐个显示，并在姓名前显示性别图标；确认原性别默认规则不变。修正版已在独立虚构库复验，用户确认“可以，就这样”；图标与参考图不符，用户同意留待后续视觉优化。修正版 Release 构建通过（25 条警告），定向测试 10/10、WPF 专项 23/23 通过；日常回归 453/453 通过；补充多配偶并存子女连线的测试后，重新构建和 WPF 专项 23/23 通过，最终日常回归 453/453 通过。多配偶并存子女连线已由专项测试覆盖；不在画布主体的配偶入口仍受原窗口限制。`docs/references/` 所有素材均保留本机。
@@ -27,7 +29,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** WB-B-04 列明范围已验收；原 P2-3 持久排序仍未接 UI，D-014 不变。
+- **Current Task：** WB-B-05 列明范围已验收；原 P2-3 持久排序仍未接 UI，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -61,7 +63,7 @@
 - **本轮持久排序存储：** 新增迁移、按图表的排序组及历史项、受保护独立会话的完整子女组捕获、事务保存和差异复核；图表修订条件更新，旧图表选线保存不覆盖排序，旧人物/关系身份保留供复核。成功保存后必须重新打开会话；数据或图表变化使旧结果失效。全库代数变化即使无关也保守要求复核；超过 2000、缺失世代或多父母拒绝捕获。此切片未接 UI、无父母兄妹或复杂关系。
 - **本轮存储本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、32 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 443/443 通过；单独筛选 `FullyQualifiedName~SiblingOrderStorageTests|FullyQualifiedName~LineageChartTests` 为 15/15 通过，均无跳过。覆盖旧库迁移、图表与谱隔离、并发竞争、取消与 SQLite 注入回滚、历史/ABA 复核、超过 100 人、图表选线保留、关闭排空及备份预检；EF `migrations has-pending-model-changes` 检查无差异。最初 EF 工具构建因 NuGet 网络不可用失败，使用本机缓存 `dotnet restore --ignore-failed-sources` 后恢复成功。未运行 UI、Performance 或人工验收，未查询远端 CI；未使用真实数据。
 - **本轮清单整理：** 用户要求暂停后续开发，并希望按序号查看 P2-3 已完成与剩余工作；已在[计划](CURRENT_PLAN.md#p2-3-有序切片清单)建立 14 项清单，6 项为所列有限范围已完成、8 项未完成，项数不等于工期比例。本轮仅改文档，`git diff --check`、相对链接和 14 项计数检查通过；未运行构建、应用测试或远端 CI。
-- **Exact Next Action：** 核对 WB-B-05 独立首节点前置条件，按单切片流程实施和验收。
+- **Exact Next Action：** 核对 WB-B-06 选中与联动前置条件，按单切片流程实施和验收。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -69,4 +71,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核对 WB-B-05 前置条件并按单切片流程实施验收，保留 P2-3 排序待办并遵守 D-014。`
+- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核对 WB-B-06 前置条件并按单切片流程实施验收，保留 P2-3 排序待办并遵守 D-014。`

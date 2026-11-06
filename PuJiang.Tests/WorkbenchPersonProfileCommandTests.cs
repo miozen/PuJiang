@@ -266,6 +266,22 @@ public class WorkbenchPersonProfileCommandTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Independent_person_failed_insert_preserves_draft_and_retry_has_no_parent()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "空谱" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id));
+        Assert.Equal(PersonSex.Male, draft.Values.Sex); draft.Values = draft.Values with { Name = "人物", RecordedGeneration = "7" };
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectIndependent BEFORE INSERT ON People BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using (var verify = db.CreateContext()) { Assert.Empty(await verify.People.ToListAsync()); Assert.Empty(await verify.PersonRelationships.ToListAsync()); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectIndependent"); await draft.SaveAsync(command);
+        await using var final = db.CreateContext(); Assert.Equal("7", (await final.People.SingleAsync()).RecordedGeneration); Assert.Empty(await final.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Editing_without_generation_change_preserves_unrecognized_source()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
