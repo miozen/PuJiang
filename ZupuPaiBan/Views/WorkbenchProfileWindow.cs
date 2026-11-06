@@ -34,6 +34,13 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly Button _applyRank = new() { Content = "设置显示顺序", Margin = new Thickness(0, 4, 0, 0) };
     private readonly TextBlock _recordedGeneration = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Gray };
     private readonly TextBlock _draftParents = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.SlateGray, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly ComboBox _unionList = new() { DisplayMemberPath = nameof(UnionOption.Label) };
+    private readonly ComboBox _unionKind = new() { ItemsSource = Enum.GetValues<FamilyUnionKind>() };
+    private readonly TextBox _unionStart = new(), _unionEnd = new(), _unionNote = new() { AcceptsReturn = true, Height = 55, TextWrapping = TextWrapping.Wrap };
+    private readonly Button _unionLocate = new() { Content = "定位配偶", Padding = new Thickness(6), Margin = new Thickness(0, 6, 4, 0) };
+    private readonly Button _unionAdd = new() { Content = "新增配偶", Padding = new Thickness(6), Margin = new Thickness(0, 6, 0, 0) };
+    private sealed record UnionOption(Guid Id, Guid? PartnerId, string Label);
+    private Guid? _unionOwner;
     private readonly TextBox _birth = new();
     private readonly TextBox _death = new();
     private readonly TextBox _biography = new() { AcceptsReturn = true, Height = 120, TextWrapping = TextWrapping.Wrap };
@@ -82,6 +89,14 @@ public sealed class WorkbenchProfileWindow : Window
     internal WorkbenchDraftSession SessionForTest => _session;
     internal string StatusForTest => _status.Text;
     internal string DraftParentsForTest => _draftParents.Text;
+    internal int UnionCountForTest => _unionList.Items.Count;
+    internal Guid? SelectedUnionForTest => (_unionList.SelectedItem as UnionOption)?.Id;
+    internal void SelectUnionForTest(int index) => _unionList.SelectedIndex = index;
+    internal void SetUnionForTest(FamilyUnionKind kind, string start, string end, string note)
+    { _unionKind.SelectedItem = kind; _unionStart.Text = start; _unionEnd.Text = end; _unionNote.Text = note; }
+    internal string UnionNoteForTest => _unionNote.Text;
+    internal bool UnionLocateEnabledForTest => _unionLocate.IsEnabled;
+    internal void LocateUnionForTest() => _unionLocate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
     internal Func<Guid, Task>? AfterCommitAsync { set => _afterCommit = value; }
     internal Task InitializeForTest() => _loaded.Task;
     internal async Task SelectGenealogyForTest(Guid id)
@@ -161,7 +176,14 @@ public sealed class WorkbenchProfileWindow : Window
         AddField(right, "逝世", _death); AddField(right, "生平", _biography);
         var save = new Button { Content = "保存档案", Margin = new Thickness(0, 12, 0, 0), Padding = new Thickness(8) };
         save.Click += async (_, _) => await SaveAsync(); right.Children.Add(save);
-        Grid.SetColumn(right, 2); columns.Children.Add(right); outer.Children.Add(columns); Content = outer;
+        var unionPanel = new StackPanel();
+        unionPanel.Children.Add(new TextBlock { Text = "按婚配记录稳定 ID 排列，不代表婚配先后。", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Gray });
+        AddField(unionPanel, "配偶／关系", _unionList); AddField(unionPanel, "关系类型", _unionKind);
+        AddField(unionPanel, "开始时间", _unionStart); AddField(unionPanel, "结束时间", _unionEnd); AddField(unionPanel, "备注", _unionNote);
+        var unionButtons = new StackPanel { Orientation = Orientation.Horizontal }; unionButtons.Children.Add(_unionLocate); unionButtons.Children.Add(_unionAdd); unionPanel.Children.Add(unionButtons);
+        right.Children.Add(new Expander { Header = "配偶与婚配资料", Content = unionPanel, Margin = new Thickness(0, 10, 0, 0) });
+        var rightScroll = new ScrollViewer { Content = right, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        Grid.SetColumn(rightScroll, 2); columns.Children.Add(rightScroll); outer.Children.Add(columns); Content = outer;
         _genealogies.SelectionChanged += async (_, _) => await ChangeGenealogyAsync();
         _people.SelectionChanged += async (_, _) => await ChangePersonAsync();
         _name.TextChanged += (_, _) => UpdateDraft();
@@ -170,6 +192,11 @@ public sealed class WorkbenchProfileWindow : Window
         _death.TextChanged += (_, _) => { if (!_updating) _deathEdited = true; UpdateDraft(); };
         _biography.TextChanged += (_, _) => { if (!_updating) _biographyEdited = true; UpdateDraft(); };
         _sex.SelectionChanged += (_, _) => UpdateDraft();
+        _unionList.SelectionChanged += (_, _) => ShowSelectedUnion();
+        _unionKind.SelectionChanged += (_, _) => UpdateUnionDraft();
+        _unionStart.TextChanged += (_, _) => UpdateUnionDraft(); _unionEnd.TextChanged += (_, _) => UpdateUnionDraft(); _unionNote.TextChanged += (_, _) => UpdateUnionDraft();
+        _unionLocate.Click += async (_, _) => { if (_unionList.SelectedItem is UnionOption { PartnerId: Guid id }) await SelectCanvasPersonAsync(id); };
+        _unionAdd.Click += async (_, _) => { if (_person is Guid id) await BeginInlineSpouseFromCanvasAsync(id); };
         Loaded += async (_, _) => { try { await LoadGenealogiesAsync(); } finally { _loaded.TrySetResult(); } };
         _canvasMonitor.Tick += async (_, _) => await PollCanvasAsync();
         _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas) return; e.Handled = true; ShowCanvasMenu(e.GetPosition(_canvas)); };
@@ -333,7 +360,7 @@ public sealed class WorkbenchProfileWindow : Window
             _canvasPartners.TryGetValue(person.Id, out var partners);
             var spouseDraft = _session.Draft is { Original.IsNew: true, Original.PartnerId: Guid draftPartnerId } pendingSpouse &&
                 draftPartnerId == person.Id && _person == pendingSpouse.Original.PersonId ? pendingSpouse : null;
-            var showPartners = _person == person.Id || partners?.Any(p => p.Id == _person) == true || spouseDraft is not null;
+            var showPartners = _person == person.Id || (_person is Guid selectedPerson && partners?.Any(p => p.Id == selectedPerson) == true) || spouseDraft is not null;
             var shownPartners = showPartners ? (partners ?? Array.Empty<PartnerOption>()).ToList() : new List<PartnerOption>();
             if (spouseDraft is not null) shownPartners.Add(new PartnerOption(spouseDraft.Original.PersonId, spouseDraft.Values.Name, FamilyUnionKind.Marriage, spouseDraft.Values.Sex));
             if (_person == person.Id && _canvasSiblings.TryGetValue(person.Id, out var siblings))
@@ -376,7 +403,7 @@ public sealed class WorkbenchProfileWindow : Window
             }
             for (var index = 0; index < shownPartners.Count; index++)
             {
-                var partner = shownPartners[index]; var selected = partner.Id == _person;
+                var partner = shownPartners[index]; var selected = partner.Id is Guid partnerIdentity && partnerIdentity == _person;
                 var top = ProjectedNameTop(node) + CanvasNameHeight + 8 + index * 38;
                 _canvas.Children.Add(new System.Windows.Shapes.Line { X1 = node.X + 20 + node.Width / 2, X2 = node.X + 20 + node.Width / 2,
                     Y1 = index == 0 ? ProjectedNameTop(node) + CanvasNameHeight : top - 8, Y2 = top,
@@ -400,7 +427,7 @@ public sealed class WorkbenchProfileWindow : Window
     private int RootOrder() => _layoutOrders.Values.DefaultIfEmpty(-1).Max() + 1;
     private double CanvasLayoutHeight()
     {
-        var count = _canvasPartners.Where(pair => pair.Key == _person || pair.Value.Any(p => p.Id == _person) ||
+        var count = _canvasPartners.Where(pair => pair.Key == _person || (_person is Guid selected && pair.Value.Any(p => p.Id == selected)) ||
             _session.Draft?.Original.PartnerId == pair.Key).Select(pair => pair.Value.Count + 1).DefaultIfEmpty(0).Max();
         return CanvasNodeHeight + count * 76;
     }
@@ -1050,6 +1077,8 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private void ShowDraft()
     {
+        var unionOwner = _session.Draft?.Original.PersonId;
+        var selectedUnion = unionOwner is not null && unionOwner == _unionOwner ? (_unionList.SelectedItem as UnionOption)?.Id : null;
         _updating = true;
         try
         {
@@ -1087,8 +1116,35 @@ public sealed class WorkbenchProfileWindow : Window
                 if (_sessionOrders.TryGetValue(group.Key, out var order) && order.TryGetValue(person, out var rank)) _displayRank.Text = rank.ToString();
             }
             _name.IsEnabled = _generation.IsEnabled = _sex.IsEnabled = _birth.IsEnabled = _death.IsEnabled = _biography.IsEnabled = v is not null;
+            var unions = _session.Draft?.Original.Unions ?? [];
+            _unionList.ItemsSource = unions.Select(u => new UnionOption(u.Id, u.PartnerId, $"{u.PartnerName}（{u.Values.Kind switch { FamilyUnionKind.Marriage => "婚配", FamilyUnionKind.Partnership => "伴侣", _ => "类型未详" }}）")).ToArray();
+            _unionOwner = unionOwner;
+            _unionList.SelectedItem = _unionList.Items.OfType<UnionOption>().FirstOrDefault(u => u.Id == selectedUnion);
+            if (_unionList.SelectedItem is null && unions.Count > 0) _unionList.SelectedIndex = 0;
+            _unionAdd.IsEnabled = _person is Guid current && _canvasPeople.ContainsKey(current) && _session.Draft?.Original.IsNew == false && !_incompleteUnions.Contains(current);
         }
         finally { _updating = false; }
+        ShowSelectedUnion();
+    }
+    private void ShowSelectedUnion()
+    {
+        if (_updating) return;
+        _updating = true;
+        try
+        {
+            var selected = _unionList.SelectedItem as UnionOption;
+            var values = selected is not null && _session.Draft is { } draft ? draft.UnionValues(selected.Id) : null;
+            _unionKind.SelectedItem = values?.Kind; _unionStart.Text = values?.StartDateText ?? ""; _unionEnd.Text = values?.EndDateText ?? ""; _unionNote.Text = values?.Note ?? "";
+            _unionKind.IsEnabled = _unionStart.IsEnabled = _unionEnd.IsEnabled = _unionNote.IsEnabled = values is not null;
+            _unionLocate.IsEnabled = selected?.PartnerId is Guid id && CanvasContainsIdentity(id);
+        }
+        finally { _updating = false; }
+    }
+    private void UpdateUnionDraft()
+    {
+        if (_updating || _session.Draft is not { } draft || _unionList.SelectedItem is not UnionOption selected || _unionKind.SelectedItem is not FamilyUnionKind kind) return;
+        static string? TextOrNull(string text) => string.IsNullOrWhiteSpace(text) ? null : text;
+        draft.SetUnionValues(selected.Id, new(kind, TextOrNull(_unionStart.Text), TextOrNull(_unionEnd.Text), TextOrNull(_unionNote.Text)));
     }
     private async Task LoadGenealogiesAsync()
     {

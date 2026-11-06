@@ -18,6 +18,43 @@ public class WorkbenchProfileWindowTests
 {
     [Fact]
     [Trait("Category", "UI")]
+    public async Task Union_profiles_remain_in_person_draft_until_save_and_support_selection()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var p = new Person { GenealogyId = g.Id, Name = "人物", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        var spouse = new Person { GenealogyId = g.Id, Name = "配偶", Sex = PersonSex.Female };
+        var union = new FamilyUnion { Id = Guid.Parse("10000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = p.Id, PartnerTwoId = spouse.Id, Kind = FamilyUnionKind.Marriage, Note = "原备注" };
+        var unknown = new FamilyUnion { Id = Guid.Parse("20000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = p.Id, Kind = FamilyUnionKind.Unknown };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(p, spouse); seed.FamilyUnions.AddRange(union, unknown); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(p.Id);
+            Assert.Equal(2, window.UnionCountForTest); Assert.True(window.UnionLocateEnabledForTest);
+            window.SetUnionForTest(FamilyUnionKind.Marriage, "1900", "", "修改备注"); Assert.True(window.SessionForTest.Draft!.IsDirty);
+            window.SelectUnionForTest(1); Assert.False(window.UnionLocateEnabledForTest); window.SetUnionForTest(FamilyUnionKind.Unknown, "", "", "未详备注");
+            window.SelectUnionForTest(0); Assert.Equal("修改备注", window.UnionNoteForTest);
+            await using (var before = db.CreateContext()) Assert.Equal("原备注", (await before.FamilyUnions.SingleAsync(u => u.Id == union.Id)).Note);
+            window.ChooseForTest = () => DraftLeaveChoice.Cancel; window.LocateUnionForTest(); await WaitUntil(() => window.StatusForTest.Contains("保留当前草稿"));
+            Assert.Equal(p.Id, window.SessionForTest.Draft!.Original.PersonId); Assert.True(window.SessionForTest.Draft.IsDirty);
+            Assert.Equal(union.Id, window.SelectedUnionForTest);
+            window.SelectUnionForTest(1); Assert.Equal(unknown.Id, window.SelectedUnionForTest);
+            await window.SaveForTest(); Assert.False(window.SessionForTest.Draft!.IsDirty); Assert.Equal(p.Id, window.SessionForTest.Draft.Original.PersonId);
+            Assert.Equal(unknown.Id, window.SelectedUnionForTest); Assert.Equal("未详备注", window.UnionNoteForTest);
+            window.SelectUnionForTest(0);
+            window.LocateUnionForTest(); await WaitUntil(() => window.SessionForTest.Draft?.Original.PersonId == spouse.Id);
+            window.SetNameForTest("配偶甲改名"); await window.SaveForTest();
+            Assert.Equal(spouse.Id, window.SessionForTest.Draft!.Original.PersonId);
+            Assert.Equal(System.Windows.Media.Brushes.DarkOrange, window.CanvasCardForTest(spouse.Id).Background);
+            Assert.DoesNotContain(window.CanvasForTest.Children.OfType<Border>(), b => Equals(b.ToolTip, "类型未详：未详") && b.Background == System.Windows.Media.Brushes.DarkOrange);
+            await window.ClearCanvasSelectionForTest(); Assert.Null(window.SessionForTest.Draft);
+            Assert.DoesNotContain(window.CanvasForTest.Children.OfType<Border>(), b => Equals(b.ToolTip, "类型未详：未详") && b.Background == System.Windows.Media.Brushes.DarkOrange);
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Equal("修改备注", (await verify.FamilyUnions.SingleAsync(u => u.Id == union.Id)).Note);
+        Assert.Equal("未详备注", (await verify.FamilyUnions.SingleAsync(u => u.Id == unknown.Id)).Note);
+    }
+    [Fact]
+    [Trait("Category", "UI")]
     public async Task Inline_spouse_save_failure_keeps_the_draft_and_rolls_back_then_can_retry()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync();

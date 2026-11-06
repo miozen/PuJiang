@@ -7,11 +7,13 @@ namespace ZupuPaiBan.Data;
 
 public sealed record WorkbenchProfileValues(string Name, PersonSex Sex, string? BirthDate, string? DeathDate, string? Biography, string? RecordedGeneration = null);
 public sealed record WorkbenchParentInfo(Guid PersonId, string Name, PersonSex Sex, PersonRelationshipKind Kind);
+public sealed record WorkbenchUnionValues(FamilyUnionKind Kind, string? StartDateText, string? EndDateText, string? Note);
+public sealed record WorkbenchUnionInfo(Guid Id, Guid? PartnerId, string PartnerName, WorkbenchUnionValues Values);
 public sealed record WorkbenchProfileSnapshot(Guid GenealogyId, Guid PersonId, long Generation, WorkbenchProfileValues Values,
     bool IsNew = false, Guid? ParentId = null, PersonRelationshipKind? ParentKind = null,
     Guid? PartnerId = null, FamilyUnionKind? UnionKind = null, Guid? SiblingId = null,
     Guid? SecondParentId = null, bool IsOrdinaryChild = false, PersonSex? ParentSex = null,
-    IReadOnlyList<WorkbenchParentInfo>? Parents = null, bool IsOrdinarySibling = false);
+    IReadOnlyList<WorkbenchParentInfo>? Parents = null, bool IsOrdinarySibling = false, IReadOnlyList<WorkbenchUnionInfo>? Unions = null);
 
 /// <summary>Single-person command boundary. No UI or view state is used as data authority.</summary>
 public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
@@ -94,8 +96,17 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
                 (relationship.Kind == PersonRelationshipKind.BiologicalParent || relationship.Kind == PersonRelationshipKind.AdoptiveParent || relationship.Kind == PersonRelationshipKind.HeirParent)
             orderby relationship.Id
             select new WorkbenchParentInfo(related.Id, related.Name, related.Sex, relationship.Kind)).ToListAsync(cancellationToken);
+        var records = await context.FamilyUnions.AsNoTracking().Where(u => u.GenealogyId == genealogyId && (u.PartnerOneId == personId || u.PartnerTwoId == personId)).ToListAsync(cancellationToken);
+        var unions = new List<WorkbenchUnionInfo>();
+        foreach (var union in records.OrderBy(u => u.Kind == FamilyUnionKind.Marriage && u.PartnerTwoId is not null ? 0 : 1).ThenBy(u => u.Id.ToString("D"), StringComparer.Ordinal))
+        {
+            var other = union.PartnerOneId == personId ? union.PartnerTwoId : union.PartnerOneId;
+            var partner = other is Guid id ? await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.Id == id && p.GenealogyId == genealogyId, cancellationToken) : null;
+            if (other is not null && partner is null) throw new InvalidOperationException("婚配对方不存在或不属于当前族谱。");
+            unions.Add(new(union.Id, other, partner?.Name ?? "未详", new(union.Kind, union.StartDateText, union.EndDateText, union.Note)));
+        }
         var snapshot = new WorkbenchProfileSnapshot(genealogyId, personId, generation,
-            new(person.Name, person.Sex, person.BirthDateText, person.DeathDateText, person.Biography, person.RecordedGeneration), Parents: parents.AsReadOnly());
+            new(person.Name, person.Sex, person.BirthDateText, person.DeathDateText, person.Biography, person.RecordedGeneration), Parents: parents.AsReadOnly(), Unions: unions.AsReadOnly());
         await transaction.CommitAsync(cancellationToken);
         return snapshot;
     }
@@ -139,7 +150,7 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
         return new(genealogyId, Guid.NewGuid(), generation, new("", defaultSex, null, null, null, recorded), true, parentId, parentKind, partnerId, unionKind, siblingId);
     }
 
-    public async Task SaveAsync(WorkbenchProfileSnapshot original, WorkbenchProfileValues values, CancellationToken cancellationToken = default)
+    public async Task SaveAsync(WorkbenchProfileSnapshot original, WorkbenchProfileValues values, CancellationToken cancellationToken = default, IReadOnlyDictionary<Guid, WorkbenchUnionValues>? unionChanges = null)
     {
         var name = PersonProfileRules.Validate(values.Name, values.Sex, values.BirthDate, values.DeathDate, values.Biography);
         if (values.RecordedGeneration?.Length > 100) throw new InvalidOperationException("谱载世代不能超过 100 个字符。");
@@ -148,6 +159,7 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             throw new InvalidOperationException("请选择 1 至 1000 的世代。");
         if (original.IsNew)
         {
+            if (unionChanges?.Count > 0) throw new InvalidOperationException("新人物尚无可修改的既有婚配。");
             if (original.IsOrdinaryChild && (original.ParentId is null || original.ParentKind != PersonRelationshipKind.BiologicalParent ||
                 original.SiblingId is not null || original.PartnerId is not null || original.SecondParentId == original.ParentId))
                 throw new InvalidOperationException("普通子女草稿的父母上下文无效。");
@@ -225,13 +237,29 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             await transaction.CommitAsync(cancellationToken);
             return;
         }
-        // One atomic statement scopes identity and tests the protected generation at the write itself.
+        await using var updateTransaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var count = await context.People.Where(p => p.GenealogyId == original.GenealogyId && p.Id == original.PersonId)
             .Where(p => context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).Any(v => v == original.Generation))
             .ExecuteUpdateAsync(s => s.SetProperty(p => p.Name, name).SetProperty(p => p.Sex, values.Sex)
                 .SetProperty(p => p.BirthDateText, values.BirthDate).SetProperty(p => p.DeathDateText, values.DeathDate)
                 .SetProperty(p => p.Biography, values.Biography).SetProperty(p => p.RecordedGeneration, values.RecordedGeneration), cancellationToken);
         if (count != 1) throw new InvalidOperationException("人物或数据版本已变化，请重新读取后确认。");
+        foreach (var (id, changed) in unionChanges ?? new Dictionary<Guid, WorkbenchUnionValues>())
+        {
+            if ((original.Unions ?? []).All(u => u.Id != id)) throw new InvalidOperationException("婚配不属于当前人物草稿。");
+            if (!Enum.IsDefined(changed.Kind) || changed.StartDateText?.Length > 100 || changed.EndDateText?.Length > 100 || changed.Note?.Length > 2000)
+                throw new InvalidOperationException("婚配类型无效或资料超过允许长度。");
+            var union = await context.FamilyUnions.AsNoTracking().SingleOrDefaultAsync(u => u.Id == id && u.GenealogyId == original.GenealogyId &&
+                (u.PartnerOneId == original.PersonId || u.PartnerTwoId == original.PersonId), cancellationToken)
+                ?? throw new InvalidOperationException("婚配已变化或不属于当前人物。");
+            if (await context.FamilyUnions.AsNoTracking().AnyAsync(u => u.Id != id && u.GenealogyId == original.GenealogyId && u.PartnerOneId == union.PartnerOneId && u.PartnerTwoId == union.PartnerTwoId && u.Kind == changed.Kind, cancellationToken))
+                throw new InvalidOperationException("相同婚配关系已经存在。");
+            var updated = await context.FamilyUnions.Where(u => u.Id == id && u.GenealogyId == original.GenealogyId && (u.PartnerOneId == original.PersonId || u.PartnerTwoId == original.PersonId))
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.Kind, changed.Kind).SetProperty(u => u.StartDateText, changed.StartDateText)
+                    .SetProperty(u => u.EndDateText, changed.EndDateText).SetProperty(u => u.Note, changed.Note), cancellationToken);
+            if (updated != 1) throw new InvalidOperationException("婚配已变化，请重新读取。");
+        }
+        await updateTransaction.CommitAsync(cancellationToken);
     }
 }
 
@@ -242,27 +270,40 @@ public sealed class WorkbenchPersonDraft(WorkbenchProfileSnapshot original)
     private WorkbenchProfileValues _values = original.Values;
     private bool _saving;
     private bool _isSaved;
+    private readonly Dictionary<Guid, WorkbenchUnionValues> _unionChanges = new();
     public WorkbenchProfileSnapshot Original { get; } = original;
     public WorkbenchProfileValues Values
     {
         get { lock (_gate) return _values; }
         set { lock (_gate) { if (_saving || _isSaved) throw new InvalidOperationException("保存中或已保存的草稿不能修改。"); _values = value; } }
     }
-    public bool IsDirty { get { lock (_gate) return !_isSaved && (Original.IsNew || _values != Original.Values); } }
+    public bool IsDirty { get { lock (_gate) return !_isSaved && (Original.IsNew || _values != Original.Values || _unionChanges.Count != 0); } }
+    public WorkbenchUnionValues UnionValues(Guid id) { lock (_gate) return _unionChanges.GetValueOrDefault(id) ?? (Original.Unions ?? []).Single(u => u.Id == id).Values; }
+    public void SetUnionValues(Guid id, WorkbenchUnionValues values)
+    {
+        lock (_gate)
+        {
+            if (_saving || _isSaved) throw new InvalidOperationException("保存中或已保存的草稿不能修改。");
+            var original = (Original.Unions ?? []).SingleOrDefault(u => u.Id == id) ?? throw new InvalidOperationException("婚配不属于当前草稿。");
+            if (values == original.Values) _unionChanges.Remove(id); else _unionChanges[id] = values;
+        }
+    }
     public bool IsSaved { get { lock (_gate) return _isSaved; } }
 
     public async Task SaveAsync(WorkbenchPersonProfileCommand command, CancellationToken cancellationToken = default)
     {
         WorkbenchProfileValues values;
+        Dictionary<Guid, WorkbenchUnionValues> unions;
         lock (_gate)
         {
             if (_isSaved || _saving) throw new InvalidOperationException("草稿正在保存或已保存，请重新读取人物。");
             _saving = true;
             values = _values;
+            unions = new(_unionChanges);
         }
         try
         {
-            await command.SaveAsync(Original, values, cancellationToken);
+            await command.SaveAsync(Original, values, cancellationToken, unions);
             lock (_gate) _isSaved = true;
         }
         finally { lock (_gate) _saving = false; }

@@ -7,6 +7,41 @@ namespace PuJiang.Tests;
 
 public class WorkbenchPersonProfileCommandTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Union_profile_edits_are_scoped_atomic_and_preserve_child_parentage()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var other = new Genealogy { Name = "别谱" };
+        var p = new Person { GenealogyId = g.Id, Name = "人物", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        var spouse = new Person { GenealogyId = g.Id, Name = "配偶", Sex = PersonSex.Female };
+        var child = new Person { GenealogyId = g.Id, Name = "子女", RecordedGeneration = "2" };
+        var foreign = new Person { GenealogyId = other.Id, Name = "异谱" };
+        var union = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = p.Id, PartnerTwoId = spouse.Id, Kind = FamilyUnionKind.Marriage, Note = "原备注" };
+        var unknown = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = p.Id, PartnerTwoId = null, Kind = FamilyUnionKind.Unknown };
+        var foreignUnion = new FamilyUnion { GenealogyId = other.Id, PartnerOneId = foreign.Id, Kind = FamilyUnionKind.Marriage };
+        var relation = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = spouse.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.AddRange(g, other); seed.People.AddRange(p, spouse, child, foreign); seed.FamilyUnions.AddRange(union, unknown, foreignUnion); seed.PersonRelationships.Add(relation); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, p.Id)); Assert.Equal(2, draft.Original.Unions!.Count);
+        Assert.Contains(draft.Original.Unions, u => u.Id == unknown.Id && u.PartnerId == null && u.PartnerName == "未详");
+        Assert.Throws<InvalidOperationException>(() => draft.SetUnionValues(foreignUnion.Id, new(FamilyUnionKind.Marriage, null, null, null)));
+        draft.SetUnionValues(union.Id, new(FamilyUnionKind.Partnership, "开始", "结束", "新备注"));
+        draft.SetUnionValues(unknown.Id, new(FamilyUnionKind.Unknown, null, null, "未详备注")); draft.Values = draft.Values with { Name = "改名" };
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectUnionProfile BEFORE UPDATE ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'injected'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using (var check = db.CreateContext()) { Assert.Equal("人物", (await check.People.SingleAsync(x => x.Id == p.Id)).Name); Assert.Equal("原备注", (await check.FamilyUnions.SingleAsync(x => x.Id == union.Id)).Note); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectUnionProfile"); await draft.SaveAsync(command);
+        await using var verify = db.CreateContext(); var saved = await verify.FamilyUnions.SingleAsync(u => u.Id == union.Id);
+        Assert.Equal(FamilyUnionKind.Partnership, saved.Kind); Assert.Equal("开始", saved.StartDateText); Assert.Equal("结束", saved.EndDateText); Assert.Equal("新备注", saved.Note);
+        Assert.Equal("未详备注", (await verify.FamilyUnions.SingleAsync(u => u.Id == unknown.Id)).Note);
+        Assert.Equal(relation.Id, (await verify.PersonRelationships.SingleAsync()).Id);
+        Assert.Equal(FamilyUnionKind.Marriage, (await verify.FamilyUnions.SingleAsync(u => u.Id == foreignUnion.Id)).Kind);
+        var stale = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, p.Id)); stale.SetUnionValues(union.Id, new(FamilyUnionKind.Unknown, null, null, "过期"));
+        await using (var external = db.CreateContext()) await external.People.Where(x => x.Id == p.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Name, "外部"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => stale.SaveAsync(command)); Assert.True(stale.IsDirty);
+        await using var final = db.CreateContext(); Assert.Equal("新备注", (await final.FamilyUnions.SingleAsync(u => u.Id == union.Id)).Note);
+    }
     [Theory]
     [InlineData(0)] [InlineData(1)] [InlineData(2)]
     [Trait("Category", "Integration")]
