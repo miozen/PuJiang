@@ -9,6 +9,51 @@ public class WorkbenchPersonProfileCommandTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Spouse_correction_and_addition_keep_existing_children_parentage_after_reload()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "虚构谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male };
+        var a = new Person { GenealogyId = g.Id, Name = "配偶甲", Sex = PersonSex.Female };
+        var b = new Person { GenealogyId = g.Id, Name = "配偶乙", Sex = PersonSex.Female };
+        var childA = new Person { GenealogyId = g.Id, Name = "子甲" };
+        var childB = new Person { GenealogyId = g.Id, Name = "子乙" };
+        var unionA = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = a.Id, Kind = FamilyUnionKind.Marriage };
+        var unionB = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = b.Id, Kind = FamilyUnionKind.Marriage };
+        var relations = new[] {
+            new PersonRelationship { GenealogyId = g.Id, PersonId = childA.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent },
+            new PersonRelationship { GenealogyId = g.Id, PersonId = childA.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.BiologicalParent, Note = "原谱记载", SourceCitation = "虚构来源" },
+            new PersonRelationship { GenealogyId = g.Id, PersonId = childB.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent },
+            new PersonRelationship { GenealogyId = g.Id, PersonId = childB.Id, RelatedPersonId = b.Id, Kind = PersonRelationshipKind.BiologicalParent }
+        };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(parent, a, b, childA, childB); seed.FamilyUnions.AddRange(unionA, unionB); seed.PersonRelationships.AddRange(relations); await seed.SaveChangesAsync(); }
+        async Task AssertParentage()
+        {
+            await using var verify = db.CreateContext();
+            var actual = await verify.PersonRelationships.AsNoTracking().OrderBy(r => r.Id).ToListAsync();
+            Assert.Equal(relations.OrderBy(r => r.Id).Select(r => (r.Id, r.GenealogyId, r.PersonId, r.RelatedPersonId, r.Kind, r.IsPreferredForLineage, r.Note, r.SourceCitation)),
+                actual.Select(r => (r.Id, r.GenealogyId, r.PersonId, r.RelatedPersonId, r.Kind, r.IsPreferredForLineage, r.Note, r.SourceCitation)));
+        }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var rename = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, a.Id));
+        rename.Values = rename.Values with { Name = "配偶甲更正" }; await rename.SaveAsync(command);
+        await AssertParentage();
+        await using (var verify = db.CreateContext()) { Assert.Equal("配偶甲更正", (await verify.People.SingleAsync(p => p.Id == a.Id)).Name); var saved = await verify.FamilyUnions.SingleAsync(u => u.Id == unionA.Id); Assert.Equal((unionA.PartnerOneId, unionA.PartnerTwoId), (saved.PartnerOneId, saved.PartnerTwoId)); }
+        var edit = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, parent.Id));
+        edit.SetUnionValues(unionB.Id, new(FamilyUnionKind.Marriage, "开始", "结束", "更正资料")); await edit.SaveAsync(command);
+        await AssertParentage();
+        var added = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id, partnerId: parent.Id, unionKind: FamilyUnionKind.Marriage));
+        added.Values = added.Values with { Name = "配偶丙" }; await added.SaveAsync(command);
+        await AssertParentage();
+        await using var final = db.CreateContext();
+        Assert.Equal(3, await final.FamilyUnions.CountAsync());
+        var edited = await final.FamilyUnions.SingleAsync(u => u.Id == unionB.Id);
+        Assert.Equal((unionB.PartnerOneId, unionB.PartnerTwoId, "开始", "结束", "更正资料"), (edited.PartnerOneId, edited.PartnerTwoId, edited.StartDateText, edited.EndDateText, edited.Note));
+        Assert.True(await final.People.AnyAsync(p => p.Id == added.Original.PersonId && p.Name == "配偶丙"));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Union_profile_edits_are_scoped_atomic_and_preserve_child_parentage()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync();

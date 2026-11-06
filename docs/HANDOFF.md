@@ -1,5 +1,7 @@
 # 接力状态
 
+- **WB-C-04 验收（2026-11-06）：** 核对 C-01、C-03 已验收及现有实现后，新增隔离 SQLite 集成回归：两位配偶和各自子女场景依次更正配偶姓名、编辑婚配资料、添加配偶，每次通过新上下文核对全部父母关系 ID、端点、类型及资料快照；验证姓名、婚配身份和重载。未修改业务代码或数据库结构，也未新增解除婚配。Windows .NET 10.0.403 Release 构建通过（0 错误、26 警告）；日常测试 483/483、工作台 WPF 专项 36/36 通过，均无失败或跳过。依赖还原成功但 NuGet 漏洞源不可访问，已有 ImageSharp 安全告警。独立虚构库 `artifacts/wb-c04-review/data` 以 `PUJIANG_TEST_DATA_ROOT` 打开工作台供验收，用户反馈“验收通过”；不推断用户逐项操作了全部建议场景。未使用真实数据；本轮远端 CI 未查询。
+
 - **2026-11-06 用户澄清与跨机接力：** 配偶录入的人物姓名等资料有误时，更正该人物信息；姓名修改不应改变人物 ID、婚配或已有子女生父母关系。用户明确不把此类操作称为“解除婚配”，WB-C-04 不新增解除/删除婚配需求；旧功能保留，特殊关系移除语义须另行明确。人物右键菜单应至少包含编辑 Alt+H、添加子女 Alt+M、添加配偶 Alt+P、添加兄妹 Alt+N、添加空节点子菜单、排序上移 Alt+<、排序下移 Alt+>、设置分房/题行子菜单和 Delete 删除；编辑目标含此前列出的人物资料及照片。已记录至 [D-026](DECISIONS.md#d-026--专业族谱编修工作台与显式草稿)、[工作台设计](WORKBENCH_DESIGN.md)和 [V1 切片](WORKBENCH_V1_SLICES.md)。这些是后续目标，尚未实现；Alt+H 取代本任务最初定位父节点的候选键，实际按键与冲突须实施前核验。本轮按用户要求只改文档，不修改业务代码或数据库，未运行应用测试；仅执行文档差异检查。`docs/references/` 用户素材保留本机、未纳入 Git，因此另一台电脑不会通过 Git 获得这些素材；跨机先核对分支、工作区及实际远端再同步，勿覆盖本机修改。
 
 - **WB-C-03 验收（2026-11-06）：** 在所选父母右侧生物子女信息行更正或清空另一位生父母，仅明确同谱夫妻候选；变更进入当前人物草稿，与资料和婚配修改共同事务保存。角色不明、同角色多候选或旧关系含备注/来源/主线标记时阻止并提示，不改变子女 ID、后代及收养/继嗣关系；不改数据库结构。Release 构建通过（0 错误、17 警告），定向 12/12、命令/草稿集成 37/37、日常 482/482、串行 WPF 专项 37/37 通过。首次并行 WPF 回归 36/37（配偶用例失败，简略输出未包含原因），该用例单项 3/3 及完整串行复跑均通过，不推断首次失败原因。用户对隔离虚构谱 `artifacts/wb-c03-review/data` 的子女父母更正体验反馈“功能是实现了。应该可以了”。`docs/references/` 用户素材留在本机。
@@ -47,7 +49,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** WB-C-03 列明范围已验收；原 P2-3 持久排序仍未接 UI，D-014 不变。
+- **Current Task：** WB-C-04 列明范围已验收，下一步 WB-C-05 关系阶段回归；原 P2-3 持久排序仍未接 UI，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -81,7 +83,7 @@
 - **本轮持久排序存储：** 新增迁移、按图表的排序组及历史项、受保护独立会话的完整子女组捕获、事务保存和差异复核；图表修订条件更新，旧图表选线保存不覆盖排序，旧人物/关系身份保留供复核。成功保存后必须重新打开会话；数据或图表变化使旧结果失效。全库代数变化即使无关也保守要求复核；超过 2000、缺失世代或多父母拒绝捕获。此切片未接 UI、无父母兄妹或复杂关系。
 - **本轮存储本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、32 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 443/443 通过；单独筛选 `FullyQualifiedName~SiblingOrderStorageTests|FullyQualifiedName~LineageChartTests` 为 15/15 通过，均无跳过。覆盖旧库迁移、图表与谱隔离、并发竞争、取消与 SQLite 注入回滚、历史/ABA 复核、超过 100 人、图表选线保留、关闭排空及备份预检；EF `migrations has-pending-model-changes` 检查无差异。最初 EF 工具构建因 NuGet 网络不可用失败，使用本机缓存 `dotnet restore --ignore-failed-sources` 后恢复成功。未运行 UI、Performance 或人工验收，未查询远端 CI；未使用真实数据。
 - **本轮清单整理：** 用户要求暂停后续开发，并希望按序号查看 P2-3 已完成与剩余工作；已在[计划](CURRENT_PLAN.md#p2-3-有序切片清单)建立 14 项清单，6 项为所列有限范围已完成、8 项未完成，项数不等于工期比例。本轮仅改文档，`git diff --check`、相对链接和 14 项计数检查通过；未运行构建、应用测试或远端 CI。
-- **Exact Next Action：** 在接力电脑核对工作区与远端后，核对 WB-C-04 配偶姓名更正、添加配偶及既有子女生父母归属稳定性的前置条件，按单切片流程实施与验收；不新增解除婚配操作。
+- **Exact Next Action：** 开展 WB-C-05 关系阶段回归，核对 C-01–04 前置与父母、配偶、子女关系及草稿的持久化全链路，验证并发、回滚和用户体验；遵守 D-014。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -89,4 +91,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给接力电脑的 Codex：`读取最新 HANDOFF、V1 切片和相关契约；核对工作区及远端，检查 WB-C-04 前置条件，验证配偶姓名更正和新增配偶不改变已有子女生父母关系，按单切片流程实施验收；遵守 D-014。`
+- 可直接交给接力电脑的 Codex：`读取最新 HANDOFF、V1 切片和相关契约，开展 WB-C-05 关系阶段回归；使用隔离数据，验证关系与草稿、并发和回滚，并协助用户验收；遵守 D-014。`
