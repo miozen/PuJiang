@@ -91,6 +91,8 @@ public class WorkbenchProfileWindowTests
             var spouseCard = window.CanvasForTest.Children.OfType<Border>().Single(b => Equals(b.Tag, createdId));
             Assert.Contains("新配偶", Assert.IsType<TextBlock>(spouseCard.Child).Text);
             Assert.Equal(System.Windows.Media.Brushes.DarkOrange, spouseCard.Background);
+            window.SetNameForTest("配偶草稿"); Assert.EndsWith("配偶草稿", Assert.IsType<TextBlock>(window.CanvasCardForTest(createdId).Child).Text);
+            window.SetNameForTest("新配偶");
             await using (var verify = db.CreateContext()) { Assert.Equal(3, await verify.People.CountAsync()); Assert.Single(await verify.FamilyUnions.ToListAsync()); }
             await window.SaveForTest(); Assert.Equal(createdId, window.SessionForTest.Draft!.Original.PersonId);
             Assert.Contains("婚配：已有配偶", window.CanvasPartnersForTest(current.Id)); Assert.Contains("婚配：新配偶", window.CanvasPartnersForTest(current.Id));
@@ -195,6 +197,11 @@ public class WorkbenchProfileWindowTests
             Assert.Equal(Canvas.GetTop(parentCard) + parentCard.Height / 2, previewLine.Points[0].Y);
             editor.Input.Text = "新子女"; Key(editor, System.Windows.Input.Key.Enter);
             Assert.Equal("新子女", window.SessionForTest.Draft!.Values.Name); Assert.NotNull(window.CanvasCardForTest(childId));
+            window.SetNameForTest("子女草稿"); Assert.EndsWith("子女草稿", Assert.IsType<TextBlock>(window.CanvasCardForTest(childId).Child).Text);
+            window.SetSexForTest(PersonSex.Female); Assert.StartsWith("♀", Assert.IsType<TextBlock>(window.CanvasCardForTest(childId).Child).Text);
+            window.SetNameForTest("新子女"); window.SetSexForTest(PersonSex.Male);
+            window.SetGenerationForTest("3"); Assert.Equal(20 + 2 * 164, Canvas.GetLeft(window.CanvasCardForTest(childId)));
+            window.SetGenerationForTest("2");
             Assert.Contains(parentSex == PersonSex.Male ? "生父：所选父母" : "生母：所选父母", window.DraftParentsForTest);
             Assert.Contains(parentSex == PersonSex.Male ? "生母：配偶甲" : "生父：配偶甲", window.DraftParentsForTest);
             await using (var verify = db.CreateContext()) Assert.Equal(3, await verify.People.CountAsync());
@@ -453,6 +460,7 @@ public class WorkbenchProfileWindowTests
             canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent });
             canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
             Assert.Contains("独立人物", Assert.IsType<TextBlock>(window.CanvasCardForTest(rootId).Child).Text);
+            window.SetNameForTest("人物草稿"); Assert.EndsWith("人物草稿", Assert.IsType<TextBlock>(window.CanvasCardForTest(rootId).Child).Text); window.SetNameForTest("独立人物");
             await using (var check = db.CreateContext()) Assert.Empty(await check.People.ToListAsync());
             window.SetGenerationForTest("4"); Assert.True(Canvas.GetLeft(window.CanvasCardForTest(rootId)) >= 3 * 164);
             await window.SaveForTest(); Assert.Equal(4, window.CanvasColumnForTest(rootId)); Assert.Equal(rootId, window.SessionForTest.Draft!.Original.PersonId);
@@ -461,6 +469,78 @@ public class WorkbenchProfileWindowTests
         await using var verify = db.CreateContext(); var person = await verify.People.SingleAsync();
         Assert.Equal(rootId, person.Id); Assert.Equal("4", person.RecordedGeneration); Assert.Equal(PersonSex.Male, person.Sex);
         Assert.Empty(await verify.PersonRelationships.ToListAsync());
+    }
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Selected_existing_person_updates_projection_and_save_keeps_visual_anchor()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male, RecordedGeneration = "7" };
+        var child = new Person { GenealogyId = g.Id, Name = "子", Sex = PersonSex.Male, RecordedGeneration = "8" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(parent, child); seed.PersonRelationships.Add(new() { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent }); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(child.Id);
+            window.UpdateLayout(); var scroll = window.CanvasScrollForTest; scroll.ScrollToHorizontalOffset(650); scroll.UpdateLayout();
+            window.SetNameForTest("更名草稿"); window.SetSexForTest(PersonSex.Female);
+            Assert.Equal("♀ 更名草稿", Assert.IsType<TextBlock>(window.CanvasCardForTest(child.Id).Child).Text);
+            window.SetGenerationForTest("9"); Assert.Equal(20 + 8 * 164, Canvas.GetLeft(window.CanvasCardForTest(child.Id)));
+            Assert.Single(window.CanvasForTest.Children.OfType<System.Windows.Shapes.Polyline>());
+            var before = Canvas.GetLeft(window.CanvasCardForTest(child.Id)) - scroll.HorizontalOffset;
+            await window.SaveForTest(); scroll.UpdateLayout();
+            Assert.Equal(child.Id, window.SessionForTest.Draft!.Original.PersonId);
+            Assert.Equal(before, Canvas.GetLeft(window.CanvasCardForTest(child.Id)) - scroll.HorizontalOffset, 1);
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); var saved = await verify.People.SingleAsync(p => p.Id == child.Id);
+        Assert.Equal("更名草稿", saved.Name); Assert.Equal(PersonSex.Female, saved.Sex); Assert.Equal("9", saved.RecordedGeneration);
+        Assert.Single(await verify.PersonRelationships.ToListAsync());
+    }
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Blank_canvas_deselection_respects_cancel_discard_and_save()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var person = new Person { GenealogyId = g.Id, Name = "原名", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(person); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(person.Id);
+            window.SetNameForTest("未保存"); window.ChooseForTest = () => DraftLeaveChoice.Cancel;
+            var canvas = window.CanvasForTest;
+            canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent });
+            canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+            await WaitUntil(() => window.StatusForTest.Contains("保留当前草稿"));
+            Assert.Equal(person.Id, window.SessionForTest.Draft!.Original.PersonId); Assert.Equal("未保存", window.SessionForTest.Draft.Values.Name);
+            window.ChooseForTest = () => DraftLeaveChoice.Discard; await window.ClearCanvasSelectionForTest(); Assert.Null(window.SessionForTest.Draft);
+            Assert.EndsWith("原名", Assert.IsType<TextBlock>(window.CanvasCardForTest(person.Id).Child).Text);
+            await window.SelectCanvasForTest(person.Id); window.SetNameForTest("已保存"); window.ChooseForTest = () => DraftLeaveChoice.Save;
+            await window.ClearCanvasSelectionForTest(); Assert.Null(window.SessionForTest.Draft);
+            Assert.EndsWith("已保存", Assert.IsType<TextBlock>(window.CanvasCardForTest(person.Id).Child).Text);
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Equal("已保存", (await verify.People.SingleAsync()).Name);
+    }
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Invalidated_empty_canvas_does_not_redraw_stale_root_draft()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "空谱" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id);
+            await window.BeginInlineRootForTest(1); var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); editor.Input.Text = "未保存";
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            var id = window.SessionForTest.Draft!.Original.PersonId;
+            await using (var other = db.CreateContext()) { other.People.Add(new Person { GenealogyId = g.Id, Name = "外部", RecordedGeneration = "1" }); await other.SaveChangesAsync(); }
+            await window.PollCanvasForTest(); Assert.Contains("草稿保留", window.StatusForTest);
+            window.SetGenerationForTest("2"); Assert.DoesNotContain(window.CanvasForTest.Children.OfType<Border>(), b => Equals(b.Tag, id));
+            Assert.Equal("未保存", window.SessionForTest.Draft!.Values.Name); Assert.True(window.SessionForTest.Draft.IsDirty);
+            await window.SaveForTest(); Assert.Contains("未保存", window.StatusForTest); Assert.True(window.SessionForTest.Draft.IsDirty);
+            window.ChooseForTest = () => DraftLeaveChoice.Discard; Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Single(await verify.People.ToListAsync());
     }
     [Fact]
     [Trait("Category", "UI")]
@@ -556,7 +636,10 @@ public class WorkbenchProfileWindowTests
             siblingId = window.SessionForTest.Draft!.Original.PersonId; Assert.Equal("2", window.SessionForTest.Draft.Values.RecordedGeneration);
             editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); editor.Input.Text = "兄妹";
             editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-            Assert.Equal(PersonSex.Male, window.SessionForTest.Draft.Values.Sex); await window.SaveForTest();
+            Assert.Equal(PersonSex.Male, window.SessionForTest.Draft.Values.Sex);
+            window.SetNameForTest("兄妹草稿"); Assert.EndsWith("兄妹草稿", Assert.IsType<TextBlock>(window.CanvasCardForTest(siblingId).Child).Text);
+            window.SetNameForTest("兄妹"); window.SetGenerationForTest("3"); Assert.Equal(20 + 2 * 164, Canvas.GetLeft(window.CanvasCardForTest(siblingId)));
+            window.SetGenerationForTest("2"); await window.SaveForTest();
             Assert.True(window.CanvasContainsForTest(siblingId)); Assert.Contains("人物", window.CanvasSiblingsForTest(siblingId));
             Assert.Contains("兄妹", window.CanvasSiblingsForTest(person.Id));
             Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();

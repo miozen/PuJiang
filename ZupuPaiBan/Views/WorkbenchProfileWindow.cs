@@ -76,6 +76,7 @@ public sealed class WorkbenchProfileWindow : Window
     private bool _busy;
     private bool _approvedClose;
     private bool _canvasPolling;
+    private bool _canvasValid;
     private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal Func<DraftLeaveChoice>? ChooseForTest { get; set; }
     internal WorkbenchDraftSession SessionForTest => _session;
@@ -109,8 +110,10 @@ public sealed class WorkbenchProfileWindow : Window
     internal Task PollCanvasForTest() => PollCanvasAsync();
     internal Task ReopenCanvasForTest() => ReopenCanvasAsync();
     internal Task SelectCanvasForTest(Guid id) => SelectCanvasPersonAsync(id);
+    internal Task ClearCanvasSelectionForTest() => ClearCanvasSelectionAsync();
     internal Border CanvasCardForTest(Guid id) => _canvas.Children.OfType<Border>().Single(item => item.Tag is Guid value && value == id);
     internal Canvas CanvasForTest => _canvas;
+    internal ScrollViewer CanvasScrollForTest => _canvasScroll;
     internal void RenderCanvasForTest() => RenderCanvas();
     internal void BeginProjectedNameInput(Func<HorizontalLayoutNode> project, Action<string> confirmed) =>
         ShowInlineNameEditor(() => { var node = project(); return new Point(node.X + 20, ProjectedNameTop(node)); }, "", confirmed);
@@ -162,7 +165,7 @@ public sealed class WorkbenchProfileWindow : Window
         _genealogies.SelectionChanged += async (_, _) => await ChangeGenealogyAsync();
         _people.SelectionChanged += async (_, _) => await ChangePersonAsync();
         _name.TextChanged += (_, _) => UpdateDraft();
-        _generation.TextChanged += (_, _) => { if (!_updating) _generationEdited = true; UpdateDraft(); if (!_updating && IsInlineRootDraft() && _inlineNameEditor is null) RenderCanvas(); };
+        _generation.TextChanged += (_, _) => { if (!_updating) _generationEdited = true; UpdateDraft(); if (!_updating && _inlineNameEditor is null) RenderCanvas(); };
         _birth.TextChanged += (_, _) => { if (!_updating) _birthEdited = true; UpdateDraft(); };
         _death.TextChanged += (_, _) => { if (!_updating) _deathEdited = true; UpdateDraft(); };
         _biography.TextChanged += (_, _) => { if (!_updating) _biographyEdited = true; UpdateDraft(); };
@@ -222,15 +225,31 @@ public sealed class WorkbenchProfileWindow : Window
         if (!_panDragged) return;
         _canvasScroll.ScrollToHorizontalOffset(_panOffset.X - delta.X); _canvasScroll.ScrollToVerticalOffset(_panOffset.Y - delta.Y);
     }
-    private void OnCanvasUp(object sender, MouseButtonEventArgs e)
+    private async void OnCanvasUp(object sender, MouseButtonEventArgs e)
     {
         if (_panStart is null) return;
         var confirm = !_panDragged && _inlineNameEditor is not null;
         _panStart = null; _canvas.ReleaseMouseCapture(); e.Handled = true;
         if (confirm) _inlineNameEditor?.Confirm();
+        else if (!_panDragged && _inlineNameEditor is null) await ClearCanvasSelectionAsync();
+    }
+    private async Task ClearCanvasSelectionAsync()
+    {
+        if (_busy || _inlineNameEditor is not null || _person is null) return;
+        _busy = true; IsEnabled = false;
+        try
+        {
+            var prior = _session.Draft;
+            var result = await _session.LeaveAsync(Choose()); SyncSavedPerson(prior);
+            if (result != DraftTransitionResult.Completed) { Report(result); RestoreSelection(); ShowDraft(); return; }
+            _person = null; RestoreSelection(); ShowDraft(); RenderCanvas(); _status.Text = "已取消选择人物。";
+        }
+        catch (Exception ex) { _status.Text = $"无法取消选择，草稿保留：{ex.Message}"; }
+        finally { IsEnabled = true; _busy = false; }
     }
     private void ClearCanvas()
     {
+        _canvasValid = false;
         var editor = _inlineNameEditor;
         var restoreFocus = editor?.IsKeyboardFocusWithin == true;
         _canvasPeople.Clear(); _canvasPartners.Clear(); _incompleteUnions.Clear(); _canvasSiblings.Clear(); _canvasEdges.Clear(); _createdChildDisplayParents.Clear(); _createdChildDisplayOrder.Clear(); _nextCreatedChildOrder = 0; _orderGroups.Clear(); _sessionOrders.Clear(); _layoutOrders.Clear(); _diagnosticMessages.Clear(); _diagnostics.ItemsSource = null;
@@ -246,6 +265,7 @@ public sealed class WorkbenchProfileWindow : Window
         var editor = _inlineNameEditor;
         var restoreFocus = editor?.IsKeyboardFocusWithin == true;
         _canvas.Children.Clear();
+        if (!_canvasValid) { RestoreInlineEditor(editor, restoreFocus); return; }
         var people = CanvasLayoutPeople().ToList();
         var nodeHeight = CanvasLayoutHeight();
         var edges = _canvasEdges.ToList();
@@ -271,13 +291,16 @@ public sealed class WorkbenchProfileWindow : Window
             var parentEdge = edges.FirstOrDefault(e => e.ChildId == source);
             var order = parentEdge is null ? _layoutOrders.GetValueOrDefault(source) + 1 : NextChildOrder(parentEdge.ParentId);
             people.Add(new HorizontalLayoutPerson(siblingDraft.Original.PersonId, siblingGeneration - 1, order, CanvasNodeWidth, nodeHeight));
-            if (parentEdge is not null) edges.Add(new HorizontalLayoutRelationship(siblingDraft.Original.PersonId, parentEdge.ParentId, siblingDraft.Original.PersonId));
+            if (parentEdge is not null && _canvasPeople.TryGetValue(parentEdge.ParentId, out var siblingParent) && siblingGeneration > ParseGeneration(siblingParent))
+                edges.Add(new HorizontalLayoutRelationship(siblingDraft.Original.PersonId, parentEdge.ParentId, siblingDraft.Original.PersonId));
         }
+        var generations = people.ToDictionary(p => p.Id, p => p.Generation);
+        var hiddenEdges = edges.RemoveAll(e => generations[e.ParentId] >= generations[e.ChildId]);
+        if (hiddenEdges > 0) _status.Text = "草稿世代与父母或子女冲突，相关连线暂不显示；请核实世代。";
         var layout = HorizontalLineageLayout.Calculate(people, edges, people.Select(p => p.Id).ToHashSet(), allowSkippedGenerations: true);
         if (HasUnsafeCrossing(layout))
         {
             _unresolvedCount += edges.Count;
-            if (childDraft is null && siblingDraft is null) _canvasEdges.Clear();
             _diagnosticMessages.Add("部分连线会穿越其他人物或不相关连线，已暂停绘制，请在关系视图中复核。");
             _diagnostics.ItemsSource = _diagnosticMessages.ToArray();
             edges.Clear();
@@ -306,7 +329,7 @@ public sealed class WorkbenchProfileWindow : Window
                 ? draft.Values.Name : person.Name;
             var content = new StackPanel();
             if (_person == person.Id)
-                content.Children.Add(new TextBlock { Text = $"世代：{person.RecordedGeneration ?? "未记"}　排行：{person.RecordedBirthOrder ?? "未记"}", FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis });
+                content.Children.Add(new TextBlock { Text = $"世代：{(_person == _session.Draft?.Original.PersonId ? _session.Draft.Values.RecordedGeneration : person.RecordedGeneration) ?? "未记"}　排行：{person.RecordedBirthOrder ?? "未记"}", FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis });
             _canvasPartners.TryGetValue(person.Id, out var partners);
             var spouseDraft = _session.Draft is { Original.IsNew: true, Original.PartnerId: Guid draftPartnerId } pendingSpouse &&
                 draftPartnerId == person.Id && _person == pendingSpouse.Original.PersonId ? pendingSpouse : null;
@@ -382,7 +405,9 @@ public sealed class WorkbenchProfileWindow : Window
         return CanvasNodeHeight + count * 76;
     }
     private IEnumerable<HorizontalLayoutPerson> CanvasLayoutPeople() => _canvasPeople.Values.Select(p =>
-        new HorizontalLayoutPerson(p.Id, ParseGeneration(p) - 1, _layoutOrders.GetValueOrDefault(p.Id), CanvasNodeWidth, CanvasLayoutHeight()));
+        new HorizontalLayoutPerson(p.Id, _person == p.Id && _session.Draft?.Original.PersonId == p.Id &&
+            RecordedGenerationParser.TryParse(_session.Draft.Values.RecordedGeneration, out var generation) ? generation - 1 : ParseGeneration(p) - 1,
+            _layoutOrders.GetValueOrDefault(p.Id), CanvasNodeWidth, CanvasLayoutHeight()));
     private int NextChildOrder(Guid parent) => _canvasEdges.Where(e => e.ParentId == parent)
         .Select(e => _layoutOrders.GetValueOrDefault(e.ChildId)).DefaultIfEmpty(-1).Max() + 1;
     private void RestoreInlineEditor(InlineNameEditor? editor, bool restoreFocus)
@@ -882,6 +907,7 @@ public sealed class WorkbenchProfileWindow : Window
         foreach (var key in _sessionOrders.Keys.Except(groups.Select(g => g.Key)).ToArray()) _sessionOrders.Remove(key);
         _canvasEdges.Clear(); _canvasEdges.AddRange(edges); _unresolvedCount = unresolved; _canvasTruncated = page.Page.NextCursor is not null;
         _diagnosticMessages.Clear(); _diagnosticMessages.AddRange(diagnostics); _diagnostics.ItemsSource = _diagnosticMessages.ToArray();
+        _canvasValid = true;
         RenderCanvas();
     }
     private static OrderGroup MakeOrderGroup(Guid? parent, IEnumerable<Guid> people, IEnumerable<Guid> relations, IReadOnlyDictionary<Guid, ProjectionReadSession.PersonRow> rows)
@@ -978,6 +1004,9 @@ public sealed class WorkbenchProfileWindow : Window
     private async Task RefreshAfterCommitAsync(Guid genealogyId)
     {
         var previous = _canvasPeople.ToDictionary(pair => pair.Key, pair => pair.Value);
+        var card = _canvas.Children.OfType<Border>().FirstOrDefault(b => b.Tag is Guid id && id == _person);
+        var anchor = card is null ? (Point?)null : new Point(Canvas.GetLeft(card), Canvas.GetTop(card));
+        var horizontalOffset = _canvasScroll.HorizontalOffset; var verticalOffset = _canvasScroll.VerticalOffset;
         try
         {
             if (_afterCommit is not null) await _afterCommit(genealogyId);
@@ -985,6 +1014,13 @@ public sealed class WorkbenchProfileWindow : Window
             var projection = _projection; var revision = await projection.ReopenAsync();
             _projectionRevision = revision;
             await LoadCanvasAsync(previous);
+            var refreshed = _canvas.Children.OfType<Border>().FirstOrDefault(b => b.Tag is Guid id && id == _person);
+            if (anchor is Point before && refreshed is not null)
+            {
+                _canvasScroll.UpdateLayout();
+                _canvasScroll.ScrollToHorizontalOffset(horizontalOffset + (Canvas.GetLeft(refreshed) - before.X) * _canvasScale.ScaleX);
+                _canvasScroll.ScrollToVerticalOffset(verticalOffset + (Canvas.GetTop(refreshed) - before.Y) * _canvasScale.ScaleY);
+            }
             _canvasMonitor.Start();
         }
         catch { ClearCanvas(); _canvasMonitor.Stop(); throw; }
@@ -1003,6 +1039,14 @@ public sealed class WorkbenchProfileWindow : Window
             _birthEdited ? _birth.Text : draft.Values.BirthDate,
             _deathEdited ? _death.Text : draft.Values.DeathDate,
             _biographyEdited ? _biography.Text : draft.Values.Biography, recorded);
+        if (_inlineNameEditor is null && _person == draft.Original.PersonId)
+        {
+            foreach (var card in _canvas.Children.OfType<Border>().Where(b => b.Tag is Guid id && id == _person && b.Child is TextBlock))
+            {
+                ((TextBlock)card.Child).Text = $"{SexIcon(sex)} {_name.Text}";
+                card.ToolTip = _name.Text;
+            }
+        }
     }
     private void ShowDraft()
     {
