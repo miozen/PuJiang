@@ -1,5 +1,7 @@
 # 接力状态
 
+- **WB-C-03 验收（2026-11-06）：** 在所选父母右侧生物子女信息行更正或清空另一位生父母，仅明确同谱夫妻候选；变更进入当前人物草稿，与资料和婚配修改共同事务保存。角色不明、同角色多候选或旧关系含备注/来源/主线标记时阻止并提示，不改变子女 ID、后代及收养/继嗣关系；不改数据库结构。Release 构建通过（0 错误、17 警告），定向 12/12、命令/草稿集成 37/37、日常 482/482、串行 WPF 专项 37/37 通过。首次并行 WPF 回归 36/37（配偶用例失败，简略输出未包含原因），该用例单项 3/3 及完整串行复跑均通过，不推断首次失败原因。用户对隔离虚构谱 `artifacts/wb-c03-review/data` 的子女父母更正体验反馈“功能是实现了。应该可以了”。`docs/references/` 用户素材留在本机。
+
 - **2026-11-06 用户澄清：** 更正子女生父母从所选父母人物的右侧子女信息行操作；例如将子女生母由配偶甲改为配偶乙，保留子女、后代与独立特殊关系。拆支和挂接另作结构操作。用户提供人物资料、配偶/子女列表及行传预览的目标字段，并确认不单设“健在／已故”状态，保留生卒日期和葬地。已记录至 [D-026](DECISIONS.md#d-026--专业族谱编修工作台与显式草稿)、[工作台设计](WORKBENCH_DESIGN.md)和 [WB-C-03 切片](WORKBENCH_V1_SLICES.md)；目标字段及预览未宣称已实现，也未批准迁移或扩张本切片。本轮为契约与计划更新，未修改业务代码、数据库或执行应用测试。
 
 - **WB-C-02 验收（2026-11-06）：** 前置 B-02 与 C-01 已验收；本切片复用既有规则，不修改业务代码或数据库。新增隔离 SQLite 和 WPF 测试覆盖男女入口、零/一/多位夫妻、仅夫妻参与且稳定 ID 顺序、未详拒绝、候选数量并发变化、候选分页不完整阻止、提交重载及右侧默认显示。Release 构建通过（0 错误、17 警告），定向 17/17、WPF 专项 36/36、日常回归 471/471 通过，均无失败或跳过。用户对隔离虚构谱 `artifacts/wb-c02-review/data` 无配偶、单配偶男女入口及多配偶的默认生父母和保存后显示反馈“符合预期”。`docs/references/` 用户素材保留本机；生父母修改仍属后续切片。
@@ -43,7 +45,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** WB-C-02 列明范围已验收；原 P2-3 持久排序仍未接 UI，D-014 不变。
+- **Current Task：** WB-C-03 列明范围已验收；原 P2-3 持久排序仍未接 UI，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -77,7 +79,7 @@
 - **本轮持久排序存储：** 新增迁移、按图表的排序组及历史项、受保护独立会话的完整子女组捕获、事务保存和差异复核；图表修订条件更新，旧图表选线保存不覆盖排序，旧人物/关系身份保留供复核。成功保存后必须重新打开会话；数据或图表变化使旧结果失效。全库代数变化即使无关也保守要求复核；超过 2000、缺失世代或多父母拒绝捕获。此切片未接 UI、无父母兄妹或复杂关系。
 - **本轮存储本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、32 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 443/443 通过；单独筛选 `FullyQualifiedName~SiblingOrderStorageTests|FullyQualifiedName~LineageChartTests` 为 15/15 通过，均无跳过。覆盖旧库迁移、图表与谱隔离、并发竞争、取消与 SQLite 注入回滚、历史/ABA 复核、超过 100 人、图表选线保留、关闭排空及备份预检；EF `migrations has-pending-model-changes` 检查无差异。最初 EF 工具构建因 NuGet 网络不可用失败，使用本机缓存 `dotnet restore --ignore-failed-sources` 后恢复成功。未运行 UI、Performance 或人工验收，未查询远端 CI；未使用真实数据。
 - **本轮清单整理：** 用户要求暂停后续开发，并希望按序号查看 P2-3 已完成与剩余工作；已在[计划](CURRENT_PLAN.md#p2-3-有序切片清单)建立 14 项清单，6 项为所列有限范围已完成、8 项未完成，项数不等于工期比例。本轮仅改文档，`git diff --check`、相对链接和 14 项计数检查通过；未运行构建、应用测试或远端 CI。
-- **Exact Next Action：** 核对 WB-C-03 子女列表更正生父母的前置条件与角色歧义处理，按单切片流程实施和验收。
+- **Exact Next Action：** 核对 WB-C-04 婚配变化后已有子女生父母归属稳定的前置条件，按单切片流程实施与验收。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -85,4 +87,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核对 WB-C-03 前置条件和角色歧义处理，按单切片流程实施验收，保留 P2-3 排序待办并遵守 D-014。`
+- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核对 WB-C-04 前置条件，按单切片流程实施验收，保留 P2-3 排序待办并遵守 D-014。`

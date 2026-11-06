@@ -40,6 +40,8 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly Button _unionLocate = new() { Content = "定位配偶", Padding = new Thickness(6), Margin = new Thickness(0, 6, 4, 0) };
     private readonly Button _unionAdd = new() { Content = "新增配偶", Padding = new Thickness(6), Margin = new Thickness(0, 6, 0, 0) };
     private sealed record UnionOption(Guid Id, Guid? PartnerId, string Label);
+    private sealed record ChildParentOption(Guid? Id, string Label);
+    private readonly StackPanel _childrenPanel = new();
     private Guid? _unionOwner;
     private readonly TextBox _birth = new();
     private readonly TextBox _death = new();
@@ -97,6 +99,13 @@ public sealed class WorkbenchProfileWindow : Window
     internal string UnionNoteForTest => _unionNote.Text;
     internal bool UnionLocateEnabledForTest => _unionLocate.IsEnabled;
     internal void LocateUnionForTest() => _unionLocate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    internal int ChildCountForTest => _session.Draft?.Original.Children?.Count ?? 0;
+    internal Guid? ChildOtherParentForTest(Guid childId) => _session.Draft!.ChildOtherParent(childId);
+    internal void SetChildOtherParentForTest(Guid childId, Guid? parentId)
+    {
+        var box = _childrenPanel.Children.OfType<StackPanel>().SelectMany(row => row.Children.OfType<ComboBox>()).Single(c => Equals(c.Tag, childId));
+        box.SelectedItem = box.Items.OfType<ChildParentOption>().Single(option => option.Id == parentId);
+    }
     internal Func<Guid, Task>? AfterCommitAsync { set => _afterCommit = value; }
     internal Task InitializeForTest() => _loaded.Task;
     internal async Task SelectGenealogyForTest(Guid id)
@@ -182,6 +191,7 @@ public sealed class WorkbenchProfileWindow : Window
         AddField(unionPanel, "开始时间", _unionStart); AddField(unionPanel, "结束时间", _unionEnd); AddField(unionPanel, "备注", _unionNote);
         var unionButtons = new StackPanel { Orientation = Orientation.Horizontal }; unionButtons.Children.Add(_unionLocate); unionButtons.Children.Add(_unionAdd); unionPanel.Children.Add(unionButtons);
         right.Children.Add(new Expander { Header = "配偶与婚配资料", Content = unionPanel, Margin = new Thickness(0, 10, 0, 0) });
+        right.Children.Add(new Expander { Header = "子女信息", Content = _childrenPanel, Margin = new Thickness(0, 10, 0, 0) });
         var rightScroll = new ScrollViewer { Content = right, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         Grid.SetColumn(rightScroll, 2); columns.Children.Add(rightScroll); outer.Children.Add(columns); Content = outer;
         _genealogies.SelectionChanged += async (_, _) => await ChangeGenealogyAsync();
@@ -1125,6 +1135,39 @@ public sealed class WorkbenchProfileWindow : Window
         }
         finally { _updating = false; }
         ShowSelectedUnion();
+        ShowChildren();
+    }
+    private void ShowChildren()
+    {
+        _childrenPanel.Children.Clear();
+        if (_session.Draft is not { } draft || draft.Original.IsNew) { _childrenPanel.Children.Add(new TextBlock { Text = "保存人物后可查看子女。", TextWrapping = TextWrapping.Wrap }); return; }
+        var children = draft.Original.Children ?? [];
+        if (children.Count == 0) { _childrenPanel.Children.Add(new TextBlock { Text = "暂无已记录的生物子女。" }); return; }
+        var currentSex = draft.Original.Values.Sex;
+        var otherSex = currentSex == PersonSex.Male ? PersonSex.Female : PersonSex.Male;
+        var label = currentSex == PersonSex.Male ? "生母" : currentSex == PersonSex.Female ? "生父" : "另一位生父母";
+        _childrenPanel.Children.Add(new TextBlock { Text = $"选择每位子女的{label}，修改后请保存档案。", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Gray });
+        foreach (var child in children)
+        {
+            var row = new StackPanel { Margin = new Thickness(0, 6, 0, 4) };
+            row.Children.Add(new TextBlock { Text = child.Name, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+            var options = new List<ChildParentOption> { new(null, "未确定") };
+            options.AddRange((draft.Original.Unions ?? []).Where(u => u.Values.Kind == FamilyUnionKind.Marriage && u.PartnerId is not null && u.PartnerSex == otherSex)
+                .GroupBy(u => u.PartnerId).Select(g => g.First()).Select(u => new ChildParentOption(u.PartnerId, u.PartnerName)));
+            if (child.OtherParentId is Guid old && options.All(o => o.Id != old)) options.Add(new(old, $"{child.OtherParentName}（已有记录）"));
+            var selected = draft.ChildOtherParent(child.PersonId);
+            var box = new ComboBox { Tag = child.PersonId, DisplayMemberPath = nameof(ChildParentOption.Label), ItemsSource = options, IsEnabled = child.BlockReason is null };
+            box.SelectedItem = options.FirstOrDefault(o => o.Id == selected);
+            box.SelectionChanged += (_, _) =>
+            {
+                if (_updating || !ReferenceEquals(_session.Draft, draft) || box.SelectedItem is not ChildParentOption choice) return;
+                try { draft.SetChildOtherParent(child.PersonId, choice.Id); _status.Text = "子女父母归属已修改，请显式保存。"; }
+                catch (Exception ex) { _status.Text = $"无法更正：{ex.Message}"; }
+            };
+            row.Children.Add(box);
+            if (child.BlockReason is not null) row.Children.Add(new TextBlock { Text = child.BlockReason, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkOrange });
+            _childrenPanel.Children.Add(row);
+        }
     }
     private void ShowSelectedUnion()
     {

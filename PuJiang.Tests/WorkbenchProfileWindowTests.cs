@@ -16,6 +16,30 @@ namespace PuJiang.Tests;
 [Collection("ProcessWorkerExclusive")]
 public class WorkbenchProfileWindowTests
 {
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Child_list_parent_correction_respects_draft_and_keeps_selected_parent()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        var a = new Person { GenealogyId = g.Id, Name = "甲", Sex = PersonSex.Female }; var b = new Person { GenealogyId = g.Id, Name = "乙", Sex = PersonSex.Female };
+        var child = new Person { GenealogyId = g.Id, Name = "子女", RecordedGeneration = "2" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(parent, a, b, child); seed.FamilyUnions.AddRange(new FamilyUnion { GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = a.Id, Kind = FamilyUnionKind.Marriage }, new FamilyUnion { GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = b.Id, Kind = FamilyUnionKind.Marriage }); seed.PersonRelationships.AddRange(new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent }, new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.BiologicalParent }); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(parent.Id);
+            Assert.Equal(1, window.ChildCountForTest); Assert.Equal(a.Id, window.ChildOtherParentForTest(child.Id));
+            window.SetChildOtherParentForTest(child.Id, b.Id); Assert.True(window.SessionForTest.Draft!.IsDirty); Assert.Equal(b.Id, window.ChildOtherParentForTest(child.Id));
+            await using (var before = db.CreateContext()) Assert.True(await before.PersonRelationships.AnyAsync(r => r.PersonId == child.Id && r.RelatedPersonId == a.Id));
+            window.ChooseForTest = () => DraftLeaveChoice.Cancel; await window.SelectCanvasForTest(child.Id);
+            Assert.Equal(parent.Id, window.SessionForTest.Draft!.Original.PersonId); Assert.Equal(b.Id, window.ChildOtherParentForTest(child.Id));
+            await window.SaveForTest(); Assert.Equal(parent.Id, window.SessionForTest.Draft!.Original.PersonId); Assert.Equal(b.Id, window.ChildOtherParentForTest(child.Id));
+            window.SetChildOtherParentForTest(child.Id, null); window.ChooseForTest = () => DraftLeaveChoice.Discard; await window.SelectCanvasForTest(child.Id);
+            Assert.Equal(child.Id, window.SessionForTest.Draft!.Original.PersonId); Assert.Contains("生母：乙", window.DraftParentsForTest);
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.True(await verify.PersonRelationships.AnyAsync(r => r.PersonId == child.Id && r.RelatedPersonId == b.Id)); Assert.False(await verify.PersonRelationships.AnyAsync(r => r.PersonId == child.Id && r.RelatedPersonId == a.Id));
+    }
     [Theory]
     [InlineData(PersonSex.Male, PersonSex.Female, 0)] [InlineData(PersonSex.Male, PersonSex.Female, 1)] [InlineData(PersonSex.Male, PersonSex.Female, 2)]
     [InlineData(PersonSex.Female, PersonSex.Male, 0)] [InlineData(PersonSex.Female, PersonSex.Male, 1)] [InlineData(PersonSex.Female, PersonSex.Male, 2)]
