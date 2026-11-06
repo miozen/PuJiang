@@ -18,6 +18,107 @@ public class WorkbenchProfileWindowTests
 {
     [Fact]
     [Trait("Category", "UI")]
+    public async Task Projected_input_survives_redraw_and_blocks_switch_save_and_exit()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "甲" }; var other = new Genealogy { Name = "乙" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父母", RecordedGeneration = "1" };
+        var otherPerson = new Person { GenealogyId = g.Id, Name = "旁人", RecordedGeneration = "2" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.AddRange(g, other); seed.People.AddRange(parent, otherPerson); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show();
+            await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(parent.Id);
+            var temporary = Guid.NewGuid(); var edge = Guid.NewGuid(); var height = 85d;
+            HorizontalLayoutNode Project() => InlineNamePlacement.Project(
+                [new(parent.Id, 0, 0, 170, height), new(temporary, 1, 0, 170, 85)],
+                [new(edge, parent.Id, temporary)], new HashSet<Guid> { parent.Id }, temporary);
+            string? result = null;
+            window.BeginProjectedNameInput(Project, name => result = name);
+            var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single();
+            Assert.Equal(Project().X + 20, Canvas.GetLeft(editor));
+            editor.Input.Text = "临时姓名";
+            height = 120; window.RenderCanvasForTest();
+            Assert.Same(editor, window.CanvasForTest.Children.OfType<InlineNameEditor>().Single());
+            Assert.Equal(Project().Y + 40, Canvas.GetTop(editor)); Assert.Equal("临时姓名", editor.Input.Text);
+            await window.SelectPersonForTest(otherPerson.Id); Assert.Equal(parent.Id, window.SessionForTest.Draft!.Original.PersonId);
+            await window.SelectGenealogyForTest(other.Id); Assert.Equal(g.Id, window.SessionForTest.Draft!.Original.GenealogyId);
+            await window.SaveForTest(); Assert.Contains("Enter", window.StatusForTest);
+            Assert.False(await window.PrepareForOwnerExitAsync());
+            var source = PresentationSource.FromVisual(editor.Input)!;
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            Assert.Null(result); Assert.Empty(window.CanvasForTest.Children.OfType<InlineNameEditor>());
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Equal(2, await verify.People.CountAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Inline_input_is_retained_but_cannot_commit_when_projection_invalidates()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var p = new Person { GenealogyId = g.Id, Name = "原名", RecordedGeneration = "1" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(p); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show();
+            await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(p.Id);
+            var card = window.CanvasCardForTest(p.Id);
+            card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            await WaitUntil(() => window.CanvasCardForTest(p.Id).ContextMenu is not null);
+            window.CanvasCardForTest(p.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "原位编辑姓名")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); editor.Input.Text = "保留输入";
+            await using (var changed = db.CreateContext()) await changed.People.Where(x => x.Id == p.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Biography, "外部修改"));
+            await window.PollCanvasForTest();
+            Assert.Same(editor, window.CanvasForTest.Children.OfType<InlineNameEditor>().Single()); Assert.Equal("保留输入", editor.Input.Text);
+            var source = PresentationSource.FromVisual(editor.Input)!;
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            Assert.Equal("原名", window.SessionForTest.Draft!.Values.Name); Assert.Contains("尚未应用", window.StatusForTest);
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+    }
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Inline_name_editor_updates_only_draft_and_escape_cancels()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var p = new Person { GenealogyId = g.Id, Name = "原名", RecordedGeneration = "1" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(p); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show();
+            await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(p.Id);
+            async Task<InlineNameEditor> Open()
+            {
+                var card = window.CanvasCardForTest(p.Id);
+                card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+                await WaitUntil(() => window.CanvasCardForTest(p.Id).ContextMenu is not null);
+                var menu = window.CanvasCardForTest(p.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "原位编辑姓名"));
+                menu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                return window.CanvasForTest.Children.OfType<InlineNameEditor>().Single();
+            }
+            void Key(InlineNameEditor editor, Key key) => editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            var editor = await Open();
+            Assert.Equal(Canvas.GetLeft(window.CanvasCardForTest(p.Id)), Canvas.GetLeft(editor));
+            editor.Input.Text = "取消名"; Key(editor, System.Windows.Input.Key.Escape);
+            Assert.Equal("原名", window.SessionForTest.Draft!.Values.Name);
+            Assert.Empty(window.CanvasForTest.Children.OfType<InlineNameEditor>());
+            editor = await Open(); editor.Input.Text = "草稿名"; Key(editor, System.Windows.Input.Key.Enter);
+            Assert.Equal("草稿名", window.SessionForTest.Draft!.Values.Name);
+            Assert.Empty(window.CanvasForTest.Children.OfType<InlineNameEditor>());
+            string CardName() => Assert.IsType<TextBlock>(Assert.IsType<StackPanel>(window.CanvasCardForTest(p.Id).Child).Children[0]).Text.Split('\n')[0];
+            Assert.Equal("草稿名", CardName());
+            window.RenderCanvasForTest(); Assert.Equal("草稿名", CardName());
+            await using (var beforeSave = db.CreateContext()) Assert.Equal("原名", (await beforeSave.People.SingleAsync()).Name);
+            window.ChooseForTest = () => DraftLeaveChoice.Discard;
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Equal("原名", (await verify.People.SingleAsync()).Name);
+    }
+    [Fact]
+    [Trait("Category", "UI")]
     public async Task Window_switch_and_owner_exit_respect_draft_choices()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync();

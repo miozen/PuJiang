@@ -36,6 +36,9 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly TextBox _biography = new() { AcceptsReturn = true, Height = 120, TextWrapping = TextWrapping.Wrap };
     private readonly ComboBox _sex = new() { ItemsSource = Enum.GetValues<PersonSex>() };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8) };
+    private InlineNameEditor? _inlineNameEditor;
+    private Func<Point?>? _inlineLocation;
+    private bool _inlineInvalid;
     private readonly Canvas _canvas = new() { Background = Brushes.White, Width = 650, Height = 360 };
     private readonly ScrollViewer _canvasScroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly ScaleTransform _canvasScale = new(1, 1);
@@ -96,6 +99,9 @@ public sealed class WorkbenchProfileWindow : Window
     internal Task SelectCanvasForTest(Guid id) => SelectCanvasPersonAsync(id);
     internal Border CanvasCardForTest(Guid id) => _canvas.Children.OfType<Border>().Single(item => item.Tag is Guid value && value == id);
     internal Canvas CanvasForTest => _canvas;
+    internal void RenderCanvasForTest() => RenderCanvas();
+    internal void BeginProjectedNameInput(Func<HorizontalLayoutNode> project, Action<string> confirmed) =>
+        ShowInlineNameEditor(() => { var node = project(); return new Point(node.X + 20, node.Y + 40); }, "", confirmed);
     internal Task SetDisplayRankForTest(int rank) { _displayRank.Text = rank.ToString(); return SetDisplayRankAsync(); }
     internal Task MoveForTest(int delta) => MoveSiblingAsync(delta);
 
@@ -154,7 +160,22 @@ public sealed class WorkbenchProfileWindow : Window
         _canvasScroll.PreviewMouseWheel += OnCanvasWheel;
         _canvas.MouseLeftButtonDown += OnCanvasDown; _canvas.MouseMove += OnCanvasMove; _canvas.MouseLeftButtonUp += OnCanvasUp;
         _canvas.LostMouseCapture += (_, _) => _panStart = null;
-        PreviewKeyDown += async (_, e) => { if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; await BeginNewAsync(); } };
+        PreviewKeyDown += async (_, e) =>
+        {
+            if (_inlineNameEditor is not null)
+            {
+                if (IsCanvasShortcutBlocked(e.Key, Keyboard.Modifiers))
+                    e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; await BeginNewAsync(); }
+        };
+        PreviewMouseDown += (_, e) =>
+        {
+            if (_inlineNameEditor is not null && e.OriginalSource is DependencyObject source &&
+                !ReferenceEquals(source, _inlineNameEditor) && !_inlineNameEditor.IsAncestorOf(source))
+            { e.Handled = true; BlockWhileInlineEditing(); }
+        };
         Closing += OnClosing;
         ShowDraft();
     }
@@ -162,6 +183,9 @@ public sealed class WorkbenchProfileWindow : Window
     {
         panel.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 8, 0, 3) }); panel.Children.Add(field);
     }
+    internal static bool IsCanvasShortcutBlocked(Key key, ModifierKeys modifiers) =>
+        (modifiers & ModifierKeys.Alt) != 0 ||
+        (modifiers == ModifierKeys.Control && (key == Key.N || key == Key.S)) || key is Key.F2 or Key.Tab;
     private void OnCanvasWheel(object sender, MouseWheelEventArgs e)
     {
         var point = e.GetPosition(_canvasScroll); var old = _canvasScale.ScaleX;
@@ -189,13 +213,22 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private void ClearCanvas()
     {
+        var editor = _inlineNameEditor;
+        var restoreFocus = editor?.IsKeyboardFocusWithin == true;
         _canvasPeople.Clear(); _canvasPartners.Clear(); _canvasSiblings.Clear(); _canvasEdges.Clear(); _orderGroups.Clear(); _sessionOrders.Clear(); _layoutOrders.Clear(); _diagnosticMessages.Clear(); _diagnostics.ItemsSource = null;
         _unresolvedCount = 0; _canvasTruncated = false; _canvas.Children.Clear();
+        if (editor is not null)
+        {
+            _inlineInvalid = true; _canvas.Children.Add(editor);
+            if (restoreFocus) editor.Input.Focus();
+        }
     }
     private void RenderCanvas()
     {
+        var editor = _inlineNameEditor;
+        var restoreFocus = editor?.IsKeyboardFocusWithin == true;
         _canvas.Children.Clear();
-        if (_canvasPeople.Count == 0) return;
+        if (_canvasPeople.Count == 0) { RestoreInlineEditor(editor, restoreFocus); return; }
         var people = _canvasPeople.Values.Select(p => new HorizontalLayoutPerson(p.Id, ParseGeneration(p) - 1, _layoutOrders.GetValueOrDefault(p.Id), 170,
             85 + (_canvasPartners.TryGetValue(p.Id, out var partners) ? partners.Count * 20 : 0) + (_canvasSiblings.TryGetValue(p.Id, out var siblings) ? siblings.Count * 20 : 0))).ToArray();
         var layout = HorizontalLineageLayout.Calculate(people, _canvasEdges, _canvasPeople.Keys.ToHashSet(), allowSkippedGenerations: true);
@@ -220,8 +253,11 @@ public sealed class WorkbenchProfileWindow : Window
         foreach (var node in layout.Nodes)
         {
             var person = _canvasPeople[node.PersonId];
+            var displayedName = _person == person.Id && _session.Draft is { } draft &&
+                draft.Original.PersonId == person.Id && draft.Original.GenealogyId == _genealogy
+                ? draft.Values.Name : person.Name;
             var content = new StackPanel();
-            content.Children.Add(new TextBlock { Text = $"{person.Name}\n谱载世代：{person.RecordedGeneration ?? "未记"}\n谱载排行：{person.RecordedBirthOrder ?? "未记"}", TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis });
+            content.Children.Add(new TextBlock { Text = $"{displayedName}\n谱载世代：{person.RecordedGeneration ?? "未记"}\n谱载排行：{person.RecordedBirthOrder ?? "未记"}", TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis });
             if (_canvasPartners.TryGetValue(person.Id, out var partners) && (_person == person.Id || partners.Any(p => p.Id == _person)))
             {
                 foreach (var partner in partners)
@@ -254,6 +290,7 @@ public sealed class WorkbenchProfileWindow : Window
                 if (_person != person.Id || _session.Draft?.Original.IsNew != false) return;
                 var menu = new ContextMenu();
                 var edit = new MenuItem { Header = "编辑人物" }; edit.Click += (_, _) => _name.Focus(); menu.Items.Add(edit);
+                var inline = new MenuItem { Header = "原位编辑姓名" }; inline.Click += (_, _) => BeginInlineNameEdit(person.Id); menu.Items.Add(inline);
                 var child = new MenuItem { Header = "新增子女（生物关系）" }; child.Click += async (_, _) => await BeginNewAsync(person.Id, PersonRelationshipKind.BiologicalParent); menu.Items.Add(child);
                 var adopted = new MenuItem { Header = "新增子女（收养关系）" }; adopted.Click += async (_, _) => await BeginNewAsync(person.Id, PersonRelationshipKind.AdoptiveParent); menu.Items.Add(adopted);
                 var sibling = new MenuItem { Header = "新增兄妹" }; sibling.Click += async (_, _) => await BeginSiblingAsync(person.Id); menu.Items.Add(sibling);
@@ -268,6 +305,62 @@ public sealed class WorkbenchProfileWindow : Window
         }
         _canvas.Width = Math.Max(650, layout.Nodes.Max(n => n.X + n.Width) + 40);
         _canvas.Height = Math.Max(360, layout.Nodes.Max(n => n.Y + n.Height) + 60);
+        RestoreInlineEditor(editor, restoreFocus);
+    }
+    private void RestoreInlineEditor(InlineNameEditor? editor, bool restoreFocus)
+    {
+        if (editor is null || !ReferenceEquals(editor, _inlineNameEditor)) return;
+        Point? position = null;
+        try { if (!_inlineInvalid) position = _inlineLocation?.Invoke(); }
+        catch (HorizontalLayoutException) { _inlineInvalid = true; }
+        if (position is Point point) { Canvas.SetLeft(editor, point.X); Canvas.SetTop(editor, point.Y); }
+        else { _inlineInvalid = true; _status.Text = "输入位置已失效，请复制未应用的输入或按 Esc 取消。"; }
+        _canvas.Children.Add(editor);
+        if (restoreFocus) editor.Input.Focus();
+    }
+    private void BeginInlineNameEdit(Guid personId)
+    {
+        if (_person != personId || _session.Draft is null || _busy || _inlineNameEditor is not null) return;
+        Point? Locate()
+        {
+            var card = _canvas.Children.OfType<Border>().FirstOrDefault(item => item.Tag is Guid id && id == personId);
+            return card is null ? null : new Point(Canvas.GetLeft(card), Canvas.GetTop(card));
+        }
+        ShowInlineNameEditor(Locate, _name.Text, value => _name.Text = value, RenderCanvas);
+    }
+    private void ShowInlineNameEditor(Func<Point?> locate, string initial, Action<string> confirmed, Action? afterConfirm = null)
+    {
+        if (_inlineNameEditor is not null || locate() is not Point point) return;
+        var editor = new InlineNameEditor();
+        _inlineNameEditor = editor;
+        _inlineLocation = locate; _inlineInvalid = false;
+        editor.Input.Text = initial;
+        Canvas.SetLeft(editor, point.X);
+        Canvas.SetTop(editor, point.Y);
+        Panel.SetZIndex(editor, 10);
+        _canvas.Children.Add(editor);
+        void CloseEditor()
+        {
+            if (!ReferenceEquals(_inlineNameEditor, editor)) return;
+            _canvas.Children.Remove(editor);
+            _inlineNameEditor = null;
+            _inlineLocation = null; _inlineInvalid = false;
+            _name.Focus();
+        }
+        editor.Confirmed += value =>
+        {
+            if (_inlineInvalid) { _status.Text = "画布已失效，输入尚未应用；请复制内容或按 Esc 取消，再重新打开画布。"; return; }
+            confirmed(value); CloseEditor(); afterConfirm?.Invoke();
+        };
+        editor.Cancelled += CloseEditor;
+        editor.Input.Focus(); editor.Input.SelectAll();
+    }
+    private bool BlockWhileInlineEditing()
+    {
+        if (_inlineNameEditor is null) return false;
+        _status.Text = _inlineInvalid ? "画布已失效，请复制未应用的输入或按 Esc 取消。" : "请先按 Enter 确认姓名，或按 Esc 取消输入。";
+        _inlineNameEditor.Input.Focus();
+        return true;
     }
     private static int ParseGeneration(ProjectionReadSession.PersonRow person) =>
         RecordedGenerationParser.TryParse(person.RecordedGeneration, out var value) ? value : throw new InvalidOperationException("人物世代未识别。");
@@ -303,6 +396,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task BeginSiblingAsync(Guid siblingId)
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || _projection is null) return;
         _busy = true; IsEnabled = false;
         ProjectionReadSession.ParentCandidate? parent = null;
@@ -337,6 +431,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task BeginNewAsync(Guid? parentId = null, PersonRelationshipKind? kind = null, Guid? partnerId = null, FamilyUnionKind? unionKind = null, Guid? siblingId = null)
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || _genealogy is not Guid genealogy) return;
         _busy = true; IsEnabled = false;
         WorkbenchPersonDraft? prior = null;
@@ -526,6 +621,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task SetDisplayRankAsync()
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || _person is not Guid person || !_orderGroups.TryGetValue(person, out var group)) return;
         if (!int.TryParse(_displayRank.Text, out var rank) || rank < 1 || rank > group.People.Count)
         { _status.Text = $"请输入 1 至 {group.People.Count} 的显示位置。"; return; }
@@ -537,6 +633,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task MoveSiblingAsync(int delta)
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || _person is not Guid person || !CanMove(person, delta) || !_orderGroups.TryGetValue(person, out var group)) return;
         var order = new Dictionary<Guid, int>(_sessionOrders[group.Key]); var rank = order[person];
         var other = order.Single(pair => pair.Value == rank + delta).Key; order[person] = rank + delta; order[other] = rank;
@@ -557,6 +654,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task ReopenCanvasAsync()
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || _genealogy is not Guid genealogy) return;
         _busy = true; IsEnabled = false;
         try { await ResetProjectionAsync(genealogy); await LoadCanvasAsync(); _status.Text = CanvasStatus(); }
@@ -565,6 +663,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task SelectCanvasPersonAsync(Guid id)
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || !CanvasContainsIdentity(id) || _projection is null) return;
         var projection = _projection; var revision = _projectionRevision;
         _busy = true; IsEnabled = false;
@@ -591,7 +690,9 @@ public sealed class WorkbenchProfileWindow : Window
         catch (Exception ex)
         {
             if (ReferenceEquals(projection, _projection) && revision == _projectionRevision)
-            { ClearCanvas(); _canvasMonitor.Stop(); _status.Text = $"数据已变化，画布已清空；草稿保留。请重新打开画布：{ex.Message}"; }
+            { ClearCanvas(); _canvasMonitor.Stop(); _status.Text = _inlineNameEditor is null
+                    ? $"数据已变化，画布已清空；草稿保留。请重新打开画布：{ex.Message}"
+                    : $"数据已变化，画布已清空；尚未确认的姓名输入保留但不能应用，请复制内容或按 Esc 取消：{ex.Message}"; }
         }
         finally { _canvasPolling = false; }
     }
@@ -657,6 +758,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task ChangeGenealogyAsync()
     {
+        if (!_updating && BlockWhileInlineEditing()) { RestoreSelection(); return; }
         if (_updating || _busy || _genealogies.SelectedItem is not Option next || next.Id == _genealogy) return;
         _busy = true; IsEnabled = false;
         var dirty = _session.Draft?.IsDirty == true;
@@ -679,6 +781,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task ChangePersonAsync()
     {
+        if (!_updating && BlockWhileInlineEditing()) { RestoreSelection(); return; }
         if (_updating || _busy || _genealogy is not Guid genealogy || _people.SelectedItem is not Option next || next.Id == _person) return;
         _busy = true; IsEnabled = false;
         try
@@ -725,6 +828,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private async Task SaveAsync()
     {
+        if (BlockWhileInlineEditing()) return;
         if (_busy || _session.Draft is null) return;
         _busy = true; IsEnabled = false;
         try
@@ -763,6 +867,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     internal async Task<bool> PrepareForOwnerExitAsync()
     {
+        if (BlockWhileInlineEditing()) return false;
         if (_approvedClose) return true;
         if (_busy) { _status.Text = "请等待当前操作结束后再关闭。"; return false; }
         _busy = true; IsEnabled = false;

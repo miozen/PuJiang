@@ -1,12 +1,23 @@
 # 接力状态
 
-- **Last Updated：** 2026-11-05（Asia/Shanghai）
+- **WB-B-01 最终验收（2026-11-06）：** 用户反馈 Enter 后画布应立即显示草稿姓名，其余体验“没有什么问题”；已修复节点优先显示当前人物草稿，保持显式保存边界，用户对修正版反馈“通过了”。这只覆盖本切片有限范围，不代表四类新增或 P2 已完成；新增位置投影接口由自动化验证，尚未接入产品新增入口。Windows `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 通过（0 错误、24 警告）；同源码日常测试 445/445、WPF 专项 16/16、定向测试 6/6 通过，均无失败或跳过。首次构建被本轮隔离实例占用而失败，用户关闭后重试通过；Performance 与远端 CI 未执行。数据目录为 `artifacts/wb-b01-review/data`，独立虚构库。切片完成后按用户授权检查并提交推送，实际 Git 状态以命令实测为准。
+
+
+- **WB-B-01 本轮（2026-11-06）：** 新增 `InlineNamePlacement` 复用横向布局投影临时节点，不创建人物/关系；工作台输入中阻止切人、切谱、保存、退出和其他画布快捷键，重绘保留输入与位置，数据变化后保留未确认文本并拒绝应用。`BeginProjectedNameInput` 是后续新增入口可调用的底座，目前没有产品新增入口接入；现有节点原位改名仍先进入草稿。Windows Release 解决方案构建成功（0 错误、24 警告）；同源码日常测试 445/445、工作台与姓名控件 WPF 专项 16/16 通过，均无失败或跳过；`git diff --check` 通过。测试库 `artifacts/wb-b01-review/data` 是独立虚构数据，启动器位于 `artifacts/wb-b01-review/launcher/bin/Release/net10.0-windows/Launcher.exe`。助手通过 computer-use 识别隔离主窗口，但画面捕获及重试分别超时，未执行人工视觉交互；用户人工验收待完成。未实施 B-02、数据库结构或迁移。暂不提交推送。
+
+
+- **2026-11-06 本轮：** 用户确认普通新增子女及兄妹规则并授权 D-026/D-028 按新规则执行，已记录决策及修订切片。InlineNameEditor 复用姓名校验，试用画布对已有节点提供原位编辑姓名，Enter 更新草稿、Esc 取消；尚非四类新增，未完成 WB-B-01。Windows Release 解决方案构建成功（0 错误、24 警告）；同源码定向 UI 测试 2/2、工作台 UI 专项 13/13 和日常回归 443/443 通过，均无失败或跳过。未进行用户人工验收或 Performance；沙箱内 GitHub HTTPS TCP 443 连接失败；沙箱外只读 ls-remote 成功，远端 dev 与本地 HEAD 均为 0154ce4；CI 未查询。不修改数据库结构。
+
+
+- **V1 阶段 A（2026-11-06）：** 定向审查现有工作台、关系模型、草稿事务和 Accepted 契约，制定 B–E 切片及验收；无业务代码或数据库修改。母亲语义及特殊关系待用户确认，详情见 [V1 清单](WORKBENCH_V1_SLICES.md)。本轮仅文档检查，不运行构建、测试、UI 或人工验收；远端实时查询网络失败，CI 未查询。以下为历史记录，实际 Git 状态以命令实测为准。
+
+- **Last Updated：** 2026-11-06（Asia/Shanghai）
 - **Current Branch：** `dev`，跟踪 `origin/dev`。
 - **HEAD / Last Commit：** 以 `git log -1 --oneline` 及 `git rev-parse HEAD` 实测为准；不得以本文件中的历史 SHA 判断同步状态。
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** 用户要求暂停后续开发并整理 P2-3 进度；[有序切片清单](CURRENT_PLAN.md#p2-3-有序切片清单)已列出 14 项，其中 6 项完成所列有限范围、8 项未完成。唯一父母子女组的持久化存储已实施，尚未接入工作台 UI；D-014 不变。
+- **Current Task：** WB-B-01 有限范围已获用户验收，Git 同步状态以实测为准；新建投影为通用接口，产品新增入口未接入。原 P2-3 持久排序仍未接 UI，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -40,7 +51,7 @@
 - **本轮持久排序存储：** 新增迁移、按图表的排序组及历史项、受保护独立会话的完整子女组捕获、事务保存和差异复核；图表修订条件更新，旧图表选线保存不覆盖排序，旧人物/关系身份保留供复核。成功保存后必须重新打开会话；数据或图表变化使旧结果失效。全库代数变化即使无关也保守要求复核；超过 2000、缺失世代或多父母拒绝捕获。此切片未接 UI、无父母兄妹或复杂关系。
 - **本轮存储本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、32 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 443/443 通过；单独筛选 `FullyQualifiedName~SiblingOrderStorageTests|FullyQualifiedName~LineageChartTests` 为 15/15 通过，均无跳过。覆盖旧库迁移、图表与谱隔离、并发竞争、取消与 SQLite 注入回滚、历史/ABA 复核、超过 100 人、图表选线保留、关闭排空及备份预检；EF `migrations has-pending-model-changes` 检查无差异。最初 EF 工具构建因 NuGet 网络不可用失败，使用本机缓存 `dotnet restore --ignore-failed-sources` 后恢复成功。未运行 UI、Performance 或人工验收，未查询远端 CI；未使用真实数据。
 - **本轮清单整理：** 用户要求暂停后续开发，并希望按序号查看 P2-3 已完成与剩余工作；已在[计划](CURRENT_PLAN.md#p2-3-有序切片清单)建立 14 项清单，6 项为所列有限范围已完成、8 项未完成，项数不等于工期比例。本轮仅改文档，`git diff --check`、相对链接和 14 项计数检查通过；未运行构建、应用测试或远端 CI。
-- **Exact Next Action：** 开发暂停，等待用户明确恢复；恢复后从 [P2-3 清单](CURRENT_PLAN.md#p2-3-有序切片清单)第 7 项开始，按持久化方案接入单组排序草稿、显式保存、复核及关闭协调，并使用独立数据验证；遵守 D-014。
+- **Exact Next Action：** 确认 WB-B-01 检查点已提交推送后，按 [V1 切片清单](WORKBENCH_V1_SLICES.md) 核对 WB-B-02 普通新增子女的父母角色、稳定配偶顺序及事务前置条件，再按单切片流程实施。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -48,4 +59,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF 和 P2-3 有序切片清单，开发目前暂停；等待用户明确恢复后，从第 7 项继续，遵守 D-014，本地验证后不等待远端 CI。`
+- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核对 WB-B-01 提交和 WB-B-02 关系语义及事务前置条件，保留 P2-3 排序待办并遵守 D-014。`
