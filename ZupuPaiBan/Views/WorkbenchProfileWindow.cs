@@ -15,6 +15,8 @@ namespace ZupuPaiBan.Views;
 /// <summary>Workbench with profile drafts and a bounded, conservative genealogy canvas.</summary>
 public sealed class WorkbenchProfileWindow : Window
 {
+    private const double CanvasNodeWidth = 100, CanvasNodeHeight = 82, CanvasNameHeight = 30;
+    internal static double ProjectedNameTop(HorizontalLayoutNode node) => node.Y + 40 + (node.Height - CanvasNameHeight) / 2;
     private sealed record Option(Guid Id, string Name);
     private sealed record OrderGroup(string Key, IReadOnlyList<Guid> People, Guid? ParentId);
     private sealed record PartnerOption(Guid? Id, string Name, FamilyUnionKind Kind)
@@ -31,6 +33,7 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly TextBox _displayRank = new();
     private readonly Button _applyRank = new() { Content = "设置显示顺序", Margin = new Thickness(0, 4, 0, 0) };
     private readonly TextBlock _recordedGeneration = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Gray };
+    private readonly TextBlock _draftParents = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.SlateGray, Margin = new Thickness(0, 6, 0, 0) };
     private readonly TextBox _birth = new();
     private readonly TextBox _death = new();
     private readonly TextBox _biography = new() { AcceptsReturn = true, Height = 120, TextWrapping = TextWrapping.Wrap };
@@ -44,16 +47,21 @@ public sealed class WorkbenchProfileWindow : Window
     private readonly ScaleTransform _canvasScale = new(1, 1);
     private Point? _panStart;
     private Point _panOffset;
+    private bool _panDragged;
     private readonly DispatcherTimer _canvasMonitor = new() { Interval = TimeSpan.FromSeconds(1) };
     private WorkbenchProjectionSession? _projection;
     private long _projectionRevision;
     private readonly Dictionary<Guid, ProjectionReadSession.PersonRow> _canvasPeople = new();
     private readonly Dictionary<Guid, IReadOnlyList<PartnerOption>> _canvasPartners = new();
+    private readonly HashSet<Guid> _incompleteUnions = new();
     private readonly Dictionary<Guid, IReadOnlyList<ProjectionReadSession.SiblingRow>> _canvasSiblings = new();
     private readonly List<HorizontalLayoutRelationship> _canvasEdges = [];
     private readonly Dictionary<Guid, OrderGroup> _orderGroups = new();
     private readonly Dictionary<string, Dictionary<Guid, int>> _sessionOrders = new();
     private readonly Dictionary<Guid, int> _layoutOrders = new();
+    private readonly Dictionary<Guid, Guid> _createdChildDisplayParents = new();
+    private readonly Dictionary<Guid, int> _createdChildDisplayOrder = new();
+    private int _nextCreatedChildOrder;
     private int _unresolvedCount;
     private bool _canvasTruncated;
     private bool _generationEdited;
@@ -72,6 +80,7 @@ public sealed class WorkbenchProfileWindow : Window
     internal Func<DraftLeaveChoice>? ChooseForTest { get; set; }
     internal WorkbenchDraftSession SessionForTest => _session;
     internal string StatusForTest => _status.Text;
+    internal string DraftParentsForTest => _draftParents.Text;
     internal Func<Guid, Task>? AfterCommitAsync { set => _afterCommit = value; }
     internal Task InitializeForTest() => _loaded.Task;
     internal async Task SelectGenealogyForTest(Guid id)
@@ -85,6 +94,7 @@ public sealed class WorkbenchProfileWindow : Window
         await ChangePersonAsync();
     }
     internal void SetNameForTest(string name) => _name.Text = name;
+    internal void SetSexForTest(PersonSex sex) => _sex.SelectedItem = sex;
     internal Task SaveForTest() => SaveAsync();
     internal bool CanvasContainsForTest(Guid id) => _canvasPeople.ContainsKey(id);
     internal string? CanvasNameForTest(Guid id) => _canvasPeople.GetValueOrDefault(id)?.Name;
@@ -96,12 +106,13 @@ public sealed class WorkbenchProfileWindow : Window
     internal Task BeginNewForTest(Guid? parentId = null, PersonRelationshipKind? kind = null) => BeginNewAsync(parentId, kind);
     internal void SetGenerationForTest(string value) => _generation.Text = value;
     internal Task PollCanvasForTest() => PollCanvasAsync();
+    internal Task ReopenCanvasForTest() => ReopenCanvasAsync();
     internal Task SelectCanvasForTest(Guid id) => SelectCanvasPersonAsync(id);
     internal Border CanvasCardForTest(Guid id) => _canvas.Children.OfType<Border>().Single(item => item.Tag is Guid value && value == id);
     internal Canvas CanvasForTest => _canvas;
     internal void RenderCanvasForTest() => RenderCanvas();
     internal void BeginProjectedNameInput(Func<HorizontalLayoutNode> project, Action<string> confirmed) =>
-        ShowInlineNameEditor(() => { var node = project(); return new Point(node.X + 20, node.Y + 40); }, "", confirmed);
+        ShowInlineNameEditor(() => { var node = project(); return new Point(node.X + 20, ProjectedNameTop(node)); }, "", confirmed);
     internal Task SetDisplayRankForTest(int rank) { _displayRank.Text = rank.ToString(); return SetDisplayRankAsync(); }
     internal Task MoveForTest(int delta) => MoveSiblingAsync(delta);
 
@@ -139,6 +150,7 @@ public sealed class WorkbenchProfileWindow : Window
         var right = new StackPanel { Margin = new Thickness(12) };
         right.Children.Add(new TextBlock { Text = "人物资料", FontSize = 17 });
         AddField(right, "姓名", _name); AddField(right, "世代（1–1000）", _generation); right.Children.Add(_recordedGeneration);
+        right.Children.Add(_draftParents);
         AddField(right, "同胞显示顺序（仅本次会话）", _displayRank); right.Children.Add(_applyRank);
         _applyRank.Click += async (_, _) => await SetDisplayRankAsync();
         AddField(right, "性别", _sex); AddField(right, "出生", _birth);
@@ -172,6 +184,7 @@ public sealed class WorkbenchProfileWindow : Window
         };
         PreviewMouseDown += (_, e) =>
         {
+            if (_inlineNameEditor is not null && e.ChangedButton == MouseButton.Left && ReferenceEquals(e.OriginalSource, _canvas)) return;
             if (_inlineNameEditor is not null && e.OriginalSource is DependencyObject source &&
                 !ReferenceEquals(source, _inlineNameEditor) && !_inlineNameEditor.IsAncestorOf(source))
             { e.Handled = true; BlockWhileInlineEditing(); }
@@ -197,25 +210,29 @@ public sealed class WorkbenchProfileWindow : Window
     private void OnCanvasDown(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource != _canvas || _busy) return;
-        _panStart = e.GetPosition(_canvasScroll); _panOffset = new Point(_canvasScroll.HorizontalOffset, _canvasScroll.VerticalOffset);
+        _panStart = e.GetPosition(_canvasScroll); _panOffset = new Point(_canvasScroll.HorizontalOffset, _canvasScroll.VerticalOffset); _panDragged = false;
         _canvas.CaptureMouse(); e.Handled = true;
     }
     private void OnCanvasMove(object sender, MouseEventArgs e)
     {
         if (_panStart is not Point start || e.LeftButton != MouseButtonState.Pressed) return;
         var delta = e.GetPosition(_canvasScroll) - start;
+        if (Math.Abs(delta.X) >= SystemParameters.MinimumHorizontalDragDistance || Math.Abs(delta.Y) >= SystemParameters.MinimumVerticalDragDistance) _panDragged = true;
+        if (!_panDragged) return;
         _canvasScroll.ScrollToHorizontalOffset(_panOffset.X - delta.X); _canvasScroll.ScrollToVerticalOffset(_panOffset.Y - delta.Y);
     }
     private void OnCanvasUp(object sender, MouseButtonEventArgs e)
     {
         if (_panStart is null) return;
+        var confirm = !_panDragged && _inlineNameEditor is not null;
         _panStart = null; _canvas.ReleaseMouseCapture(); e.Handled = true;
+        if (confirm) _inlineNameEditor?.Confirm();
     }
     private void ClearCanvas()
     {
         var editor = _inlineNameEditor;
         var restoreFocus = editor?.IsKeyboardFocusWithin == true;
-        _canvasPeople.Clear(); _canvasPartners.Clear(); _canvasSiblings.Clear(); _canvasEdges.Clear(); _orderGroups.Clear(); _sessionOrders.Clear(); _layoutOrders.Clear(); _diagnosticMessages.Clear(); _diagnostics.ItemsSource = null;
+        _canvasPeople.Clear(); _canvasPartners.Clear(); _incompleteUnions.Clear(); _canvasSiblings.Clear(); _canvasEdges.Clear(); _createdChildDisplayParents.Clear(); _createdChildDisplayOrder.Clear(); _nextCreatedChildOrder = 0; _orderGroups.Clear(); _sessionOrders.Clear(); _layoutOrders.Clear(); _diagnosticMessages.Clear(); _diagnostics.ItemsSource = null;
         _unresolvedCount = 0; _canvasTruncated = false; _canvas.Children.Clear();
         if (editor is not null)
         {
@@ -229,20 +246,32 @@ public sealed class WorkbenchProfileWindow : Window
         var restoreFocus = editor?.IsKeyboardFocusWithin == true;
         _canvas.Children.Clear();
         if (_canvasPeople.Count == 0) { RestoreInlineEditor(editor, restoreFocus); return; }
-        var people = _canvasPeople.Values.Select(p => new HorizontalLayoutPerson(p.Id, ParseGeneration(p) - 1, _layoutOrders.GetValueOrDefault(p.Id), 170,
-            85 + (_canvasPartners.TryGetValue(p.Id, out var partners) ? partners.Count * 20 : 0) + (_canvasSiblings.TryGetValue(p.Id, out var siblings) ? siblings.Count * 20 : 0))).ToArray();
-        var layout = HorizontalLineageLayout.Calculate(people, _canvasEdges, _canvasPeople.Keys.ToHashSet(), allowSkippedGenerations: true);
+        var people = CanvasLayoutPeople().ToList();
+        var edges = _canvasEdges.ToList();
+        var childDraft = _session.Draft is { Original.IsOrdinaryChild: true, Original.IsNew: true } pending &&
+            (_person == pending.Original.PersonId || (_inlineNameEditor is not null && _person == pending.Original.ParentId)) ? pending : null;
+        if (childDraft is not null && childDraft.Original.ParentId is Guid parent && RecordedGenerationParser.TryParse(childDraft.Values.RecordedGeneration, out var childGeneration) && _canvasPeople.ContainsKey(parent))
+        {
+            people.Add(new HorizontalLayoutPerson(childDraft.Original.PersonId, childGeneration - 1, NextChildOrder(parent), CanvasNodeWidth, CanvasNodeHeight));
+            if (childGeneration > ParseGeneration(_canvasPeople[parent]))
+                edges.Add(new HorizontalLayoutRelationship(childDraft.Original.PersonId, parent, childDraft.Original.PersonId));
+            else
+                _status.Text = "子女草稿的世代不晚于父母，暂不绘制连线，请核实世代。";
+        }
+        var layout = HorizontalLineageLayout.Calculate(people, edges, people.Select(p => p.Id).ToHashSet(), allowSkippedGenerations: true);
         if (HasUnsafeCrossing(layout))
         {
-            _unresolvedCount += _canvasEdges.Count; _canvasEdges.Clear();
+            _unresolvedCount += edges.Count;
+            if (childDraft is null) _canvasEdges.Clear();
             _diagnosticMessages.Add("部分连线会穿越其他人物或不相关连线，已暂停绘制，请在关系视图中复核。");
             _diagnostics.ItemsSource = _diagnosticMessages.ToArray();
-            layout = HorizontalLineageLayout.Calculate(people, _canvasEdges, _canvasPeople.Keys.ToHashSet(), allowSkippedGenerations: true);
+            edges.Clear();
+            layout = HorizontalLineageLayout.Calculate(people, edges, people.Select(p => p.Id).ToHashSet(), allowSkippedGenerations: true);
         }
         foreach (var generation in layout.Nodes.Select(n => n.Generation).Distinct())
         {
             var heading = new TextBlock { Text = $"第 {generation + 1} 世", FontWeight = FontWeights.SemiBold };
-            Canvas.SetLeft(heading, generation * 234 + 20); Canvas.SetTop(heading, 10); _canvas.Children.Add(heading);
+            Canvas.SetLeft(heading, generation * (CanvasNodeWidth + 64) + 20); Canvas.SetTop(heading, 10); _canvas.Children.Add(heading);
         }
         foreach (var edge in layout.Edges)
         {
@@ -252,12 +281,15 @@ public sealed class WorkbenchProfileWindow : Window
         }
         foreach (var node in layout.Nodes)
         {
-            var person = _canvasPeople[node.PersonId];
+            if (childDraft is not null && node.PersonId == childDraft.Original.PersonId && _person != node.PersonId) continue;
+            var person = _canvasPeople.TryGetValue(node.PersonId, out var existing) ? existing :
+                new ProjectionReadSession.PersonRow(node.PersonId, childDraft!.Values.Name, childDraft.Values.RecordedGeneration, null);
             var displayedName = _person == person.Id && _session.Draft is { } draft &&
                 draft.Original.PersonId == person.Id && draft.Original.GenealogyId == _genealogy
                 ? draft.Values.Name : person.Name;
             var content = new StackPanel();
-            content.Children.Add(new TextBlock { Text = $"{displayedName}\n谱载世代：{person.RecordedGeneration ?? "未记"}\n谱载排行：{person.RecordedBirthOrder ?? "未记"}", TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis });
+            if (_person == person.Id)
+                content.Children.Add(new TextBlock { Text = $"世代：{person.RecordedGeneration ?? "未记"}　排行：{person.RecordedBirthOrder ?? "未记"}", FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis });
             if (_canvasPartners.TryGetValue(person.Id, out var partners) && (_person == person.Id || partners.Any(p => p.Id == _person)))
             {
                 foreach (var partner in partners)
@@ -280,9 +312,11 @@ public sealed class WorkbenchProfileWindow : Window
                     content.Children.Add(label);
                 }
             }
-            var card = new Border { Width = node.Width, Height = node.Height, BorderBrush = _person == person.Id ? Brushes.SteelBlue : Brushes.SlateGray,
-                BorderThickness = new Thickness(_person == person.Id ? 2 : 1), CornerRadius = new CornerRadius(5), Background = Brushes.White, Padding = new Thickness(8),
-                Tag = person.Id, Child = content };
+            var card = new Border { Width = node.Width, Height = CanvasNameHeight, BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(3), Background = _person == person.Id ? Brushes.DarkOrange : Brushes.WhiteSmoke, Padding = new Thickness(4),
+                ToolTip = displayedName, Tag = person.Id, Child = new TextBlock { Text = displayedName, Foreground = _person == person.Id ? Brushes.White : Brushes.Black,
+                    FontWeight = _person == person.Id ? FontWeights.SemiBold : FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
             card.MouseLeftButtonDown += async (_, e) => { e.Handled = true; await SelectCanvasPersonAsync(person.Id); };
             card.MouseRightButtonDown += async (_, e) =>
             {
@@ -291,7 +325,7 @@ public sealed class WorkbenchProfileWindow : Window
                 var menu = new ContextMenu();
                 var edit = new MenuItem { Header = "编辑人物" }; edit.Click += (_, _) => _name.Focus(); menu.Items.Add(edit);
                 var inline = new MenuItem { Header = "原位编辑姓名" }; inline.Click += (_, _) => BeginInlineNameEdit(person.Id); menu.Items.Add(inline);
-                var child = new MenuItem { Header = "新增子女（生物关系）" }; child.Click += async (_, _) => await BeginNewAsync(person.Id, PersonRelationshipKind.BiologicalParent); menu.Items.Add(child);
+                var child = new MenuItem { Header = "新增子女（生物关系）" }; child.Click += async (_, _) => await BeginOrdinaryChildFromCanvasAsync(person.Id); menu.Items.Add(child);
                 var adopted = new MenuItem { Header = "新增子女（收养关系）" }; adopted.Click += async (_, _) => await BeginNewAsync(person.Id, PersonRelationshipKind.AdoptiveParent); menu.Items.Add(adopted);
                 var sibling = new MenuItem { Header = "新增兄妹" }; sibling.Click += async (_, _) => await BeginSiblingAsync(person.Id); menu.Items.Add(sibling);
                 var up = new MenuItem { Header = "同胞上移", IsEnabled = CanMove(person.Id, -1) }; up.Click += async (_, _) => await MoveSiblingAsync(-1); menu.Items.Add(up);
@@ -301,12 +335,22 @@ public sealed class WorkbenchProfileWindow : Window
                 if (target is null) return;
                 target.ContextMenu = menu; menu.PlacementTarget = target; menu.IsOpen = true;
             };
-            Canvas.SetLeft(card, node.X + 20); Canvas.SetTop(card, node.Y + 40); _canvas.Children.Add(card);
+            Canvas.SetLeft(card, node.X + 20); Canvas.SetTop(card, ProjectedNameTop(node)); _canvas.Children.Add(card);
+            if (content.Children.Count > 0)
+            {
+                var details = new ScrollViewer { Content = content, Width = CanvasNodeWidth, Height = 48, Tag = person.Id,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false, Background = Brushes.White };
+                Canvas.SetLeft(details, node.X + 20); Canvas.SetTop(details, ProjectedNameTop(node) + CanvasNameHeight + 2); _canvas.Children.Add(details);
+            }
         }
         _canvas.Width = Math.Max(650, layout.Nodes.Max(n => n.X + n.Width) + 40);
         _canvas.Height = Math.Max(360, layout.Nodes.Max(n => n.Y + n.Height) + 60);
         RestoreInlineEditor(editor, restoreFocus);
     }
+    private IEnumerable<HorizontalLayoutPerson> CanvasLayoutPeople() => _canvasPeople.Values.Select(p =>
+        new HorizontalLayoutPerson(p.Id, ParseGeneration(p) - 1, _layoutOrders.GetValueOrDefault(p.Id), CanvasNodeWidth, CanvasNodeHeight));
+    private int NextChildOrder(Guid parent) => _canvasEdges.Where(e => e.ParentId == parent)
+        .Select(e => _layoutOrders.GetValueOrDefault(e.ChildId)).DefaultIfEmpty(-1).Max() + 1;
     private void RestoreInlineEditor(InlineNameEditor? editor, bool restoreFocus)
     {
         if (editor is null || !ReferenceEquals(editor, _inlineNameEditor)) return;
@@ -328,7 +372,7 @@ public sealed class WorkbenchProfileWindow : Window
         }
         ShowInlineNameEditor(Locate, _name.Text, value => _name.Text = value, RenderCanvas);
     }
-    private void ShowInlineNameEditor(Func<Point?> locate, string initial, Action<string> confirmed, Action? afterConfirm = null)
+    private void ShowInlineNameEditor(Func<Point?> locate, string initial, Action<string> confirmed, Action? afterConfirm = null, Action? afterCancel = null)
     {
         if (_inlineNameEditor is not null || locate() is not Point point) return;
         var editor = new InlineNameEditor();
@@ -352,7 +396,7 @@ public sealed class WorkbenchProfileWindow : Window
             if (_inlineInvalid) { _status.Text = "画布已失效，输入尚未应用；请复制内容或按 Esc 取消，再重新打开画布。"; return; }
             confirmed(value); CloseEditor(); afterConfirm?.Invoke();
         };
-        editor.Cancelled += CloseEditor;
+        editor.Cancelled += () => { CloseEditor(); afterCancel?.Invoke(); };
         editor.Input.Focus(); editor.Input.SelectAll();
     }
     private bool BlockWhileInlineEditing()
@@ -393,6 +437,73 @@ public sealed class WorkbenchProfileWindow : Window
     {
         var menu = new ContextMenu(); var create = new MenuItem { Header = "新建人物" };
         create.Click += async (_, _) => await BeginNewAsync(); menu.Items.Add(create); _canvas.ContextMenu = menu; menu.PlacementTarget = _canvas; menu.IsOpen = true;
+    }
+    private async Task BeginOrdinaryChildFromCanvasAsync(Guid parentId)
+    {
+        if (BlockWhileInlineEditing() || _busy || _genealogy is not Guid genealogy || _person != parentId) return;
+        if (_incompleteUnions.Contains(parentId)) { _status.Text = "婚配记录未完整加载，暂不能确定默认配偶。"; return; }
+        if (!_canvasPeople.TryGetValue(parentId, out var parent) || !RecordedGenerationParser.TryParse(parent.RecordedGeneration, out var generation) || generation >= 1000)
+        { _status.Text = "当前人物的世代无法预填下一世，请先核实世代。"; return; }
+        _busy = true; IsEnabled = false; var started = false;
+        try
+        {
+            await ValidateCanvasIdentityAsync(parentId);
+            using (var operation = _coordinator.EnterOperation())
+            await using (var context = _coordinator.CreateContext())
+                _ = await new WorkbenchPersonProfileCommand(context).BeginOrdinaryChildAsync(genealogy, parentId);
+            var prior = _session.Draft;
+            var result = await _session.BeginOrdinaryChildAsync(genealogy, parentId, Choose());
+            SyncSavedPerson(prior);
+            if (result != DraftTransitionResult.Completed) { Report(result); RestoreSelection(); ShowDraft(); return; }
+            started = true;
+            await ValidateCanvasIdentityAsync(parentId);
+            var draft = _session.Draft!;
+            if (!RecordedGenerationParser.TryParse(draft.Values.RecordedGeneration, out var childGeneration))
+                throw new InvalidOperationException("无法确定新子女的世代。请先核实当前人物世代。");
+            HorizontalLayoutNode Project()
+            {
+                var people = CanvasLayoutPeople().ToList();
+                people.Add(new HorizontalLayoutPerson(draft.Original.PersonId, childGeneration - 1, NextChildOrder(parentId), CanvasNodeWidth, CanvasNodeHeight));
+                var relationships = _canvasEdges.Append(new HorizontalLayoutRelationship(draft.Original.PersonId, parentId, draft.Original.PersonId)).ToArray();
+                return InlineNamePlacement.Project(people, relationships, people.Select(p => p.Id).ToHashSet(), draft.Original.PersonId);
+            }
+            var location = Project();
+            _status.Text = "请输入子女姓名：Enter 确认草稿，Esc 取消；保存后才写入数据库。";
+            ShowInlineNameEditor(() => { var node = Project(); return new Point(node.X + 20, ProjectedNameTop(node)); }, "", name =>
+            {
+                draft.Values = draft.Values with { Name = name };
+                _person = draft.Original.PersonId;
+                _createdChildDisplayParents[_person.Value] = parentId;
+                _createdChildDisplayOrder[_person.Value] = _nextCreatedChildOrder++;
+                _updating = true; _people.SelectedItem = null; _updating = false;
+                ShowDraft();
+                _status.Text = "已创建子女草稿，请显式保存；子女排列仅为临时显示，不代表谱载排行。";
+            }, RenderCanvas, async () => await CancelOrdinaryChildAsync(genealogy, parentId, draft));
+            if (_inlineNameEditor is null) throw new InvalidOperationException("无法显示姓名输入框。");
+            RenderCanvas();
+            _canvas.Width = Math.Max(_canvas.Width, location.X + location.Width + 40);
+            _canvas.Height = Math.Max(_canvas.Height, location.Y + location.Height + 60);
+        }
+        catch (Exception ex)
+        {
+            if (started && _session.Draft is { } draft) await CancelOrdinaryChildAsync(genealogy, parentId, draft);
+            _status.Text = $"无法新增子女：{ex.Message}";
+        }
+        finally { IsEnabled = true; _busy = false; _inlineNameEditor?.Input.Focus(); }
+    }
+    private async Task CancelOrdinaryChildAsync(Guid genealogy, Guid parentId, WorkbenchPersonDraft draft)
+    {
+        _busy = true; IsEnabled = false;
+        try
+        {
+            if (!ReferenceEquals(_session.Draft, draft)) return;
+            var result = await _session.SelectAsync(genealogy, parentId, DraftLeaveChoice.Discard);
+            if (result != DraftTransitionResult.Completed) { Report(result); RestoreSelection(); ShowDraft(); return; }
+            _person = parentId; RestoreSelection(); ShowDraft(); RenderCanvas();
+            _status.Text = "已取消新增子女，没有创建人物。";
+        }
+        catch (Exception ex) { _status.Text = $"取消后无法恢复人物：{ex.Message}"; }
+        finally { IsEnabled = true; _busy = false; }
     }
     private async Task BeginSiblingAsync(Guid siblingId)
     {
@@ -504,6 +615,7 @@ public sealed class WorkbenchProfileWindow : Window
             .Select(p => $"{p.Name}：谱载世代 {p.RecordedGeneration ?? "未记"}，未作为主节点显示，可在辅助列表查看。").ToList();
         var candidates = new List<HorizontalLayoutRelationship>();
         var partners = new Dictionary<Guid, IReadOnlyList<PartnerOption>>();
+        var incompleteUnions = new HashSet<Guid>();
         var siblings = new Dictionary<Guid, IReadOnlyList<ProjectionReadSession.SiblingRow>>();
         var parentCounts = new Dictionary<Guid, int>();
         var incompleteSiblings = new HashSet<Guid>();
@@ -514,22 +626,27 @@ public sealed class WorkbenchProfileWindow : Window
             if (siblingPage.Page.NextCursor is not null) { incompleteSiblings.Add(child.Id); unresolved++; diagnostics.Add($"{child.Name}：兄妹关系未全部加载。"); }
             var unions = await projection.ReadUnionsAsync(revision, child.Id, null, 100);
             var labels = new List<PartnerOption>();
-            foreach (var union in unions.Page.Items)
+            foreach (var union in unions.Page.Items.OrderBy(u => u.Kind == FamilyUnionKind.Marriage && u.PartnerTwoId is not null ? 0 : 1)
+                .ThenBy(u => u.Id.ToString("D"), StringComparer.Ordinal))
             {
                 var other = union.PartnerOneId == child.Id ? union.PartnerTwoId : union.PartnerOneId;
                 var name = other is Guid otherId ? (await projection.ReadPersonAsync(revision, otherId)).Person.Name : "未详";
                 labels.Add(new PartnerOption(other, name, union.Kind));
             }
             partners.Add(child.Id, labels.AsReadOnly());
-            if (unions.Page.NextCursor is not null) { unresolved++; diagnostics.Add($"{child.Name}：婚配记录未全部加载。"); }
+            if (unions.Page.NextCursor is not null) { incompleteUnions.Add(child.Id); unresolved++; diagnostics.Add($"{child.Name}：婚配记录未全部加载。"); }
             var parents = await projection.ReadParentsAsync(revision, child.Id, null, 100);
             parentCounts[child.Id] = parents.Page.NextCursor is not null ? -1 : parents.Page.Items.Count;
-            if (parents.Page.NextCursor is not null || parents.Page.Items.Count > 1)
+            var selectedParent = parents.Page.Items.Count == 1 ? parents.Page.Items[0] :
+                _createdChildDisplayParents.TryGetValue(child.Id, out var explicitParent)
+                    ? parents.Page.Items.SingleOrDefault(p => p.ParentId == explicitParent && p.Kind == PersonRelationshipKind.BiologicalParent)
+                    : null;
+            if (parents.Page.NextCursor is not null || (parents.Page.Items.Count > 1 && selectedParent is null))
             {
                 unresolved++; diagnostics.Add($"{child.Name}：父母候选存在多项或未全部加载，暂不连线。"); continue;
             }
             if (parents.Page.Items.Count == 0) continue;
-            var parent = parents.Page.Items[0];
+            var parent = selectedParent!;
             if (!rows.TryGetValue(parent.ParentId, out var parentRow) || ParseGeneration(child) <= ParseGeneration(parentRow))
             { unresolved++; diagnostics.Add($"{child.Name}：父母 {parent.ParentName} 未显示或世代列冲突，暂不连线。"); continue; }
             candidates.Add(new HorizontalLayoutRelationship(parent.RelationshipId, parent.ParentId, child.Id));
@@ -538,10 +655,17 @@ public sealed class WorkbenchProfileWindow : Window
         foreach (var group in candidates.GroupBy(edge => edge.ParentId))
         {
             var all = await projection.ReadChildrenAsync(revision, group.Key, null, 100);
-            if (all.Page.NextCursor is not null || !group.Select(e => e.Id).ToHashSet().SetEquals(all.Page.Items.Select(e => e.RelationshipId)))
+            var fullGroup = all.Page.NextCursor is null && group.Select(e => e.Id).ToHashSet().SetEquals(all.Page.Items.Select(e => e.RelationshipId));
+            if (!fullGroup)
             {
-                blockedParents.Add(group.Key); unresolved += group.Count();
-                diagnostics.Add($"{rows[group.Key].Name}：子女关系未完整显示或存在歧义，暂不排序和连线。"); continue;
+                var hasCreatedChild = group.Any(e => _createdChildDisplayParents.TryGetValue(e.ChildId, out var selected) && selected == group.Key);
+                unresolved += group.Count();
+                if (!hasCreatedChild || all.Page.NextCursor is not null)
+                {
+                    blockedParents.Add(group.Key);
+                    diagnostics.Add($"{rows[group.Key].Name}：子女关系未完整显示或存在歧义，暂不排序和连线。"); continue;
+                }
+                diagnostics.Add($"{rows[group.Key].Name}：仅绘制已明确展示的子女关系，其他候选仍待复核。");
             }
             if (group.Count() > 1)
             {
@@ -573,6 +697,14 @@ public sealed class WorkbenchProfileWindow : Window
             foreach (var id in group.People) groupByPerson.Add(id, group);
             if (!_sessionOrders.TryGetValue(group.Key, out var order) || !IsComplete(group, order))
             {
+                if (group.ParentId is Guid explicitParent && group.People.Any(id => _createdChildDisplayParents.TryGetValue(id, out var selected) && selected == explicitParent))
+                {
+                    var temporary = group.People.OrderBy(id => _createdChildDisplayOrder.ContainsKey(id) ? 1 : 0)
+                        .ThenBy(id => _createdChildDisplayOrder.GetValueOrDefault(id, 0)).ThenBy(id => id).ToArray();
+                    for (var i = 0; i < temporary.Length; i++) layoutOrders[temporary[i]] = i;
+                    unresolved++; diagnostics.Add($"{rows[explicitParent].Name}：子女连线按临时显示顺序排列，不代表谱载排行；可在右侧明确顺序。");
+                    continue;
+                }
                 if (group.ParentId is Guid parent) blockedParents.Add(parent);
                 unresolved++; diagnostics.Add(group.ParentId is Guid p
                     ? $"{rows[p].Name}：多名子女的顺序尚未确认，请分别指定本次显示顺序。"
@@ -597,6 +729,7 @@ public sealed class WorkbenchProfileWindow : Window
         }
         _canvasPeople.Clear(); foreach (var row in rows.Values) _canvasPeople.Add(row.Id, row);
         _canvasPartners.Clear(); foreach (var pair in partners) _canvasPartners.Add(pair.Key, pair.Value);
+        _incompleteUnions.Clear(); _incompleteUnions.UnionWith(incompleteUnions);
         _canvasSiblings.Clear(); foreach (var pair in siblings) _canvasSiblings.Add(pair.Key, pair.Value);
         _orderGroups.Clear(); foreach (var pair in groupByPerson) _orderGroups.Add(pair.Key, pair.Value);
         _layoutOrders.Clear(); foreach (var pair in layoutOrders) _layoutOrders.Add(pair.Key, pair.Value);
@@ -711,7 +844,8 @@ public sealed class WorkbenchProfileWindow : Window
         catch { ClearCanvas(); _canvasMonitor.Stop(); throw; }
     }
     private string CanvasStatus() => $"画布显示 {_canvasPeople.Count} 人；{_unresolvedCount} 项世代或关系待处理。" +
-        (_canvasTruncated ? " 仅显示前 100 人，其他人物可在辅助列表查看。" : "");
+        (_canvasTruncated ? " 仅显示前 100 人，其他人物可在辅助列表查看。" : "") +
+        (_diagnosticMessages.Any(message => message.Contains("临时显示顺序", StringComparison.Ordinal)) ? " 子女按临时显示顺序排列，不代表谱载排行。" : "");
     private DraftLeaveChoice Choose() => _session.Draft?.IsDirty != true ? DraftLeaveChoice.Discard :
         ChooseForTest?.Invoke() ?? MessageBox.Show(this, "人物档案有未保存修改。是否保存？\n选择“否”放弃，选择“取消”继续编辑。", "未保存的档案", MessageBoxButton.YesNoCancel, MessageBoxImage.Question) switch
         { MessageBoxResult.Yes => DraftLeaveChoice.Save, MessageBoxResult.No => DraftLeaveChoice.Discard, _ => DraftLeaveChoice.Cancel };
@@ -735,6 +869,27 @@ public sealed class WorkbenchProfileWindow : Window
             _generation.Text = RecordedGenerationParser.TryParse(v?.RecordedGeneration, out var generation) ? generation.ToString() : "";
             _generationEdited = _birthEdited = _deathEdited = _biographyEdited = false;
             _recordedGeneration.Text = $"谱载原文：{_session.Draft?.Original.Values.RecordedGeneration ?? "未记"}";
+            _draftParents.Text = "";
+            if (_session.Draft?.Original is { IsOrdinaryChild: true, ParentId: Guid parentId } child)
+            {
+                var parentName = _canvasPeople.TryGetValue(parentId, out var parent) ? parent.Name : "当前人物";
+                var otherName = child.SecondParentId is Guid other && _canvasPartners.TryGetValue(parentId, out var partners)
+                    ? partners.FirstOrDefault(p => p.Id == other)?.Name ?? "已选配偶" : "未确定";
+                _draftParents.Text = child.ParentSex == PersonSex.Male
+                    ? $"生父：{parentName}　生母：{otherName}（草稿）"
+                    : $"生母：{parentName}　生父：{otherName}（草稿）";
+            }
+            else if (_session.Draft?.Original.Parents is { } recordedParents)
+            {
+                var biological = recordedParents.Where(p => p.Kind == PersonRelationshipKind.BiologicalParent).ToArray();
+                string Names(PersonSex sex) => biological.Where(p => p.Sex == sex).Select(p => p.Name).DefaultIfEmpty("未确定").Aggregate((a, b) => $"{a}、{b}");
+                var unresolved = biological.Where(p => p.Sex is not (PersonSex.Male or PersonSex.Female)).Select(p => p.Name).ToArray();
+                _draftParents.Text = $"生父：{Names(PersonSex.Male)}　生母：{Names(PersonSex.Female)}";
+                if (unresolved.Length != 0) _draftParents.Text += $"\n生物父母角色未确定：{string.Join("、", unresolved)}";
+                var special = recordedParents.Where(p => p.Kind != PersonRelationshipKind.BiologicalParent).Select(p =>
+                    $"{(p.Kind == PersonRelationshipKind.AdoptiveParent ? "养父母" : "继嗣父母")}：{p.Name}").ToArray();
+                if (special.Length != 0) _draftParents.Text += "\n" + string.Join("　", special);
+            }
             _displayRank.Text = ""; _displayRank.IsEnabled = _applyRank.IsEnabled = false;
             if (_person is Guid person && _orderGroups.TryGetValue(person, out var group))
             {

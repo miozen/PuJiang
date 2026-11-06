@@ -6,21 +6,68 @@ using ZupuPaiBan.Models;
 namespace ZupuPaiBan.Data;
 
 public sealed record WorkbenchProfileValues(string Name, PersonSex Sex, string? BirthDate, string? DeathDate, string? Biography, string? RecordedGeneration = null);
+public sealed record WorkbenchParentInfo(Guid PersonId, string Name, PersonSex Sex, PersonRelationshipKind Kind);
 public sealed record WorkbenchProfileSnapshot(Guid GenealogyId, Guid PersonId, long Generation, WorkbenchProfileValues Values,
     bool IsNew = false, Guid? ParentId = null, PersonRelationshipKind? ParentKind = null,
-    Guid? PartnerId = null, FamilyUnionKind? UnionKind = null, Guid? SiblingId = null);
+    Guid? PartnerId = null, FamilyUnionKind? UnionKind = null, Guid? SiblingId = null,
+    Guid? SecondParentId = null, bool IsOrdinaryChild = false, PersonSex? ParentSex = null,
+    IReadOnlyList<WorkbenchParentInfo>? Parents = null);
 
 /// <summary>Single-person command boundary. No UI or view state is used as data authority.</summary>
 public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
 {
+    /// <summary>Reads the complete marriage set under the same version as the new-person draft.</summary>
+    public async Task<WorkbenchProfileSnapshot> BeginOrdinaryChildAsync(Guid genealogyId, Guid parentId, CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var generation = await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync(cancellationToken);
+        var parent = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == parentId, cancellationToken)
+            ?? throw new InvalidOperationException("所选父母不属于当前族谱。");
+        var second = await ResolveOrdinarySecondParentAsync(genealogyId, parent, cancellationToken);
+        var recorded = RecordedGenerationParser.TryParse(parent.RecordedGeneration, out var number) && number < 1000
+            ? (number + 1).ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        await transaction.CommitAsync(cancellationToken);
+        return new(genealogyId, Guid.NewGuid(), generation, new("", PersonSex.Male, null, null, null, recorded),
+            IsNew: true, ParentId: parentId, ParentKind: PersonRelationshipKind.BiologicalParent, SecondParentId: second, IsOrdinaryChild: true, ParentSex: parent.Sex);
+    }
+
+    private async Task<Guid?> ResolveOrdinarySecondParentAsync(Guid genealogyId, Person parent, CancellationToken cancellationToken)
+    {
+        if (parent.Sex is not (PersonSex.Male or PersonSex.Female))
+            throw new InvalidOperationException("当前人物性别未明确，无法确定生父母角色。请先完善资料。");
+        var parentId = parent.Id;
+        var unions = await context.FamilyUnions.AsNoTracking().Where(u => u.GenealogyId == genealogyId && u.Kind == FamilyUnionKind.Marriage &&
+            (u.PartnerOneId == parentId || u.PartnerTwoId == parentId)).ToListAsync(cancellationToken);
+        // The view uses the same ordering; this is not a claim about historical marriage order.
+        var ordered = unions.OrderBy(u => u.Id.ToString("D"), StringComparer.Ordinal).ToArray();
+        if (ordered.Any(u => u.PartnerTwoId is null))
+            throw new InvalidOperationException("存在对方未详的婚配，无法安全确定默认生父母，请先完善婚配资料。");
+        Guid? second = null;
+        if (ordered.Length > 0)
+        {
+            var union = ordered[0];
+            second = union.PartnerOneId == parentId ? union.PartnerTwoId : union.PartnerOneId;
+            var spouse = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == second, cancellationToken)
+                ?? throw new InvalidOperationException("婚配对方不属于当前族谱或已不存在。");
+            if (spouse.Id == parent.Id || spouse.Sex is not (PersonSex.Male or PersonSex.Female) || spouse.Sex == parent.Sex)
+                throw new InvalidOperationException("默认配偶的生父母角色无法确定，请先核实性别与婚配资料。");
+        }
+        return second;
+    }
     public async Task<WorkbenchProfileSnapshot> ReadAsync(Guid genealogyId, Guid personId, CancellationToken cancellationToken = default)
     {
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var generation = await context.Database.SqlQueryRaw<long>(UnlinkGenerationV1.GuardSql).SingleAsync(cancellationToken);
         var person = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == personId, cancellationToken)
             ?? throw new InvalidOperationException("当前族谱中不存在该人物。");
+        var parents = await (from relationship in context.PersonRelationships.AsNoTracking()
+            join related in context.People.AsNoTracking() on relationship.RelatedPersonId equals (Guid?)related.Id
+            where relationship.GenealogyId == genealogyId && relationship.PersonId == personId && related.GenealogyId == genealogyId &&
+                (relationship.Kind == PersonRelationshipKind.BiologicalParent || relationship.Kind == PersonRelationshipKind.AdoptiveParent || relationship.Kind == PersonRelationshipKind.HeirParent)
+            orderby relationship.Id
+            select new WorkbenchParentInfo(related.Id, related.Name, related.Sex, relationship.Kind)).ToListAsync(cancellationToken);
         var snapshot = new WorkbenchProfileSnapshot(genealogyId, personId, generation,
-            new(person.Name, person.Sex, person.BirthDateText, person.DeathDateText, person.Biography, person.RecordedGeneration));
+            new(person.Name, person.Sex, person.BirthDateText, person.DeathDateText, person.Biography, person.RecordedGeneration), Parents: parents.AsReadOnly());
         await transaction.CommitAsync(cancellationToken);
         return snapshot;
     }
@@ -68,11 +115,24 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             throw new InvalidOperationException("请选择 1 至 1000 的世代。");
         if (original.IsNew)
         {
+            if (original.IsOrdinaryChild && (original.ParentId is null || original.ParentKind != PersonRelationshipKind.BiologicalParent ||
+                original.SiblingId is not null || original.PartnerId is not null || original.SecondParentId == original.ParentId))
+                throw new InvalidOperationException("普通子女草稿的父母上下文无效。");
+            if (!original.IsOrdinaryChild && original.SecondParentId is not null)
+                throw new InvalidOperationException("第二位父母只允许用于普通子女草稿。");
             if ((original.ParentId is null) != (original.ParentKind is null) || (original.ParentKind is not null && original.ParentKind is not (PersonRelationshipKind.BiologicalParent or PersonRelationshipKind.AdoptiveParent or PersonRelationshipKind.HeirParent)))
                 throw new InvalidOperationException("父母关系类型无效。");
             if ((original.PartnerId is null) != (original.UnionKind is null) || (original.UnionKind is not null && !Enum.IsDefined(original.UnionKind.Value)) || (original.PartnerId is not null && (original.ParentId is not null || original.SiblingId is not null)))
                 throw new InvalidOperationException("婚配关系类型无效。");
             await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+            if (original.IsOrdinaryChild)
+            {
+                var parent = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == original.GenealogyId && p.Id == original.ParentId, cancellationToken)
+                    ?? throw new InvalidOperationException("所选父母不属于当前族谱。");
+                if (parent.Sex != original.ParentSex) throw new InvalidOperationException("当前父母角色已变化，请重新开始新增子女。");
+                if (await ResolveOrdinarySecondParentAsync(original.GenealogyId, parent, cancellationToken) != original.SecondParentId)
+                    throw new InvalidOperationException("婚配候选已变化，请重新开始新增子女。");
+            }
             var sql = $"INSERT INTO People (Id, GenealogyId, Name, Sex, BirthDateText, DeathDateText, Biography, IsHistoricalRecord, RecordedGeneration) " +
                 $"SELECT @id, @genealogy, @name, @sex, @birth, @death, @biography, 0, @recorded WHERE EXISTS (SELECT 1 FROM Genealogies WHERE Id=@genealogy) " +
                 $"AND (@parent IS NULL OR EXISTS (SELECT 1 FROM People WHERE Id=@parent AND GenealogyId=@genealogy)) " +
@@ -92,6 +152,14 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             {
                 var relationship = new PersonRelationship { GenealogyId = original.GenealogyId, PersonId = original.PersonId,
                     RelatedPersonId = parentId, Kind = original.ParentKind!.Value };
+                try { context.PersonRelationships.Add(relationship); await context.SaveChangesAsync(cancellationToken); }
+                catch { context.Entry(relationship).State = EntityState.Detached; throw; }
+            }
+            if (original.SecondParentId is Guid secondParent)
+            {
+                var relationship = new PersonRelationship { GenealogyId = original.GenealogyId, PersonId = original.PersonId,
+                    RelatedPersonId = secondParent, Kind = PersonRelationshipKind.BiologicalParent };
+                await new PersonRelationshipValidator(context).ValidateForCreateAsync(relationship, cancellationToken);
                 try { context.PersonRelationships.Add(relationship); await context.SaveChangesAsync(cancellationToken); }
                 catch { context.Entry(relationship).State = EntityState.Detached; throw; }
             }

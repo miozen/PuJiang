@@ -9,7 +9,7 @@ namespace ZupuPaiBan.Views;
 /// <summary>Temporary name input; its host owns placement, focus policy and draft changes.</summary>
 internal sealed class InlineNameEditor : Border
 {
-    private readonly TextBox _input = new() { MinWidth = 150 };
+    private readonly TextBox _input = new() { MinWidth = 100 };
     private readonly TextBlock _error = new() { Foreground = System.Windows.Media.Brushes.Firebrick, TextWrapping = TextWrapping.Wrap };
     internal event Action<string>? Confirmed;
     internal event Action? Cancelled;
@@ -33,19 +33,24 @@ internal sealed class InlineNameEditor : Border
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            string name;
-            try
-            {
-                name = PersonProfileRules.Validate(_input.Text, PersonSex.Unknown, null, null, null);
-                _error.Text = string.Empty;
-            }
-            catch (InvalidOperationException error) { _error.Text = error.Message; return; }
-            Confirmed?.Invoke(name);
+            Confirm();
         }
         else if (e.Key == Key.Escape)
         {
             e.Handled = true;
             Cancelled?.Invoke();
         }
+    }
+
+    internal void Confirm()
+    {
+        string name;
+        try
+        {
+            name = PersonProfileRules.Validate(_input.Text, PersonSex.Unknown, null, null, null);
+            _error.Text = string.Empty;
+        }
+        catch (InvalidOperationException error) { _error.Text = error.Message; _input.Focus(); return; }
+        Confirmed?.Invoke(name);
     }
 }

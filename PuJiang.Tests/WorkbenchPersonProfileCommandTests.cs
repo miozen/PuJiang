@@ -7,6 +7,82 @@ namespace PuJiang.Tests;
 
 public class WorkbenchPersonProfileCommandTests
 {
+    [Theory]
+    [InlineData(PersonSex.Male, PersonSex.Female)]
+    [InlineData(PersonSex.Female, PersonSex.Male)]
+    [Trait("Category", "Integration")]
+    public async Task Ordinary_child_uses_stable_marriage_order_and_commits_both_parents_atomically(PersonSex parentSex, PersonSex spouseSex)
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父母", Sex = parentSex, RecordedGeneration = "2" };
+        var first = new Person { GenealogyId = g.Id, Name = "配偶一", Sex = spouseSex };
+        var second = new Person { GenealogyId = g.Id, Name = "配偶二", Sex = spouseSex };
+        var ignored = new Person { GenealogyId = g.Id, Name = "伴侣", Sex = spouseSex };
+        await using (var seed = db.CreateContext())
+        {
+            seed.Genealogies.Add(g); seed.People.AddRange(parent, first, second, ignored);
+            seed.FamilyUnions.AddRange(
+                new FamilyUnion { Id = Guid.Parse("20000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = second.Id, Kind = FamilyUnionKind.Marriage },
+                new FamilyUnion { Id = Guid.Parse("10000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = first.Id, Kind = FamilyUnionKind.Marriage },
+                new FamilyUnion { Id = Guid.Parse("01000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = ignored.Id, Kind = FamilyUnionKind.Partnership });
+            await seed.SaveChangesAsync();
+        }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginOrdinaryChildAsync(g.Id, parent.Id));
+        Assert.Equal(first.Id, draft.Original.SecondParentId); Assert.Equal(PersonSex.Male, draft.Values.Sex); Assert.Equal("3", draft.Values.RecordedGeneration);
+        draft.Values = draft.Values with { Name = "新子女" };
+        await context.Database.ExecuteSqlRawAsync($"CREATE TRIGGER RejectSecondParent BEFORE INSERT ON PersonRelationships WHEN NEW.RelatedPersonId = '{first.Id.ToString().ToUpperInvariant()}' BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await using (var verify = db.CreateContext()) { Assert.Equal(4, await verify.People.CountAsync()); Assert.Empty(await verify.PersonRelationships.ToListAsync()); }
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectSecondParent"); await draft.SaveAsync(command);
+        await using var final = db.CreateContext();
+        var parents = await final.PersonRelationships.Where(r => r.PersonId == draft.Original.PersonId).ToListAsync();
+        Assert.Equal(2, parents.Count); Assert.All(parents, r => Assert.Equal(PersonRelationshipKind.BiologicalParent, r.Kind));
+        Assert.Contains(parents, r => r.RelatedPersonId == parent.Id); Assert.Contains(parents, r => r.RelatedPersonId == first.Id);
+        Assert.DoesNotContain(parents, r => r.RelatedPersonId == second.Id || r.RelatedPersonId == ignored.Id);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Ordinary_child_handles_no_spouse_and_rejects_ambiguous_or_stale_context()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var p = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        var spouse = new Person { GenealogyId = g.Id, Name = "配偶", Sex = PersonSex.Unknown };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(p, spouse); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginOrdinaryChildAsync(g.Id, p.Id)); Assert.Null(draft.Original.SecondParentId);
+        draft.Values = draft.Values with { Name = "子" };
+        await using (var changed = db.CreateContext()) { changed.FamilyUnions.Add(new FamilyUnion { GenealogyId = g.Id, PartnerOneId = p.Id, PartnerTwoId = spouse.Id, Kind = FamilyUnionKind.Marriage }); await changed.SaveChangesAsync(); }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => command.BeginOrdinaryChildAsync(g.Id, p.Id));
+        await using var verify = db.CreateContext(); Assert.Equal(2, await verify.People.CountAsync()); Assert.Empty(await verify.PersonRelationships.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Ordinary_child_keeps_recorded_parents_when_marriages_later_change()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var p = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        var a = new Person { GenealogyId = g.Id, Name = "母", Sex = PersonSex.Female };
+        var b = new Person { GenealogyId = g.Id, Name = "继配", Sex = PersonSex.Female };
+        var union = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = p.Id, PartnerTwoId = a.Id, Kind = FamilyUnionKind.Marriage };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(p, a, b); seed.FamilyUnions.Add(union); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginOrdinaryChildAsync(g.Id, p.Id)); Assert.Equal(a.Id, draft.Original.SecondParentId);
+        draft.Values = draft.Values with { Name = "子" }; await draft.SaveAsync(command);
+        await using (var changed = db.CreateContext())
+        {
+            await changed.FamilyUnions.Where(u => u.Id == union.Id).ExecuteDeleteAsync();
+            changed.FamilyUnions.Add(new FamilyUnion { GenealogyId = g.Id, PartnerOneId = p.Id, PartnerTwoId = b.Id, Kind = FamilyUnionKind.Marriage });
+            await changed.SaveChangesAsync();
+        }
+        await using var verify = db.CreateContext();
+        var parents = await verify.PersonRelationships.Where(r => r.PersonId == draft.Original.PersonId).Select(r => r.RelatedPersonId).ToListAsync();
+        Assert.Contains(p.Id, parents); Assert.Contains(a.Id, parents); Assert.DoesNotContain(b.Id, parents);
+    }
     [Fact]
     [Trait("Category", "Integration")]
     public async Task Draft_is_scoped_validated_and_saved_once()
