@@ -16,6 +16,61 @@ namespace PuJiang.Tests;
 [Collection("ProcessWorkerExclusive")]
 public class WorkbenchProfileWindowTests
 {
+    [Theory]
+    [InlineData(PersonSex.Male, PersonSex.Female, 0)] [InlineData(PersonSex.Male, PersonSex.Female, 1)] [InlineData(PersonSex.Male, PersonSex.Female, 2)]
+    [InlineData(PersonSex.Female, PersonSex.Male, 0)] [InlineData(PersonSex.Female, PersonSex.Male, 1)] [InlineData(PersonSex.Female, PersonSex.Male, 2)]
+    [Trait("Category", "UI")]
+    public async Task Ordinary_child_default_parent_is_visible_before_and_after_save(PersonSex sex, PersonSex spouseSex, int count)
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "所选父母", Sex = sex, RecordedGeneration = "1" };
+        var first = new Person { GenealogyId = g.Id, Name = "配偶甲", Sex = spouseSex }; var second = new Person { GenealogyId = g.Id, Name = "配偶乙", Sex = spouseSex };
+        await using (var seed = db.CreateContext())
+        {
+            seed.Genealogies.Add(g); seed.People.AddRange(parent, first, second);
+            if (count > 1) seed.FamilyUnions.Add(new FamilyUnion { Id = Guid.Parse("20000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = second.Id, Kind = FamilyUnionKind.Marriage });
+            if (count > 0) seed.FamilyUnions.Add(new FamilyUnion { Id = Guid.Parse("10000000-0000-0000-0000-000000000000"), GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = first.Id, Kind = FamilyUnionKind.Marriage });
+            await seed.SaveChangesAsync();
+        }
+        Guid childId = default;
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(parent.Id);
+            var card = window.CanvasCardForTest(parent.Id);
+            card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            await WaitUntil(() => window.CanvasCardForTest(parent.Id).ContextMenu is not null);
+            window.CanvasCardForTest(parent.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增子女（生物关系）")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
+            var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); childId = window.SessionForTest.Draft!.Original.PersonId; editor.Input.Text = "新子女";
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            var otherRole = sex == PersonSex.Male ? "生母" : "生父";
+            Assert.Contains($"{otherRole}：{(count == 0 ? "未确定" : "配偶甲")}", window.DraftParentsForTest);
+            await window.SaveForTest(); Assert.Equal(childId, window.SessionForTest.Draft!.Original.PersonId);
+            Assert.Contains($"{otherRole}：{(count == 0 ? "未确定" : "配偶甲")}", window.DraftParentsForTest);
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Equal(count == 0 ? 1 : 2, await verify.PersonRelationships.CountAsync(r => r.PersonId == childId));
+    }
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Incomplete_marriage_page_blocks_child_creation_without_guessing()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var g = new Genealogy { Name = "谱" };
+        var parent = new Person { Id = Guid.Parse("00000000-0000-0000-0000-000000000001"), GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        var spouses = Enumerable.Range(0, 101).Select(i => new Person { GenealogyId = g.Id, Name = $"配偶{i}", Sex = PersonSex.Female }).ToArray();
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(parent); seed.People.AddRange(spouses); seed.FamilyUnions.AddRange(spouses.Select(p => new FamilyUnion { GenealogyId = g.Id, PartnerOneId = parent.Id, PartnerTwoId = p.Id, Kind = FamilyUnionKind.Marriage })); await seed.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show(); await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(parent.Id);
+            var card = window.CanvasCardForTest(parent.Id); card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            await WaitUntil(() => window.CanvasCardForTest(parent.Id).ContextMenu is not null);
+            window.CanvasCardForTest(parent.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增子女（生物关系）")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntil(() => window.StatusForTest.Contains("未完整加载"));
+            Assert.Equal(parent.Id, window.SessionForTest.Draft!.Original.PersonId); Assert.Empty(window.CanvasForTest.Children.OfType<InlineNameEditor>());
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var verify = db.CreateContext(); Assert.Equal(102, await verify.People.CountAsync()); Assert.Empty(await verify.PersonRelationships.ToListAsync());
+    }
     [Fact]
     [Trait("Category", "UI")]
     public async Task Union_profiles_remain_in_person_draft_until_save_and_support_selection()
