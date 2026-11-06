@@ -91,8 +91,13 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             if (RecordedGenerationParser.TryParse(parent.RecordedGeneration, out var number) && number < 1000)
                 recorded = (number + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
-        if (partnerId is Guid partner && !await context.People.AsNoTracking().AnyAsync(p => p.GenealogyId == genealogyId && p.Id == partner, cancellationToken))
-            throw new InvalidOperationException("所选配偶不属于当前族谱。");
+        var defaultSex = PersonSex.Unknown;
+        if (partnerId is Guid partner)
+        {
+            var existingPartner = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == partner, cancellationToken)
+                ?? throw new InvalidOperationException("所选配偶不属于当前族谱。");
+            defaultSex = existingPartner.Sex switch { PersonSex.Male => PersonSex.Female, PersonSex.Female => PersonSex.Male, _ => PersonSex.Unknown };
+        }
         if (siblingId is Guid sibling)
         {
             var existing = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.GenealogyId == genealogyId && p.Id == sibling, cancellationToken)
@@ -103,7 +108,7 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             recorded = RecordedGenerationParser.TryParse(existing.RecordedGeneration, out var siblingGeneration) ? siblingGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
         }
         await transaction.CommitAsync(cancellationToken);
-        return new(genealogyId, Guid.NewGuid(), generation, new("", PersonSex.Unknown, null, null, null, recorded), true, parentId, parentKind, partnerId, unionKind, siblingId);
+        return new(genealogyId, Guid.NewGuid(), generation, new("", defaultSex, null, null, null, recorded), true, parentId, parentKind, partnerId, unionKind, siblingId);
     }
 
     public async Task SaveAsync(WorkbenchProfileSnapshot original, WorkbenchProfileValues values, CancellationToken cancellationToken = default)
@@ -174,7 +179,7 @@ public sealed class WorkbenchPersonProfileCommand(ZupuDbContext context)
             {
                 var union = new FamilyUnion { GenealogyId = original.GenealogyId, PartnerOneId = partnerId,
                     PartnerTwoId = original.PersonId, Kind = original.UnionKind!.Value };
-                FamilyUnionIdentity.Normalize(union);
+                await new FamilyUnionValidator(context).ValidateForCreateAsync(union, cancellationToken);
                 try { context.FamilyUnions.Add(union); await context.SaveChangesAsync(cancellationToken); }
                 catch { context.Entry(union).State = EntityState.Detached; throw; }
             }

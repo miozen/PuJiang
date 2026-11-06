@@ -1,5 +1,10 @@
 # 接力状态
 
+- **WB-B-03 复验过程（2026-11-06，已完成）：** 用户未接受配偶滚动隐藏，要求按 `docs/references/多配偶.png` 将配偶以姓名框和连线逐个显示，并在姓名前显示性别图标；确认原性别默认规则不变。修正版已在独立虚构库复验，用户确认“可以，就这样”；图标与参考图不符，用户同意留待后续视觉优化。修正版 Release 构建通过（25 条警告），定向测试 10/10、WPF 专项 23/23 通过；日常回归 453/453 通过；补充多配偶并存子女连线的测试后，重新构建和 WPF 专项 23/23 通过，最终日常回归 453/453 通过。多配偶并存子女连线已由专项测试覆盖；不在画布主体的配偶入口仍受原窗口限制。`docs/references/` 所有素材均保留本机。
+
+- **WB-B-03 首次验收前记录（2026-11-06，已由上述复验取代）：** 画布主体人物可在配偶区域原位输入，Enter/空白确认、Esc 取消；已知性别默认相反，未知保持未定，确认后选中新配偶，显式保存时人物与婚配同事务提交并保持选中。已有婚配和子女关系不重算；不在画布主体的配偶入口仍受原窗口限制。Windows Release 解决方案构建通过（0 错误、16 条警告），定向 10/10、WPF 专项 23/23、日常回归 453/453 通过，均无失败或跳过；用户验收尚在进行。独立虚构库为 `artifacts/wb-b03-review/data`；`docs/references/` 是用户本机素材，保留且不加入提交。未修改数据库结构，未开始下一切片。
+
+
 - **WB-B-02 验收（2026-11-06）：** 普通子女从男女上下文原位录入，Enter 或单击空白确认、Esc 取消；默认配偶按已确认的稳定婚配 ID 次序，人物与生物父母同事务保存。读取已保存人物时显示其已记录父母；新建时即时连线，同会话子女的未确认顺序标注为临时显示、非谱载排行。用户反馈空白确认、父母显示与连线“现在都符合预期”；参考用户提供的本机样图（未随 Git 同步） 调整为紧凑姓名色块、选中后框外显示资料，用户反馈“可以了，先这样吧”。重开或外部变更后临时主线选择失效，已有多父母仍提示复核，不自动推断。最终源码 Release 构建成功（0 错误、25 警告），工作台 WPF 专项 19/19、日常回归 449/449 通过，均无失败或跳过；`git diff --check` 通过。用户已确认列明范围，提交推送状态以 Git 实测为准。独立虚构库为 `artifacts/wb-b02-review/data`。
 
 
@@ -20,7 +25,7 @@
 - **Working Tree：** 以 `git status --short --branch` 为准。
 - **Remote Sync：** 以本机 Git 状态及实际远端核对结果为准。
 - **Current Phase：** P2 — 交互式世系图。
-- **Current Task：** WB-B-02 列明范围已获用户验收；提交推送状态以 Git 实测为准。原 P2-3 持久排序仍未接 UI，D-014 不变。
+- **Current Task：** WB-B-03 用户验收和本地回归已通过；原 P2-3 持久排序仍未接 UI，D-014 不变。
 - **Last Completed：** 依 [D-028](DECISIONS.md#d-028--真实谱系只读横向投影的处理原则) 用户补充，缺世代首次说明经确认后在当前窗口自动标注推导；路径说明和确认合并，拒绝保留原图。此前补测多父母、失效图表及跨页候选，详见[横向设计](HORIZONTAL_LINEAGE_DESIGN.md)。
 - **Uncommitted Work：** 以本机 `git status --short` 为准；另一台电脑曾有的 `App.xaml` 行尾差异并未出现在本机。
 - **Validation Performed：** Windows 原生 `dotnet build PuJiang.slnx --no-restore --configuration Release --verbosity quiet` 成功（0 错误、24 警告）；相同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 396/396 通过；`Category=UI&DisplayName~real-horizontal-path` WPF 专项 6/6、`Category=UI&DisplayName~real-horizontal-rules` 1/1 通过，均无失败或跳过。指定隔离 WPF 场景确认拒绝保留原图、首次确认合并、后续不重复请求推导、原始谱载不变；路径读取隔离专项此前 4/4 通过。`artifacts/p2-path-review-20261104/data` 为虚构库，用户此前对多父母选择框、路径确认、四代高亮和诊断反馈“符合预期”；本轮对合并后的缺世代提示反馈“看清楚了”，助手观察确认后节点标注“推导”。助手另在该窗口选择待复核图表，观察历史选线及原因保留且未补载，先前在合并提示的前一版本点击“否”观察原图保留；这些助手观察不等同用户对失效及取消的验收。未访问正式用户数据。
@@ -54,7 +59,7 @@
 - **本轮持久排序存储：** 新增迁移、按图表的排序组及历史项、受保护独立会话的完整子女组捕获、事务保存和差异复核；图表修订条件更新，旧图表选线保存不覆盖排序，旧人物/关系身份保留供复核。成功保存后必须重新打开会话；数据或图表变化使旧结果失效。全库代数变化即使无关也保守要求复核；超过 2000、缺失世代或多父母拒绝捕获。此切片未接 UI、无父母兄妹或复杂关系。
 - **本轮存储本地验证：** Windows `dotnet build PuJiang.slnx --configuration Release --no-restore --verbosity quiet` 成功（0 错误、32 警告）；同源码日常测试 `dotnet test PuJiang.Tests/PuJiang.Tests.csproj --configuration Release --no-build --filter "Category!=Performance&Category!=UI" --verbosity quiet` 443/443 通过；单独筛选 `FullyQualifiedName~SiblingOrderStorageTests|FullyQualifiedName~LineageChartTests` 为 15/15 通过，均无跳过。覆盖旧库迁移、图表与谱隔离、并发竞争、取消与 SQLite 注入回滚、历史/ABA 复核、超过 100 人、图表选线保留、关闭排空及备份预检；EF `migrations has-pending-model-changes` 检查无差异。最初 EF 工具构建因 NuGet 网络不可用失败，使用本机缓存 `dotnet restore --ignore-failed-sources` 后恢复成功。未运行 UI、Performance 或人工验收，未查询远端 CI；未使用真实数据。
 - **本轮清单整理：** 用户要求暂停后续开发，并希望按序号查看 P2-3 已完成与剩余工作；已在[计划](CURRENT_PLAN.md#p2-3-有序切片清单)建立 14 项清单，6 项为所列有限范围已完成、8 项未完成，项数不等于工期比例。本轮仅改文档，`git diff --check`、相对链接和 14 项计数检查通过；未运行构建、应用测试或远端 CI。
-- **Exact Next Action：** 核对 WB-B-02 检查点同步后，按 [V1 切片清单](WORKBENCH_V1_SLICES.md) 核查 WB-B-03 原位新增配偶的默认性别、草稿和事务前置条件，再按单切片流程实施。
+- **Exact Next Action：** 核对 WB-B-04 前置条件，按单切片流程实施兄弟姐妹原位新增。
 - **Cross-machine Ready：** 以实际 Git 状态和远端 CI 核实；未提交或未推送的内容不能视为远端接力完成。
 
 ## 下一台电脑接力
@@ -62,4 +67,4 @@
 - Windows 原生环境按 [跨电脑接力步骤](OPERATIONS.md#跨电脑接力) 获取 `dev`、检查工作区和远端、还原并验证；SDK 版本约束以 `global.json` 为准。
 - 仓库内恢复替换协调器和阶段记录为测试原型；应用已接入共享数据库操作排空与正常退出协调，但未覆盖所有异步工作及外部访问，不能将其视为可安全恢复。数据库专用备份、用户数据及人工验收边界见 [架构](ARCHITECTURE.md) 和 [运行规范](OPERATIONS.md)。
 - 上述测试和验收结果是当前电脑历史结果，新电脑须分别执行并报告；人工 UI 只能在独立测试数据目录进行。Git 不会自动带走仓库外的用户数据库、附件、配置或本机测试目录；暂存前仍须核对忽略规则。
-- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核查 WB-B-03 原位新增配偶前置条件，保留 P2-3 排序待办并遵守 D-014。`
+- 可直接交给本机后续 Codex：`先阅读最新 HANDOFF、V1 切片及相关契约；核对 WB-B-04 前置条件并按单切片流程实施验收，保留 P2-3 排序待办并遵守 D-014。`

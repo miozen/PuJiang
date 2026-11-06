@@ -10,6 +10,52 @@ public class WorkbenchPersonProfileCommandTests
     [Theory]
     [InlineData(PersonSex.Male, PersonSex.Female)]
     [InlineData(PersonSex.Female, PersonSex.Male)]
+    [InlineData(PersonSex.Unknown, PersonSex.Unknown)]
+    [Trait("Category", "Integration")]
+    public async Task New_spouse_default_sex_uses_known_context_and_remains_editable(PersonSex currentSex, PersonSex expected)
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var other = new Genealogy { Name = "另一谱" };
+        var current = new Person { GenealogyId = g.Id, Name = "人物", Sex = currentSex, RecordedGeneration = "1" };
+        var foreign = new Person { GenealogyId = other.Id, Name = "异谱" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.AddRange(g, other); seed.People.AddRange(current, foreign); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => command.BeginNewAsync(g.Id, partnerId: foreign.Id, unionKind: FamilyUnionKind.Marriage));
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id, partnerId: current.Id, unionKind: FamilyUnionKind.Marriage));
+        Assert.Equal(expected, draft.Values.Sex); Assert.Null(draft.Values.RecordedGeneration);
+        draft.Values = draft.Values with { Name = "配偶", Sex = PersonSex.Unknown };
+        await draft.SaveAsync(command);
+        await using var verify = db.CreateContext();
+        Assert.Equal(PersonSex.Unknown, (await verify.People.SingleAsync(p => p.Id == draft.Original.PersonId)).Sex);
+        var union = await verify.FamilyUnions.SingleAsync();
+        Assert.Contains(current.Id, new Guid?[] { union.PartnerOneId, union.PartnerTwoId });
+        Assert.Contains(draft.Original.PersonId, new Guid?[] { union.PartnerOneId, union.PartnerTwoId });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Adding_spouse_keeps_existing_marriages_and_child_parent_records_unchanged()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var current = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male };
+        var spouse = new Person { GenealogyId = g.Id, Name = "原配偶", Sex = PersonSex.Female };
+        var child = new Person { GenealogyId = g.Id, Name = "子", Sex = PersonSex.Male };
+        var oldUnion = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = current.Id, PartnerTwoId = spouse.Id, Kind = FamilyUnionKind.Marriage };
+        var father = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = current.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        var mother = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = spouse.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(current, spouse, child); seed.FamilyUnions.Add(oldUnion); seed.PersonRelationships.AddRange(father, mother); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        var draft = new WorkbenchPersonDraft(await command.BeginNewAsync(g.Id, partnerId: current.Id, unionKind: FamilyUnionKind.Marriage));
+        draft.Values = draft.Values with { Name = "新配偶" }; await draft.SaveAsync(command);
+        await using var verify = db.CreateContext();
+        Assert.Equal(2, await verify.FamilyUnions.CountAsync()); Assert.True(await verify.FamilyUnions.AnyAsync(u => u.Id == oldUnion.Id));
+        var parents = await verify.PersonRelationships.Where(r => r.PersonId == child.Id).ToListAsync();
+        Assert.Equal(2, parents.Count); Assert.Contains(parents, r => r.Id == father.Id && r.RelatedPersonId == current.Id);
+        Assert.Contains(parents, r => r.Id == mother.Id && r.RelatedPersonId == spouse.Id);
+    }
+    [Theory]
+    [InlineData(PersonSex.Male, PersonSex.Female)]
+    [InlineData(PersonSex.Female, PersonSex.Male)]
     [Trait("Category", "Integration")]
     public async Task Ordinary_child_uses_stable_marriage_order_and_commits_both_parents_atomically(PersonSex parentSex, PersonSex spouseSex)
     {

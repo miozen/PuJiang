@@ -33,12 +33,12 @@ public sealed partial class ProjectionReadSession
         return ReadGuardedAsync(token, async (tx, cancellation) =>
         {
             await using var command = _connection.CreateCommand(); command.Transaction = tx;
-            command.CommandText = "SELECT Id, Name, RecordedGeneration, RecordedBirthOrder FROM People WHERE GenealogyId=$genealogy AND Id=$person";
+            command.CommandText = "SELECT Id, Name, RecordedGeneration, RecordedBirthOrder, Sex FROM People WHERE GenealogyId=$genealogy AND Id=$person";
             command.Parameters.AddWithValue("$genealogy", SqlGuid(_genealogyId)); command.Parameters.AddWithValue("$person", SqlGuid(personId));
             await using var reader = await command.ExecuteReaderAsync(cancellation);
             if (!await reader.ReadAsync(cancellation)) throw new InvalidOperationException("人物不存在于当前族谱。");
             return new PersonRow(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3));
+                reader.IsDBNull(3) ? null : reader.GetString(3), (ZupuPaiBan.Models.PersonSex)reader.GetInt32(4));
         }, cancellationToken);
     }
 

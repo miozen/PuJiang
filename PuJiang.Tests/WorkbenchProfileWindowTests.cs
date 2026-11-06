@@ -18,17 +18,105 @@ public class WorkbenchProfileWindowTests
 {
     [Fact]
     [Trait("Category", "UI")]
-    public async Task Person_cards_keep_the_same_size_and_many_spouses_remain_scrollable()
+    public async Task Inline_spouse_save_failure_keeps_the_draft_and_rolls_back_then_can_retry()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var person = new Person { GenealogyId = g.Id, Name = "人物", Sex = PersonSex.Male, RecordedGeneration = "1" };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.Add(person); await seed.SaveChangesAsync(); await seed.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectInlineUnion BEFORE INSERT ON FamilyUnions BEGIN SELECT RAISE(ABORT, 'injected failure'); END"); }
+        Guid spouseId = default;
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show();
+            await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(person.Id);
+            var card = window.CanvasCardForTest(person.Id);
+            card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            await WaitUntil(() => window.CanvasCardForTest(person.Id).ContextMenu is not null);
+            window.CanvasCardForTest(person.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增配偶（婚配）")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
+            var editor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); editor.Input.Text = "配偶";
+            editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            spouseId = window.SessionForTest.Draft!.Original.PersonId;
+            await window.SaveForTest(); Assert.Contains("未保存", window.StatusForTest); Assert.True(window.SessionForTest.Draft!.IsDirty);
+            await using (var verify = db.CreateContext()) { Assert.Single(await verify.People.ToListAsync()); Assert.Empty(await verify.FamilyUnions.ToListAsync()); await verify.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectInlineUnion"); }
+            await window.SaveForTest(); Assert.Equal(spouseId, window.SessionForTest.Draft!.Original.PersonId); Assert.False(window.SessionForTest.Draft.IsDirty);
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var final = db.CreateContext(); Assert.Equal(2, await final.People.CountAsync()); Assert.Single(await final.FamilyUnions.ToListAsync());
+    }
+    [Theory]
+    [InlineData(PersonSex.Male, PersonSex.Female)]
+    [InlineData(PersonSex.Female, PersonSex.Male)]
+    [InlineData(PersonSex.Unknown, PersonSex.Unknown)]
+    [Trait("Category", "UI")]
+    public async Task Inline_spouse_cancel_confirm_and_save_preserve_selection_and_existing_family(PersonSex currentSex, PersonSex expectedSex)
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var current = new Person { GenealogyId = g.Id, Name = "人物", Sex = currentSex, RecordedGeneration = "1" };
+        var prior = new Person { GenealogyId = g.Id, Name = "已有配偶", Sex = PersonSex.Female };
+        var child = new Person { GenealogyId = g.Id, Name = "子女", RecordedGeneration = "2" };
+        var union = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = current.Id, PartnerTwoId = prior.Id, Kind = FamilyUnionKind.Marriage };
+        var parentRelation = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = current.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        var otherRelation = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = prior.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(current, prior, child); seed.FamilyUnions.Add(union); seed.PersonRelationships.AddRange(parentRelation, otherRelation); await seed.SaveChangesAsync(); }
+        Guid createdId = default;
+        await RunSta(async () =>
+        {
+            var window = new WorkbenchProfileWindow(MakeCoordinator(db)); window.Show();
+            await window.InitializeForTest(); await window.SelectGenealogyForTest(g.Id); await window.SelectPersonForTest(current.Id);
+            async Task<InlineNameEditor> Start()
+            {
+                var card = window.CanvasCardForTest(current.Id);
+                card.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+                await WaitUntil(() => window.CanvasCardForTest(current.Id).ContextMenu is not null);
+                var menu = window.CanvasCardForTest(current.Id).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增配偶（婚配）"));
+                menu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
+                return window.CanvasForTest.Children.OfType<InlineNameEditor>().Single();
+            }
+            void Key(InlineNameEditor editor, Key key) => editor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(editor.Input)!, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            var editor = await Start();
+            Assert.Equal(Canvas.GetLeft(window.CanvasCardForTest(current.Id)), Canvas.GetLeft(editor));
+            Assert.True(Canvas.GetTop(editor) >= Canvas.GetTop(window.CanvasCardForTest(current.Id)) + window.CanvasCardForTest(current.Id).Height);
+            Assert.Equal(expectedSex, window.SessionForTest.Draft!.Values.Sex);
+            editor.Input.Text = " "; Key(editor, System.Windows.Input.Key.Enter); Assert.Same(editor, window.CanvasForTest.Children.OfType<InlineNameEditor>().Single());
+            editor.Input.Text = "取消"; Key(editor, System.Windows.Input.Key.Escape);
+            await WaitUntil(() => window.SessionForTest.Draft?.Original.PersonId == current.Id);
+            await using (var verify = db.CreateContext()) { Assert.Equal(3, await verify.People.CountAsync()); Assert.Single(await verify.FamilyUnions.ToListAsync()); }
+            editor = await Start(); createdId = window.SessionForTest.Draft!.Original.PersonId;
+            editor.Input.Text = "新配偶";
+            var canvas = window.CanvasForTest;
+            canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent });
+            canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+            Assert.Equal(createdId, window.SessionForTest.Draft!.Original.PersonId); Assert.Equal("新配偶", window.SessionForTest.Draft.Values.Name);
+            var spouseCard = window.CanvasForTest.Children.OfType<Border>().Single(b => Equals(b.Tag, createdId));
+            Assert.Contains("新配偶", Assert.IsType<TextBlock>(spouseCard.Child).Text);
+            Assert.Equal(System.Windows.Media.Brushes.DarkOrange, spouseCard.Background);
+            await using (var verify = db.CreateContext()) { Assert.Equal(3, await verify.People.CountAsync()); Assert.Single(await verify.FamilyUnions.ToListAsync()); }
+            await window.SaveForTest(); Assert.Equal(createdId, window.SessionForTest.Draft!.Original.PersonId);
+            Assert.Contains("婚配：已有配偶", window.CanvasPartnersForTest(current.Id)); Assert.Contains("婚配：新配偶", window.CanvasPartnersForTest(current.Id));
+            Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
+        });
+        await using var final = db.CreateContext(); Assert.Equal(4, await final.People.CountAsync()); Assert.Equal(2, await final.FamilyUnions.CountAsync());
+        Assert.Equal(expectedSex, (await final.People.SingleAsync(p => p.Id == createdId)).Sex);
+        var parents = await final.PersonRelationships.Where(r => r.PersonId == child.Id).ToListAsync();
+        Assert.Equal(2, parents.Count); Assert.Contains(parents, r => r.Id == parentRelation.Id && r.RelatedPersonId == current.Id);
+        Assert.Contains(parents, r => r.Id == otherRelation.Id && r.RelatedPersonId == prior.Id);
+    }
+    [Fact]
+    [Trait("Category", "UI")]
+    public async Task Person_cards_keep_the_same_size_and_many_spouses_are_visible_with_links()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync();
         var g = new Genealogy { Name = "谱" };
         var person = new Person { GenealogyId = g.Id, Name = "多配偶人物", Sex = PersonSex.Male, RecordedGeneration = "1" };
         var other = new Person { GenealogyId = g.Id, Name = "另一个人物", RecordedGeneration = "1" };
+        var child = new Person { GenealogyId = g.Id, Name = "子女", RecordedGeneration = "2" };
         var spouses = Enumerable.Range(1, 8).Select(i => new Person { GenealogyId = g.Id, Name = $"配偶{i}", Sex = PersonSex.Female }).ToArray();
         await using (var seed = db.CreateContext())
         {
-            seed.Genealogies.Add(g); seed.People.AddRange(spouses.Append(person).Append(other));
+            seed.Genealogies.Add(g); seed.People.AddRange(spouses.Append(person).Append(other).Append(child));
             seed.FamilyUnions.AddRange(spouses.Select(s => new FamilyUnion { GenealogyId = g.Id, PartnerOneId = person.Id, PartnerTwoId = s.Id, Kind = FamilyUnionKind.Marriage }));
+            seed.PersonRelationships.Add(new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = person.Id, Kind = PersonRelationshipKind.BiologicalParent });
             await seed.SaveChangesAsync();
         }
         await RunSta(async () =>
@@ -38,11 +126,16 @@ public class WorkbenchProfileWindowTests
             window.UpdateLayout();
             var populated = window.CanvasCardForTest(person.Id); var empty = window.CanvasCardForTest(other.Id);
             Assert.Equal(empty.Width, populated.Width); Assert.Equal(empty.Height, populated.Height);
-            var scroll = window.CanvasForTest.Children.OfType<ScrollViewer>().Single(s => Equals(s.Tag, person.Id));
-            Assert.True(scroll.ScrollableHeight > 0); Assert.Equal(9, Assert.IsType<StackPanel>(scroll.Content).Children.Count);
+            var cards = spouses.Select(s => window.CanvasForTest.Children.OfType<Border>().Single(b => Equals(b.Tag, s.Id))).OrderBy(Canvas.GetTop).ToArray();
+            Assert.Equal(spouses.Length, cards.Length);
+            Assert.All(cards, card => { Assert.Equal(populated.Width, card.Width); Assert.Equal(populated.Height, card.Height); Assert.StartsWith("♀", Assert.IsType<TextBlock>(card.Child).Text); });
+            Assert.StartsWith("♂", Assert.IsType<TextBlock>(populated.Child).Text);
+            Assert.True(window.CanvasForTest.Children.OfType<System.Windows.Shapes.Line>().Count() >= spouses.Length);
+            Assert.Equal(1, window.CanvasEdgesForTest);
+            Assert.Single(window.CanvasForTest.Children.OfType<System.Windows.Shapes.Polyline>());
+            Assert.True(cards.Zip(cards.Skip(1)).All(pair => Canvas.GetTop(pair.First) + pair.First.Height <= Canvas.GetTop(pair.Second)));
             Assert.IsType<TextBlock>(empty.Child);
-            Assert.DoesNotContain(window.CanvasForTest.Children.OfType<ScrollViewer>(), s => Equals(s.Tag, other.Id));
-            Assert.True(Canvas.GetTop(scroll) >= Canvas.GetTop(populated) + populated.Height);
+            Assert.True(Canvas.GetTop(cards[0]) >= Canvas.GetTop(populated) + populated.Height);
             Assert.NotEqual(empty.Background, populated.Background);
             Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
         });
@@ -224,8 +317,8 @@ public class WorkbenchProfileWindowTests
             Assert.Equal("草稿名", window.SessionForTest.Draft!.Values.Name);
             Assert.Empty(window.CanvasForTest.Children.OfType<InlineNameEditor>());
             string CardName() => Assert.IsType<TextBlock>(window.CanvasCardForTest(p.Id).Child).Text;
-            Assert.Equal("草稿名", CardName());
-            window.RenderCanvasForTest(); Assert.Equal("草稿名", CardName());
+            Assert.EndsWith("草稿名", CardName());
+            window.RenderCanvasForTest(); Assert.EndsWith("草稿名", CardName());
             await using (var beforeSave = db.CreateContext()) Assert.Equal("原名", (await beforeSave.People.SingleAsync()).Name);
             window.ChooseForTest = () => DraftLeaveChoice.Discard;
             Assert.True(await window.PrepareForOwnerExitAsync()); window.Close();
@@ -379,9 +472,13 @@ public class WorkbenchProfileWindowTests
             await WaitUntil(() => window.CanvasCardForTest(rootId).ContextMenu is not null);
             var spouseMenu = window.CanvasCardForTest(rootId).ContextMenu!.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "新增配偶（婚配）"));
             spouseMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-            await WaitUntil(() => window.SessionForTest.Draft?.Original.IsNew == true);
+            await WaitUntil(() => window.CanvasForTest.Children.OfType<InlineNameEditor>().Any());
             spouseId = window.SessionForTest.Draft!.Original.PersonId; Assert.Null(window.SessionForTest.Draft.Values.RecordedGeneration);
-            window.SetNameForTest("配偶"); await window.SaveForTest();
+            Assert.Equal(PersonSex.Female, window.SessionForTest.Draft.Values.Sex);
+            var spouseEditor = window.CanvasForTest.Children.OfType<InlineNameEditor>().Single(); spouseEditor.Input.Text = "配偶";
+            spouseEditor.Input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(spouseEditor.Input)!, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+            Assert.Equal(spouseId, window.SessionForTest.Draft.Original.PersonId); await window.SaveForTest();
+            Assert.Equal(spouseId, window.SessionForTest.Draft!.Original.PersonId);
             Assert.Contains("婚配：配偶", window.CanvasPartnersForTest(rootId));
             Assert.False(window.CanvasContainsForTest(spouseId));
             await window.SelectCanvasForTest(spouseId); Assert.Equal(spouseId, window.SessionForTest.Draft!.Original.PersonId);

@@ -2,13 +2,14 @@ using System.Data;
 using System.IO;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using ZupuPaiBan.Models;
 
 namespace ZupuPaiBan.Data;
 
 /// <summary>Single-connection, read-only, version-bound page reader. It is not a restore mechanism.</summary>
 public sealed partial class ProjectionReadSession : IAsyncDisposable
 {
-    public sealed record PersonRow(Guid Id, string Name, string? RecordedGeneration, string? RecordedBirthOrder);
+    public sealed record PersonRow(Guid Id, string Name, string? RecordedGeneration, string? RecordedBirthOrder, PersonSex Sex = PersonSex.Unknown);
     public sealed record PersonPage(IReadOnlyList<PersonRow> Items, Guid? NextCursor);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _disposeSync = new();
@@ -93,13 +94,13 @@ public sealed partial class ProjectionReadSession : IAsyncDisposable
             await using (var command = _connection.CreateCommand())
             {
                 command.Transaction = tx;
-                command.CommandText = "SELECT Id, Name, RecordedGeneration, RecordedBirthOrder FROM People WHERE GenealogyId = $genealogy AND ($after IS NULL OR Id > $after)" +
+                command.CommandText = "SELECT Id, Name, RecordedGeneration, RecordedBirthOrder, Sex FROM People WHERE GenealogyId = $genealogy AND ($after IS NULL OR Id > $after)" +
                     (BeforePeopleQueryForTest is null ? "" : " AND projection_test_wait(Id) = 1") + " ORDER BY Id LIMIT $limit";
                 command.Parameters.AddWithValue("$genealogy", _genealogyId.ToString().ToUpperInvariant());
                 command.Parameters.AddWithValue("$after", after is Guid cursor ? cursor.ToString().ToUpperInvariant() : DBNull.Value);
                 command.Parameters.AddWithValue("$limit", limit + 1);
                 await using var reader = await command.ExecuteReaderAsync(linked.Token);
-                while (await reader.ReadAsync(linked.Token)) rows.Add(new PersonRow(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3)));
+                while (await reader.ReadAsync(linked.Token)) rows.Add(new PersonRow(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3), (PersonSex)reader.GetInt32(4)));
             }
             await tx.CommitAsync(linked.Token);
             if (await ReadVersionAsync(_connection, null, linked.Token) != _version) throw new InvalidOperationException("数据库已变化，请重新打开。");
