@@ -34,6 +34,7 @@ public sealed class V1Context : DbContext
     public DbSet<Lineage> Lineages => Set<Lineage>();
     public DbSet<Person> People => Set<Person>();
     public DbSet<Placement> Placements => Set<Placement>();
+    internal DbSet<FirstRootReceipt> FirstRootReceipts => Set<FirstRootReceipt>();
     protected override void OnConfiguring(DbContextOptionsBuilder options) => options.UseSqlite(_connectionString);
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -47,5 +48,8 @@ public sealed class V1Context : DbContext
         b.Entity<Person>().HasOne<Lineage>().WithMany().HasForeignKey(x => x.LineageId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Placement>().ToTable("Placements", t => t.HasCheckConstraint("CK_Placement_Id", nonempty)).HasKey(x => x.Id);
         b.Entity<Placement>().HasOne<Person>().WithMany().HasForeignKey(x => new { x.LineageId, x.PersonId }).HasPrincipalKey(x => new { x.LineageId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<FirstRootReceipt>().HasKey(x => x.OperationId);
+        b.Entity<FirstRootReceipt>().Property(x => x.Name).IsRequired();
+        b.Entity<FirstRootReceipt>().HasOne<Placement>().WithMany().HasForeignKey(x => x.PlacementId).OnDelete(DeleteBehavior.Restrict);
     }
 }

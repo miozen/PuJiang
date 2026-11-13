@@ -3,4 +3,5 @@
   <Project Path="PuJiang.Domain/PuJiang.Domain.csproj" />
   <Project Path="ZupuPaiBan/ZupuPaiBan.csproj" />
   <Project Path="PuJiang.V1.Persistence/PuJiang.V1.Persistence.csproj" />
+  <Project Path="PuJiang.V1.Application/PuJiang.V1.Application.csproj" />
 </Solution>
