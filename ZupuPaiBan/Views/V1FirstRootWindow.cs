@@ -23,6 +23,7 @@ public sealed class V1FirstRootWindow : Window
     private readonly Button _reload = new() { Content = "重新读取", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _retry = new() { Content = "重试保存", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed };
     private TextBox? _input;
+    private StackPanel? _inputHost;
     private AddFirstRoot? _pending;
     private bool _saving, _uncertain, _hasRoot, _loadedOk;
     private Guid? _personId, _placementId;
@@ -64,7 +65,10 @@ public sealed class V1FirstRootWindow : Window
     {
         if (!_loadedOk || _saving || _hasRoot || _pending is not null || _input is not null) return;
         _input = new TextBox { MinWidth = 120, Text = "", ToolTip = "输入名字（不含项目姓氏）" };
-        Canvas.SetLeft(_input, 20); Canvas.SetTop(_input, 50); _canvas.Children.Add(_input);
+        _inputHost = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.White };
+        _inputHost.Children.Add(new TextBlock { Text = _surname, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) });
+        _inputHost.Children.Add(_input);
+        Canvas.SetLeft(_inputHost, 20); Canvas.SetTop(_inputHost, 50); _canvas.Children.Add(_inputHost);
         _input.PreviewKeyDown += async (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; if (!_uncertain) await ConfirmNamedAsync(); } else if (e.Key == Key.Escape && !_uncertain && !_saving) { e.Handled = true; CancelInput(); } };
         _input.Focus(); _status.Text = "输入名字，Enter 或单击画布空白提交；Esc 取消。";
     }
@@ -114,7 +118,8 @@ public sealed class V1FirstRootWindow : Window
                 _uncertain = true; _status.Text = $"保存未确认：{error.Message}。输入已保留，请重试同一操作。"; return;
             }
             _pending = null; _uncertain = false; _personId = saved.PersonId; _placementId = saved.PlacementId; _hasRoot = true;
-            if (_input is not null) { _canvas.Children.Remove(_input); _input = null; }
+            if (_inputHost is not null) _canvas.Children.Remove(_inputHost);
+            _inputHost = null; _input = null;
             try { await ReloadCoreAsync(); _status.Text = "首节点已保存并选中。"; }
             catch (Exception error) { _status.Text = $"已保存，但画布读取失败：{error.Message}。请重新读取。"; }
         }
@@ -145,7 +150,7 @@ public sealed class V1FirstRootWindow : Window
     }
     private void Select(RootNode node) { _personId = node.PersonId; _placementId = node.PlacementId; _details.Text = $"姓名：{(node.Name.Length == 0 ? "（未填写姓名）" : node.Name)}"; foreach (var card in _canvas.Children.OfType<Border>()) if (card.Tag is RootNode value) card.Background = value.PersonId == _personId && value.PlacementId == _placementId ? Brushes.DarkOrange : Brushes.WhiteSmoke; }
     private void ClearFocus() { _personId = null; _placementId = null; _details.Text = "未选中人物"; foreach (var card in _canvas.Children.OfType<Border>()) card.Background = Brushes.WhiteSmoke; }
-    private void CancelInput() { if (_input is null) return; _canvas.Children.Remove(_input); _input = null; _status.Text = "已取消输入，未创建人物。"; }
+    private void CancelInput() { if (_input is null) return; if (_inputHost is not null) _canvas.Children.Remove(_inputHost); _inputHost = null; _input = null; _status.Text = "已取消输入，未创建人物。"; }
     private void UpdateButtons() { _create.IsEnabled = _loadedOk && !_saving && !_hasRoot && _pending is null; _empty.IsEnabled = _loadedOk && !_saving && !_hasRoot && _pending is null; _reload.IsEnabled = !_saving && _pending is null; _retry.Visibility = _uncertain ? Visibility.Visible : Visibility.Collapsed; _retry.IsEnabled = !_saving; }
     internal bool CanCloseForOwner() { if (!_saving && _pending is null && _input is null) return true; _status.Text = _uncertain ? "保存结果尚未确认，请重试以保留输入。" : "请先完成或取消当前输入。"; return false; }
     private void OnClosing(object? sender, CancelEventArgs e) { if (!CanCloseForOwner()) e.Cancel = true; }
@@ -163,6 +168,7 @@ public sealed class V1FirstRootWindow : Window
     internal string? InputForTest => _input?.Text;
     internal bool InputReadOnlyForTest => _input?.IsReadOnly ?? false;
     internal TextBox? InputControlForTest => _input;
+    internal StackPanel? InputHostForTest => _inputHost;
     internal Canvas CanvasForTest => _canvas;
     internal ScrollViewer ScrollForTest => _scroll;
     internal int NodeCountForTest => _canvas.Children.OfType<Border>().Count(x => x.Tag is RootNode);

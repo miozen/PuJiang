@@ -88,11 +88,15 @@ public sealed class V1FirstRootWindowTests
             var window = new V1FirstRootWindow(new FirstRootApplication(new IsolatedFirstRootStore(db)), g, l, "冯"); window.Show();
             try
             {
-                await window.ReadyForTest; window.BeginForTest(); window.SetInputForTest("取消");
-                SendKey(window, Key.Escape); Assert.Null(window.InputForTest);
+                await window.ReadyForTest; window.BeginForTest();
+                var host = Assert.IsType<System.Windows.Controls.StackPanel>(window.InputHostForTest);
+                Assert.Equal("冯", Assert.IsType<System.Windows.Controls.TextBlock>(host.Children[0]).Text);
+                Assert.Same(window.InputControlForTest, host.Children[1]);
+                window.SetInputForTest("取消");
+                SendKey(window, Key.Escape); Assert.Null(window.InputForTest); Assert.Null(window.InputHostForTest);
                 window.BeginForTest(); window.SetInputForTest("朝阳"); SendKey(window, Key.Enter);
                 for (var i = 0; i < 200 && window.NodeCountForTest == 0; i++) await Task.Delay(10);
-                Assert.Equal(1, window.NodeCountForTest); Assert.NotNull(window.FocusForTest.Placement);
+                Assert.Equal(1, window.NodeCountForTest); Assert.NotNull(window.FocusForTest.Placement); Assert.Null(window.InputHostForTest);
             }
             finally { if (window.InputForTest is not null && !window.InputReadOnlyForTest) window.CancelForTest(); window.Close(); }
         });
