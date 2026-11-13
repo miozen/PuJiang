@@ -25,6 +25,8 @@ public sealed class WorkbenchProfileWindow : Window
     {
         public string Label => $"{(Kind == FamilyUnionKind.Marriage ? "婚配" : Kind == FamilyUnionKind.Partnership ? "伴侣" : "类型未详")}：{Name}";
     }
+    private PuJiang.V1.Persistence.IsolatedSample? _v1Sample;
+    private bool _v1Opening;
     private readonly TargetContextCoordinator _coordinator;
     private readonly WorkbenchDraftSession _session;
     private readonly ListBox _genealogies = new() { DisplayMemberPath = nameof(Option.Name) };
@@ -120,6 +122,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     internal Func<Guid, Task>? AfterCommitAsync { set => _afterCommit = value; }
     internal Task InitializeForTest() => _loaded.Task;
+    internal Task OpenV1SampleForTest() => OpenV1SampleAsync();
     internal async Task SelectGenealogyForTest(Guid id)
     {
         _updating = true; _genealogies.SelectedItem = _genealogies.Items.OfType<Option>().Single(x => x.Id == id); _updating = false;
@@ -199,6 +202,8 @@ public sealed class WorkbenchProfileWindow : Window
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         var create = new Button { Content = "新建人物", Padding = new Thickness(6) };
         create.Click += async (_, _) => await BeginInlineRootAsync(1); tools.Children.Add(create);
+        var isolated = new Button { Content = "V1 隔离样本", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
+        isolated.Click += async (_, _) => await OpenV1SampleAsync(); tools.Children.Add(isolated);
         var reopen = new Button { Content = "重新打开画布", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
         reopen.Click += async (_, _) => await ReopenCanvasAsync(); tools.Children.Add(reopen);
         DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
@@ -276,6 +281,21 @@ public sealed class WorkbenchProfileWindow : Window
         };
         Closing += OnClosing;
         ShowDraft();
+    }
+    private async Task OpenV1SampleAsync()
+    {
+        if (_v1Opening) return;
+        var existing = OwnedWindows.OfType<V1FirstRootWindow>().FirstOrDefault();
+        if (existing is not null) { existing.Activate(); return; }
+        _v1Opening = true;
+        try
+        {
+            _v1Sample ??= await PuJiang.V1.Persistence.IsolatedSample.CreateAsync();
+            var app = new PuJiang.V1.Application.FirstRootApplication(new PuJiang.V1.Persistence.IsolatedFirstRootStore(_v1Sample.Database));
+            new V1FirstRootWindow(app, _v1Sample.GenealogyId, _v1Sample.LineageId, _v1Sample.Surname) { Owner = this }.Show();
+        }
+        catch (Exception error) { _status.Text = $"隔离样本无法打开：{error.Message}"; }
+        finally { _v1Opening = false; }
     }
     private static void AddField(Panel panel, string label, Control field)
     {
@@ -1760,6 +1780,9 @@ public sealed class WorkbenchProfileWindow : Window
     }
     internal async Task<bool> PrepareForOwnerExitAsync()
     {
+        if (_v1Opening) { _status.Text = "请等待隔离样本打开完成。"; return false; }
+        if (OwnedWindows.OfType<V1FirstRootWindow>().Any(window => !window.CanCloseForOwner()))
+        { _status.Text = "请先完成隔离样本中的输入。"; return false; }
         if (BlockWhileInlineEditing()) return false;
         if (_approvedClose) return true;
         if (_busy) { _status.Text = "请等待当前操作结束后再关闭。"; return false; }
