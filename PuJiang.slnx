@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="PuJiang.Tests/PuJiang.Tests.csproj" />
+  <Project Path="PuJiang.Domain/PuJiang.Domain.csproj" />
   <Project Path="ZupuPaiBan/ZupuPaiBan.csproj" />
+  <Project Path="PuJiang.V1.Persistence/PuJiang.V1.Persistence.csproj" />
 </Solution>

@@ -17,5 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ZupuPaiBan\ZupuPaiBan.csproj" />
+    <ProjectReference Include="..\PuJiang.Domain\PuJiang.Domain.csproj" />
+    <ProjectReference Include="..\PuJiang.V1.Persistence\PuJiang.V1.Persistence.csproj" />
   </ItemGroup>
 </Project>
