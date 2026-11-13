@@ -11,6 +11,50 @@ public class WorkbenchProjectionSessionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Chart_choices_are_scoped_to_projection_revision_and_genealogy()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "谱" }; var other = new Genealogy { Name = "另一谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "父" }; var child = new Person { GenealogyId = g.Id, Name = "子" };
+        var relation = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        Guid chart;
+        await using (var setup = db.CreateContext())
+        {
+            setup.Genealogies.AddRange(g, other); setup.People.AddRange(parent, child); setup.PersonRelationships.Add(relation); await setup.SaveChangesAsync();
+            var graph = await new GenealogyDataService(setup).GetGraphSnapshotAsync(g.Id);
+            chart = (await new LineageChartService(setup).SaveAsync(g.Id, null, "图", null, graph, new Dictionary<Guid, Guid> { [child.Id] = relation.Id })).Id;
+        }
+        await using var projection = new WorkbenchProjectionSession(Coordinator(db), g.Id); var revision = await projection.ReopenAsync();
+        Assert.Equal(chart, Assert.Single((await projection.ReadChartsAsync(revision, null, 10)).Page.Items).Id);
+        var choice = await projection.ReadChartChoiceAsync(revision, chart, child.Id);
+        Assert.Equal(relation.Id, choice.Choice!.ApplicableRelationshipId);
+        var next = await projection.ReopenAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => projection.ReadChartChoiceAsync(revision, chart, child.Id));
+        Assert.Equal(relation.Id, (await projection.ReadChartChoiceAsync(next, chart, child.Id)).Choice!.ApplicableRelationshipId);
+        await using var otherProjection = new WorkbenchProjectionSession(Coordinator(db), other.Id); var otherRevision = await otherProjection.ReopenAsync();
+        Assert.Empty((await otherProjection.ReadChartsAsync(otherRevision, null, 10)).Page.Items);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => otherProjection.ReadChartChoiceAsync(otherRevision, chart, child.Id));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Chart_page_in_flight_cannot_return_after_projection_reopens()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var genealogy = new Genealogy { Name = "虚构谱" };
+        await using (var setup = db.CreateContext()) { setup.Genealogies.Add(genealogy); await setup.SaveChangesAsync(); }
+        await using var projection = new WorkbenchProjectionSession(Coordinator(db), genealogy.Id); var revision = await projection.ReopenAsync();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        projection.BeforeReadForTest = async () => { entered.TrySetResult(); await release.Task; };
+        var read = projection.ReadChartsAsync(revision, null, 10); await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var reopen = projection.ReopenAsync(); release.TrySetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => read);
+        var next = await reopen; projection.BeforeReadForTest = null;
+        Assert.Empty((await projection.ReadChartsAsync(next, null, 10)).Page.Items);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Save_requires_new_read_session_and_old_results_remain_invalid()
     {
         await using var db = new TestDatabase(); await db.MigrateAsync();

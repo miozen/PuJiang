@@ -14,18 +14,32 @@ public sealed class WorkbenchDraftSession
     private readonly Func<Guid, Guid?, ZupuPaiBan.Models.PersonRelationshipKind?, Guid?, ZupuPaiBan.Models.FamilyUnionKind?, Guid?, Task<WorkbenchProfileSnapshot>>? _beginNew;
     private readonly Func<Guid, Guid, Task<WorkbenchProfileSnapshot>>? _beginOrdinaryChild;
     private readonly Func<Guid, Guid, Task<WorkbenchProfileSnapshot>>? _beginOrdinarySibling;
+    private readonly Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? _beginOrdinaryChildForChart;
+    private readonly Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? _beginSpouseForChart;
+    private readonly Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? _beginAdoptedChildForChart;
+    private readonly Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? _beginSiblingForChart;
     private readonly SemaphoreSlim _gate = new(1, 1);
     public WorkbenchPersonDraft? Draft { get; private set; }
+    internal WorkbenchProfileSnapshot? CommittedForRefresh { get; private set; }
+    internal WorkbenchProfileValues? CommittedValuesForRefresh { get; private set; }
     public string? Error { get; private set; }
     public Func<Guid, Task>? AfterCommitAsync { get; set; }
+    internal Action<WorkbenchPersonDraft>? BeforeCommit { get; set; }
 
     public WorkbenchDraftSession(Func<IDisposable> enterOperation,
         Func<Guid, Guid, Task<WorkbenchProfileSnapshot>> read, Func<WorkbenchPersonDraft, Task> save,
         Func<Guid, Guid?, ZupuPaiBan.Models.PersonRelationshipKind?, Guid?, ZupuPaiBan.Models.FamilyUnionKind?, Guid?, Task<WorkbenchProfileSnapshot>>? beginNew = null,
         Func<Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginOrdinaryChild = null,
-        Func<Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginOrdinarySibling = null)
+        Func<Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginOrdinarySibling = null,
+        Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginOrdinaryChildForChart = null,
+        Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginSpouseForChart = null,
+        Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginAdoptedChildForChart = null,
+        Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? beginSiblingForChart = null)
     {
         _enterOperation = enterOperation; _read = read; _save = save; _beginNew = beginNew; _beginOrdinaryChild = beginOrdinaryChild; _beginOrdinarySibling = beginOrdinarySibling;
+        _beginOrdinaryChildForChart = beginOrdinaryChildForChart; _beginSpouseForChart = beginSpouseForChart;
+        _beginAdoptedChildForChart = beginAdoptedChildForChart;
+        _beginSiblingForChart = beginSiblingForChart;
     }
 
     public static WorkbenchDraftSession Create(TargetContextCoordinator coordinator) => new(coordinator.EnterOperation,
@@ -53,7 +67,60 @@ public sealed class WorkbenchDraftSession
         {
             await using var context = coordinator.CreateContext();
             return await new WorkbenchPersonProfileCommand(context).BeginOrdinarySiblingAsync(genealogy, sibling);
+        },
+        async (genealogy, parent, chart) =>
+        {
+            await using var context = coordinator.CreateContext();
+            return await new WorkbenchPersonProfileCommand(context).BeginOrdinaryChildForChartAsync(genealogy, parent, chart);
+        },
+        async (genealogy, partner, chart) =>
+        {
+            await using var context = coordinator.CreateContext();
+            return await new WorkbenchPersonProfileCommand(context).BeginNewSpouseForChartAsync(genealogy, partner, chart);
+        },
+        async (genealogy, parent, chart) =>
+        {
+            await using var context = coordinator.CreateContext();
+            return await new WorkbenchPersonProfileCommand(context).BeginAdoptedChildForChartAsync(genealogy, parent, chart);
+        },
+        async (genealogy, sibling, chart) =>
+        {
+            await using var context = coordinator.CreateContext();
+            return await new WorkbenchPersonProfileCommand(context).BeginOrdinarySiblingForChartAsync(genealogy, sibling, chart);
         });
+
+    public Task<DraftTransitionResult> BeginOrdinaryChildForChartAsync(Guid genealogyId, Guid parentId, Guid chartId, DraftLeaveChoice choice) =>
+        BeginChartDraftAsync(genealogyId, parentId, chartId, choice, _beginOrdinaryChildForChart);
+
+    public Task<DraftTransitionResult> BeginSpouseForChartAsync(Guid genealogyId, Guid partnerId, Guid chartId, DraftLeaveChoice choice) =>
+        BeginChartDraftAsync(genealogyId, partnerId, chartId, choice, _beginSpouseForChart);
+
+    public Task<DraftTransitionResult> BeginAdoptedChildForChartAsync(Guid genealogyId, Guid parentId, Guid chartId, DraftLeaveChoice choice) =>
+        BeginChartDraftAsync(genealogyId, parentId, chartId, choice, _beginAdoptedChildForChart);
+
+    public Task<DraftTransitionResult> BeginSiblingForChartAsync(Guid genealogyId, Guid siblingId, Guid chartId, DraftLeaveChoice choice) =>
+        BeginChartDraftAsync(genealogyId, siblingId, chartId, choice, _beginSiblingForChart);
+
+    private async Task<DraftTransitionResult> BeginChartDraftAsync(Guid genealogy, Guid person, Guid chart, DraftLeaveChoice choice,
+        Func<Guid, Guid, Guid, Task<WorkbenchProfileSnapshot>>? begin)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            using var operation = _enterOperation();
+            var saved = Draft?.IsDirty == true && choice == DraftLeaveChoice.Save;
+            var result = await LeaveCoreAsync(choice);
+            if (result != DraftTransitionResult.Completed) return result;
+            try
+            {
+                if (begin is null) throw new InvalidOperationException("图表新增入口尚不可用。");
+                Draft = new WorkbenchPersonDraft(await begin(genealogy, person, chart)); Error = null;
+                return DraftTransitionResult.Completed;
+            }
+            catch (Exception error) { Error = error.Message; return saved ? DraftTransitionResult.SavedThenReadFailed : DraftTransitionResult.ReadFailed; }
+        }
+        finally { _gate.Release(); }
+    }
 
     public async Task<DraftTransitionResult> BeginOrdinarySiblingAsync(Guid genealogyId, Guid siblingId, DraftLeaveChoice choice)
     {
@@ -166,10 +233,12 @@ public sealed class WorkbenchDraftSession
     private async Task<DraftTransitionResult> SaveCoreAsync()
     {
         if (Draft is not { } draft || !draft.IsDirty) return DraftTransitionResult.Completed;
-        try { await _save(draft); }
+        try { BeforeCommit?.Invoke(draft); await _save(draft); }
         catch (Exception error) { Error = error.Message; return DraftTransitionResult.SaveFailed; }
         // Once committed, remove the old token before any fallible refresh.
         Draft = null;
+        CommittedForRefresh = draft.Original;
+        CommittedValuesForRefresh = draft.Values;
         try
         {
             if (AfterCommitAsync is not null) await AfterCommitAsync(draft.Original.GenealogyId);
@@ -178,5 +247,6 @@ public sealed class WorkbenchDraftSession
             return DraftTransitionResult.Completed;
         }
         catch (Exception error) { Error = error.Message; return DraftTransitionResult.SavedRefreshFailed; }
+        finally { CommittedForRefresh = null; CommittedValuesForRefresh = null; }
     }
 }

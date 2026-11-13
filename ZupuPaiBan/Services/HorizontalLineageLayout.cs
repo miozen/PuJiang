@@ -1,7 +1,7 @@
 namespace ZupuPaiBan.Services;
 
 // This engine accepts an explicitly ordered forest; cross-generation edges require explicit opt-in.
-public sealed record HorizontalLayoutPerson(Guid Id, int Generation, int SiblingOrder, double Width, double Height);
+public sealed record HorizontalLayoutPerson(Guid Id, int Generation, int SiblingOrder, double Width, double Height, double ExtraBelow = 0, int? RootSortGeneration = null);
 public sealed record HorizontalLayoutRelationship(Guid Id, Guid ParentId, Guid ChildId);
 public readonly record struct HorizontalLayoutPoint(double X, double Y);
 public sealed record HorizontalLayoutNode(Guid PersonId, int Generation, double X, double Y, double Width, double Height);
@@ -31,8 +31,9 @@ public static class HorizontalLineageLayout
         var byId = new Dictionary<Guid, HorizontalLayoutPerson>();
         foreach (var p in people)
         {
-            if (p is null || p.Id == Guid.Empty || p.Generation < 0 || p.SiblingOrder < 0 ||
-                !double.IsFinite(p.Width) || p.Width <= 0 || !double.IsFinite(p.Height) || p.Height <= 0)
+            if (p is null || p.Id == Guid.Empty || p.Generation < 0 || p.SiblingOrder < 0 || p.RootSortGeneration < 0 ||
+                !double.IsFinite(p.Width) || p.Width <= 0 || !double.IsFinite(p.Height) || p.Height <= 0 ||
+                !double.IsFinite(p.ExtraBelow) || p.ExtraBelow < 0 || !double.IsFinite(p.Height + p.ExtraBelow))
                 throw new HorizontalLayoutException("Invalid person ID, generation, order or dimensions.");
             if (!byId.TryAdd(p.Id, p))
                 throw new HorizontalLayoutException($"Duplicate person ID: {p.Id}.");
@@ -69,13 +70,38 @@ public static class HorizontalLineageLayout
         if (!double.IsFinite(columnWidth) || !double.IsFinite(rowHeight) ||
             columnWidth <= people.Max(p => p.Width) || rowHeight <= people.Max(p => p.Height))
             throw new HorizontalLayoutException("Dimensions exceed the supported coordinate range.");
-        var roots = people.Where(p => !childIds.Contains(p.Id)).OrderBy(p => p.Generation)
+        var roots = people.Where(p => !childIds.Contains(p.Id)).OrderBy(p => p.RootSortGeneration ?? p.Generation)
             .ThenBy(p => p.SiblingOrder).ThenBy(p => p.Id).ToArray();
         var nodeMap = new Dictionary<Guid, HorizontalLayoutNode>();
         var visibleEdges = new List<HorizontalLayoutRelationship>();
-        double nextCenter = rowHeight / 2;
+        double nextTop = 0;
         foreach (var root in roots)
         {
+            // All nodes on a first-child path share a centre. Reserve the tallest
+            // node on that path, without expanding unrelated rows.
+            var firstLeaf = new Dictionary<Guid, Guid>();
+            var rowHeights = new Dictionary<Guid, double>();
+            var rowBottoms = new Dictionary<Guid, double>();
+            var measure = new Stack<(HorizontalLayoutPerson Person, bool Visited)>();
+            measure.Push((root, false));
+            while (measure.TryPop(out var item))
+            {
+                var visibleChildren = expanded.Contains(item.Person.Id) ? children[item.Person.Id] : null;
+                if (!item.Visited)
+                {
+                    measure.Push((item.Person, true));
+                    if (visibleChildren is not null)
+                        for (var i = visibleChildren.Count - 1; i >= 0; i--) measure.Push((byId[visibleChildren[i].ChildId], false));
+                    continue;
+                }
+                var leaf = visibleChildren is { Count: > 0 } ? firstLeaf[visibleChildren[0].ChildId] : item.Person.Id;
+                firstLeaf[item.Person.Id] = leaf;
+                rowHeights[leaf] = Math.Max(rowHeights.GetValueOrDefault(leaf), item.Person.Height);
+                // Extra information occupies the owner's column; an ancestor's
+                // spouse list must not push rows in a descendant's column.
+                var extra = item.Person.Id == leaf ? item.Person.ExtraBelow : 0;
+                rowBottoms[leaf] = Math.Max(rowBottoms.GetValueOrDefault(leaf), item.Person.Height / 2 + extra);
+            }
             var stack = new Stack<(HorizontalLayoutPerson Person, bool Visited)>();
             stack.Push((root, false));
             while (stack.TryPop(out var item))
@@ -93,14 +119,18 @@ public static class HorizontalLineageLayout
                 double center;
                 if (visibleChildren is null || visibleChildren.Count == 0)
                 {
-                    center = nextCenter;
-                    nextCenter += rowHeight;
+                    var height = rowHeights[p.Id];
+                    center = nextTop + height / 2;
+                    nextTop = center + rowBottoms[p.Id] + RowGap;
                 }
                 else
                 {
                     var first = nodeMap[visibleChildren[0].ChildId];
                     center = first.Y + first.Height / 2;
                     visibleEdges.AddRange(visibleChildren);
+                    // Reserve the owner's expanded information only after its
+                    // descendants, so the next peer cannot overlap that column.
+                    nextTop = Math.Max(nextTop, center + p.Height / 2 + p.ExtraBelow + RowGap);
                 }
                 var x = p.Generation * columnWidth;
                 var y = center - p.Height / 2;

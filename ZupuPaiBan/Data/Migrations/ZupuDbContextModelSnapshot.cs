@@ -276,6 +276,53 @@ namespace ZupuPaiBan.Data.Migrations
                     b.ToTable("LineageChartChoices");
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageRootSiblingOrder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ChartId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("EvidenceGeneration")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChartId");
+
+                    b.ToTable("LineageRootSiblingOrders");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageRootSiblingOrderItem", b =>
+                {
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PersonId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RecordedGeneration")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Sex")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("GroupId", "PersonId");
+
+                    b.HasIndex("GroupId", "Position")
+                        .IsUnique();
+
+                    b.ToTable("LineageRootSiblingOrderItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_LineageRootSiblingOrderItems_Position", "Position > 0");
+                        });
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrder", b =>
                 {
                     b.Property<Guid>("Id")
@@ -349,6 +396,60 @@ namespace ZupuPaiBan.Data.Migrations
                     b.ToTable("LineageSiblingOrderItems", t =>
                         {
                             t.HasCheckConstraint("CK_LineageSiblingOrderItems_Position", "Position > 0");
+                        });
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSpouseOrder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ChartId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("EvidenceGeneration")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("OwnerId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChartId", "OwnerId")
+                        .IsUnique();
+
+                    b.ToTable("LineageSpouseOrders");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSpouseOrderItem", b =>
+                {
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UnionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("PartnerOneId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PartnerTwoId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("GroupId", "UnionId");
+
+                    b.HasIndex("GroupId", "Position")
+                        .IsUnique();
+
+                    b.ToTable("LineageSpouseOrderItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_LineageSpouseOrderItems_Position", "Position > 0");
                         });
                 });
 
@@ -546,6 +647,24 @@ namespace ZupuPaiBan.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageRootSiblingOrder", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageChart", null)
+                        .WithMany()
+                        .HasForeignKey("ChartId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageRootSiblingOrderItem", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageRootSiblingOrder", null)
+                        .WithMany("Items")
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrder", b =>
                 {
                     b.HasOne("ZupuPaiBan.Models.LineageChart", null)
@@ -558,6 +677,24 @@ namespace ZupuPaiBan.Data.Migrations
             modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrderItem", b =>
                 {
                     b.HasOne("ZupuPaiBan.Models.LineageSiblingOrder", null)
+                        .WithMany("Items")
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSpouseOrder", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageChart", null)
+                        .WithMany()
+                        .HasForeignKey("ChartId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSpouseOrderItem", b =>
+                {
+                    b.HasOne("ZupuPaiBan.Models.LineageSpouseOrder", null)
                         .WithMany("Items")
                         .HasForeignKey("GroupId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -635,7 +772,17 @@ namespace ZupuPaiBan.Data.Migrations
                     b.Navigation("Choices");
                 });
 
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageRootSiblingOrder", b =>
+                {
+                    b.Navigation("Items");
+                });
+
             modelBuilder.Entity("ZupuPaiBan.Models.LineageSiblingOrder", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("ZupuPaiBan.Models.LineageSpouseOrder", b =>
                 {
                     b.Navigation("Items");
                 });

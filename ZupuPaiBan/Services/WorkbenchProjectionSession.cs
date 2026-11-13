@@ -8,6 +8,7 @@ public sealed class WorkbenchProjectionSession(TargetContextCoordinator coordina
     public sealed record PeopleResult(long Revision, ProjectionReadSession.PersonPage Page);
     public sealed record PersonResult(long Revision, ProjectionReadSession.PersonRow Person);
     public sealed record LinkResult<T>(long Revision, ProjectionReadSession.LinkPage<T> Page);
+    public sealed record ChartChoiceResult(long Revision, ProjectionReadSession.ChartChoiceState? Choice);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ProjectionReadSession? _session;
     private long _revision;
@@ -117,6 +118,28 @@ public sealed class WorkbenchProjectionSession(TargetContextCoordinator coordina
 
     public Task<LinkResult<ProjectionReadSession.SiblingRow>> ReadSiblingsAsync(long revision, Guid personId, Guid? after, int limit, CancellationToken cancellationToken = default) =>
         ReadLinksAsync(revision, (session, token, cancellation) => session.ReadSiblingsAsync(token, personId, after, limit, cancellation), cancellationToken);
+
+    public Task<LinkResult<ProjectionReadSession.ChartRow>> ReadChartsAsync(long revision, Guid? after, int limit, CancellationToken cancellationToken = default) =>
+        ReadLinksAsync(revision, (session, token, cancellation) => session.ReadChartsAsync(token, after, limit, cancellation), cancellationToken);
+
+    public async Task<ChartChoiceResult> ReadChartChoiceAsync(long revision, Guid chartId, Guid personId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!IsCurrent(revision) || _session is null) throw new InvalidOperationException("读取会话已失效，请重新打开。");
+            using var operation = coordinator.EnterOperation();
+            try
+            {
+                if (BeforeReadForTest is not null) await BeforeReadForTest();
+                var choice = await _session.ReadChartChoiceAsync(_session.Token, chartId, personId, cancellationToken);
+                if (!IsCurrent(revision)) throw new InvalidOperationException("读取结果已失效。");
+                return new ChartChoiceResult(revision, choice);
+            }
+            catch { Interlocked.CompareExchange(ref _readyRevision, 0, revision); throw; }
+        }
+        finally { _gate.Release(); }
+    }
 
     private async Task<LinkResult<T>> ReadLinksAsync<T>(long revision,
         Func<ProjectionReadSession, Guid, CancellationToken, Task<ProjectionReadSession.LinkPage<T>>> read, CancellationToken cancellationToken)

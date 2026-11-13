@@ -20,9 +20,9 @@ public sealed record SiblingOrderReview(Guid GroupId, Guid GenealogyId, Guid Cha
 public sealed class SiblingOrderCapture
 {
     internal SiblingOrderCapture(Guid session, Guid genealogy, Guid chart, long revision, long generation, Guid parent,
-        string parentName, string? parentGeneration, IReadOnlyList<SiblingOrderMember> members, Guid? group)
-        => (Session, GenealogyId, ChartId, ChartRevision, Generation, ParentId, ParentName, ParentGeneration, Members, GroupId) =
-           (session, genealogy, chart, revision, generation, parent, parentName, parentGeneration, members, group);
+        string parentName, string? parentGeneration, IReadOnlyList<SiblingOrderMember> members, Guid? group, bool selectedParents)
+        => (Session, GenealogyId, ChartId, ChartRevision, Generation, ParentId, ParentName, ParentGeneration, Members, GroupId, UsesChartSelection) =
+           (session, genealogy, chart, revision, generation, parent, parentName, parentGeneration, members, group, selectedParents);
     internal Guid Session { get; }
     public Guid GenealogyId { get; }
     public Guid ChartId { get; }
@@ -33,6 +33,7 @@ public sealed class SiblingOrderCapture
     public string? ParentGeneration { get; }
     public IReadOnlyList<SiblingOrderMember> Members { get; }
     public Guid? GroupId { get; }
+    internal bool UsesChartSelection { get; }
 }
 
 /// <summary>Dedicated-context, version-bound storage session; no UI or production restore behavior.</summary>
@@ -120,8 +121,10 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
     }
 
     public Task<SiblingOrderCapture> CaptureAsync(Guid genealogyId, Guid chartId, Guid parentId, Guid? existingGroupId = null, CancellationToken cancellationToken = default) =>
-        RunAsync(() => CaptureCoreAsync(genealogyId, chartId, parentId, existingGroupId, cancellationToken), cancellationToken);
-    private async Task<SiblingOrderCapture> CaptureCoreAsync(Guid genealogyId, Guid chartId, Guid parentId, Guid? existingGroupId, CancellationToken cancellationToken)
+        RunAsync(() => CaptureCoreAsync(genealogyId, chartId, parentId, existingGroupId, false, cancellationToken), cancellationToken);
+    public Task<SiblingOrderCapture> CaptureSelectedAsync(Guid genealogyId, Guid chartId, Guid parentId, Guid? existingGroupId = null, CancellationToken cancellationToken = default) =>
+        RunAsync(() => CaptureCoreAsync(genealogyId, chartId, parentId, existingGroupId, true, cancellationToken), cancellationToken);
+    private async Task<SiblingOrderCapture> CaptureCoreAsync(Guid genealogyId, Guid chartId, Guid parentId, Guid? existingGroupId, bool selectedParents, CancellationToken cancellationToken)
     {
         using var operation = _coordinator.EnterOperation();
         await ValidateSessionAsync(genealogyId, cancellationToken);
@@ -133,11 +136,11 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
             throw new InvalidOperationException("历史排序组与图表或父母不匹配。");
         if (existingGroupId is null && await context.LineageSiblingOrders.AsNoTracking().AnyAsync(g => g.ChartId == chartId && g.ParentId == parentId, cancellationToken))
             throw new InvalidOperationException("该父母的历史排序已存在，请先复核。");
-        var evidence = await ReadEvidenceAsync(genealogyId, parentId, cancellationToken);
+        var evidence = await ReadEvidenceAsync(genealogyId, parentId, cancellationToken, selectedParents ? chartId : null);
         await tx.CommitAsync(cancellationToken);
         await ValidateSessionAsync(genealogyId, cancellationToken);
         var capture = new SiblingOrderCapture(_session, genealogyId, chartId, revision, generation, parentId,
-            evidence.ParentName, evidence.ParentGeneration, Array.AsReadOnly(evidence.Members.ToArray()), existingGroupId);
+            evidence.ParentName, evidence.ParentGeneration, Array.AsReadOnly(evidence.Members.ToArray()), existingGroupId, selectedParents);
         _issued.Add(capture); return capture;
     }
 
@@ -145,9 +148,18 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(orderedPeople);
         var order = orderedPeople.ToArray();
-        return RunAsync(() => SaveCoreAsync(capture, order, confirmChangedHistory, cancellationToken), cancellationToken);
+        return RunAsync(() => SaveCoreAsync(capture, order, confirmChangedHistory, false, cancellationToken), cancellationToken);
     }
-    private async Task<Guid> SaveCoreAsync(SiblingOrderCapture capture, IReadOnlyList<Guid> orderedPeople, bool confirmChangedHistory, CancellationToken cancellationToken)
+
+    /// <summary>Save a complete unique-parent group while enforcing the workbench's sex grouping.</summary>
+    public Task<Guid> SaveGroupedAsync(SiblingOrderCapture capture, IReadOnlyList<Guid> orderedPeople, bool confirmChangedHistory = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(orderedPeople);
+        var order = orderedPeople.ToArray();
+        return RunAsync(() => SaveCoreAsync(capture, order, confirmChangedHistory, true, cancellationToken), cancellationToken);
+    }
+
+    private async Task<Guid> SaveCoreAsync(SiblingOrderCapture capture, IReadOnlyList<Guid> orderedPeople, bool confirmChangedHistory, bool groupBySex, CancellationToken cancellationToken)
     {
         using var operation = _coordinator.EnterOperation();
         ArgumentNullException.ThrowIfNull(capture); ArgumentNullException.ThrowIfNull(orderedPeople);
@@ -161,8 +173,15 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
         var count = await context.Database.ExecuteSqlRawAsync(cas, new object[] { Sql("@chart", capture.ChartId), Sql("@genealogy", capture.GenealogyId),
             new SqliteParameter("@revision", capture.ChartRevision), new SqliteParameter("@generation", capture.Generation) }, cancellationToken);
         if (count != 1) throw new InvalidOperationException("图表或谱系数据已变化，请重新读取并复核。");
-        var evidence = await ReadEvidenceAsync(capture.GenealogyId, capture.ParentId, cancellationToken);
+        var evidence = await ReadEvidenceAsync(capture.GenealogyId, capture.ParentId, cancellationToken, capture.UsesChartSelection ? capture.ChartId : null);
         if (!SameEvidence(capture.ParentGeneration, capture.Members, evidence)) throw new InvalidOperationException("同胞组已变化，请重新复核。");
+        if (groupBySex)
+        {
+            var sexes = await context.People.AsNoTracking().Where(p => p.GenealogyId == capture.GenealogyId && orderedPeople.Contains(p.Id))
+                .Select(p => new { p.Id, p.Sex }).ToDictionaryAsync(p => p.Id, p => p.Sex, cancellationToken);
+            if (sexes.Count != orderedPeople.Count) throw new InvalidOperationException("排序人物不存在或跨谱。");
+            WorkbenchOrderRules.Validate(orderedPeople.Select(id => new WorkbenchOrderRules.Member(id, sexes[id])).ToArray(), true);
+        }
         var existing = await context.LineageSiblingOrders.AsNoTracking().Include(g => g.Items)
             .SingleOrDefaultAsync(g => g.ChartId == capture.ChartId && g.ParentId == capture.ParentId, cancellationToken);
         if ((existing is null) != (capture.GroupId is null) || (existing is not null && existing.Id != capture.GroupId))
@@ -222,7 +241,7 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
             problems.Add("历史顺序不完整或位置无效。");
         try
         {
-            var evidence = await ReadEvidenceAsync(genealogyId, saved.ParentId, cancellationToken);
+            var evidence = await ReadEvidenceAsync(genealogyId, saved.ParentId, cancellationToken, chartId);
             current = evidence.Members;
             if (saved.ParentGeneration != evidence.ParentGeneration) problems.Add($"父母谱载世代已变化：{saved.ParentGeneration ?? "未记"} → {evidence.ParentGeneration ?? "未记"}。");
             var oldMembers = ToMembers(saved).ToDictionary(m => m.PersonId);
@@ -261,13 +280,13 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
         if (group is null || group.ParentId != review.ParentId || group.EvidenceGeneration != review.EvidenceGeneration ||
             group.ParentGeneration != review.ParentGeneration || !group.Items.OrderBy(i => i.Position).Select(i => new SiblingOrderHistoricalItem(i.Position, ToMember(i))).SequenceEqual(review.Historical))
             throw new InvalidOperationException("排序记录已变化，请重新读取。");
-        var evidence = await ReadEvidenceAsync(review.GenealogyId, review.ParentId, cancellationToken);
+        var evidence = await ReadEvidenceAsync(review.GenealogyId, review.ParentId, cancellationToken, review.ChartId);
         if (!SameEvidence(review.ParentGeneration, review.Current, evidence)) throw new InvalidOperationException("同胞组已变化，请重新读取。");
         await tx.CommitAsync(cancellationToken);
         await ValidateSessionAsync(review.GenealogyId, cancellationToken);
     }
 
-    private async Task<GroupEvidence> ReadEvidenceAsync(Guid genealogyId, Guid parentId, CancellationToken cancellationToken)
+    private async Task<GroupEvidence> ReadEvidenceAsync(Guid genealogyId, Guid parentId, CancellationToken cancellationToken, Guid? selectedChart = null)
     {
         if (parentId == Guid.Empty) throw new InvalidOperationException("父母人物 ID 无效。");
         var parent = await context.People.AsNoTracking().SingleOrDefaultAsync(p => p.Id == parentId && p.GenealogyId == genealogyId, cancellationToken)
@@ -284,7 +303,25 @@ public sealed class SiblingOrderStorageSession : IAsyncDisposable
         var parentCounts = await context.PersonRelationships.AsNoTracking().Where(r => r.GenealogyId == genealogyId && ids.Contains(r.PersonId) &&
             (r.Kind == PersonRelationshipKind.BiologicalParent || r.Kind == PersonRelationshipKind.AdoptiveParent || r.Kind == PersonRelationshipKind.HeirParent))
             .GroupBy(r => r.PersonId).Select(g => new { Id = g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Id, g => g.Count, cancellationToken);
-        if (ids.Any(id => !parentCounts.TryGetValue(id, out var count) || count != 1)) throw new InvalidOperationException("子女父母候选不唯一，须先处理。");
+        if (ids.Any(id => !parentCounts.TryGetValue(id, out var count) || count != 1))
+        {
+            if (selectedChart is not Guid chart) throw new InvalidOperationException("子女父母候选不唯一，须先处理。");
+            var dataGeneration = await GuardAsync(cancellationToken);
+            var validChart = await context.LineageCharts.AsNoTracking().AnyAsync(c => c.Id == chart && c.GenealogyId == genealogyId && c.Generation == dataGeneration, cancellationToken);
+            if (!validChart) throw new InvalidOperationException("图表主线已失效，请先复核。");
+            var choices = await context.LineageChartChoices.AsNoTracking().Where(c => c.ChartId == chart && ids.Contains(c.PersonId)).ToDictionaryAsync(c => c.PersonId, cancellationToken);
+            foreach (var link in links.ToArray())
+            {
+                if (parentCounts[link.PersonId] == 1) continue;
+                if (!choices.TryGetValue(link.PersonId, out var choice)) throw new InvalidOperationException("子女存在多个父母候选，请先在图表中确认主线。");
+                var selected = await context.PersonRelationships.AsNoTracking().SingleOrDefaultAsync(r => r.GenealogyId == genealogyId && r.Id == choice.RelationshipId &&
+                    r.PersonId == choice.PersonId && r.RelatedPersonId == choice.ParentId && r.Kind == choice.Kind &&
+                    (r.Kind == PersonRelationshipKind.BiologicalParent || r.Kind == PersonRelationshipKind.AdoptiveParent || r.Kind == PersonRelationshipKind.HeirParent), cancellationToken);
+                if (selected is null) throw new InvalidOperationException("图表主线关系已失效，请先复核。");
+                if (selected.Id != link.Id) links.Remove(link);
+            }
+            if (links.Count < 2) throw new InvalidOperationException("图表中该父母的子女不足两人，无法建立排序组。");
+        }
         var byId = people.ToDictionary(p => p.Id);
         var members = new List<SiblingOrderMember>();
         foreach (var link in links)

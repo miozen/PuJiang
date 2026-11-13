@@ -11,6 +11,125 @@ namespace PuJiang.Tests;
 
 public class SiblingOrderStorageTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Explicit_chart_parent_selection_allows_two_parent_group_and_detects_stale_chart()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var f = await SeedAsync(db);
+        var mother = new Person { GenealogyId = f.Genealogy.Id, Name = "母", Sex = PersonSex.Female, RecordedGeneration = "一世" };
+        await using (var setup = db.CreateContext())
+        {
+            setup.People.Add(mother);
+            setup.PersonRelationships.AddRange(new PersonRelationship { GenealogyId = f.Genealogy.Id, PersonId = f.A.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent },
+                new PersonRelationship { GenealogyId = f.Genealogy.Id, PersonId = f.B.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent });
+            await setup.SaveChangesAsync();
+            await setup.People.Where(p => p.Id == f.A.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Male));
+            await setup.People.Where(p => p.Id == f.B.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Female));
+        }
+        await using (var stale = await OpenAsync(db, f.Genealogy.Id))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => stale.CaptureSelectedAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id));
+        await using (var update = db.CreateContext())
+        {
+            var snapshot = await new GenealogyDataService(update).GetGraphSnapshotAsync(f.Genealogy.Id);
+            var revision = (await update.LineageCharts.SingleAsync(c => c.Id == f.ChartId)).Revision;
+            await new LineageChartService(update).SaveAsync(f.Genealogy.Id, f.ChartId, "图一", revision, snapshot,
+                new Dictionary<Guid, Guid> { [f.A.Id] = f.LinkA.Id });
+        }
+        await using (var missing = await OpenAsync(db, f.Genealogy.Id))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => missing.CaptureSelectedAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id));
+        await using (var update = db.CreateContext())
+        {
+            var snapshot = await new GenealogyDataService(update).GetGraphSnapshotAsync(f.Genealogy.Id);
+            var revision = (await update.LineageCharts.SingleAsync(c => c.Id == f.ChartId)).Revision;
+            await new LineageChartService(update).SaveAsync(f.Genealogy.Id, f.ChartId, "图一", revision, snapshot,
+                new Dictionary<Guid, Guid> { [f.A.Id] = f.LinkA.Id, [f.B.Id] = f.LinkB.Id });
+        }
+        Guid group;
+        await using (var session = await OpenAsync(db, f.Genealogy.Id))
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.CaptureAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id));
+            var capture = await session.CaptureSelectedAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id);
+            group = await session.SaveGroupedAsync(capture, new[] { f.A.Id, f.B.Id });
+        }
+        await using var reloaded = await OpenAsync(db, f.Genealogy.Id);
+        var review = await reloaded.ReviewAsync(f.Genealogy.Id, f.ChartId, group);
+        Assert.True(review.CanApplyAtCapturedRevision); await reloaded.ValidateReviewAsync(review);
+        Assert.Equal(new[] { f.A.Id, f.B.Id }, review.Historical.Select(item => item.Member.PersonId));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Selected_group_rejects_when_only_one_child_is_assigned_to_that_parent()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var f = await SeedAsync(db);
+        var mother = new Person { GenealogyId = f.Genealogy.Id, Name = "母", RecordedGeneration = "一世" };
+        var motherA = new PersonRelationship { GenealogyId = f.Genealogy.Id, PersonId = f.A.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        var motherB = new PersonRelationship { GenealogyId = f.Genealogy.Id, PersonId = f.B.Id, RelatedPersonId = mother.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        await using (var setup = db.CreateContext()) { setup.People.Add(mother); setup.PersonRelationships.AddRange(motherA, motherB); await setup.SaveChangesAsync(); }
+        await using (var update = db.CreateContext())
+        {
+            var snapshot = await new GenealogyDataService(update).GetGraphSnapshotAsync(f.Genealogy.Id);
+            var revision = (await update.LineageCharts.SingleAsync(c => c.Id == f.ChartId)).Revision;
+            await new LineageChartService(update).SaveAsync(f.Genealogy.Id, f.ChartId, "图一", revision, snapshot,
+                new Dictionary<Guid, Guid> { [f.A.Id] = f.LinkA.Id, [f.B.Id] = motherB.Id });
+        }
+        await using var session = await OpenAsync(db, f.Genealogy.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.CaptureSelectedAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id));
+        await using var verify = db.CreateContext(); Assert.Empty(await verify.LineageSiblingOrders.ToListAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Grouped_save_rejects_unknown_and_cross_sex_order_without_writing_then_persists_per_chart()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var f = await SeedAsync(db);
+        await using (var seed = db.CreateContext())
+        {
+            await seed.People.Where(p => p.Id == f.A.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Male));
+        }
+        await using (var unknown = await OpenAsync(db, f.Genealogy.Id))
+        {
+            var capture = await unknown.CaptureAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => unknown.SaveGroupedAsync(capture, new[] { f.A.Id, f.B.Id }));
+            await using var verify = db.CreateContext(); Assert.Empty(await verify.LineageSiblingOrders.ToListAsync());
+            Assert.Equal(capture.ChartRevision, (await verify.LineageCharts.SingleAsync(c => c.Id == f.ChartId)).Revision);
+        }
+        await using (var seed = db.CreateContext()) await seed.People.Where(p => p.Id == f.B.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Female));
+        await using var session = await OpenAsync(db, f.Genealogy.Id);
+        var next = await session.CaptureAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.SaveGroupedAsync(next, new[] { f.B.Id, f.A.Id }));
+        await using (var verify = db.CreateContext()) { Assert.Empty(await verify.LineageSiblingOrders.ToListAsync()); Assert.Equal(next.ChartRevision, (await verify.LineageCharts.SingleAsync(c => c.Id == f.ChartId)).Revision); }
+        var group = await session.SaveGroupedAsync(next, new[] { f.A.Id, f.B.Id });
+        await using var reopened = await OpenAsync(db, f.Genealogy.Id);
+        Assert.Equal(new[] { f.A.Id, f.B.Id }, (await reopened.ReviewAsync(f.Genealogy.Id, f.ChartId, group)).Historical.Select(i => i.Member.PersonId));
+        Assert.Empty(await reopened.ListAsync(f.Genealogy.Id, f.OtherChartId));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Grouped_save_rejects_stale_chart_and_sex_change_without_partial_writes()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync(); var f = await SeedAsync(db);
+        await using (var seed = db.CreateContext())
+        {
+            await seed.People.Where(p => p.Id == f.A.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Male));
+            await seed.People.Where(p => p.Id == f.B.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Female));
+        }
+        await using var first = await OpenAsync(db, f.Genealogy.Id);
+        await using var second = await OpenAsync(db, f.Genealogy.Id);
+        var one = await first.CaptureAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id);
+        var stale = await second.CaptureAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id);
+        var group = await first.SaveGroupedAsync(one, new[] { f.A.Id, f.B.Id });
+        await Assert.ThrowsAnyAsync<Exception>(() => second.SaveGroupedAsync(stale, new[] { f.A.Id, f.B.Id }));
+        await using var reopened = await OpenAsync(db, f.Genealogy.Id);
+        var fresh = await reopened.CaptureAsync(f.Genealogy.Id, f.ChartId, f.Parent.Id, group);
+        await using (var external = db.CreateContext()) await external.People.Where(p => p.Id == f.A.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Sex, PersonSex.Female));
+        await Assert.ThrowsAnyAsync<Exception>(() => reopened.SaveGroupedAsync(fresh, new[] { f.A.Id, f.B.Id }));
+        await using var verify = db.CreateContext();
+        Assert.Equal(fresh.ChartRevision, (await verify.LineageCharts.SingleAsync(c => c.Id == f.ChartId)).Revision);
+        Assert.Equal(new[] { f.A.Id, f.B.Id }, await verify.LineageSiblingOrderItems.Where(i => i.GroupId == group).OrderBy(i => i.Position).Select(i => i.PersonId).ToArrayAsync());
+    }
+
     private sealed record Fixture(Genealogy Genealogy, Person Parent, Person A, Person B, PersonRelationship LinkA, PersonRelationship LinkB, Guid ChartId, Guid OtherChartId);
     private static Task<SiblingOrderStorageSession> OpenAsync(TestDatabase db, Guid genealogy)
     {

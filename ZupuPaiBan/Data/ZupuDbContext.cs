@@ -19,6 +19,10 @@ public class ZupuDbContext : DbContext
     public DbSet<LineageChartChoice> LineageChartChoices => Set<LineageChartChoice>();
     public DbSet<LineageSiblingOrder> LineageSiblingOrders => Set<LineageSiblingOrder>();
     public DbSet<LineageSiblingOrderItem> LineageSiblingOrderItems => Set<LineageSiblingOrderItem>();
+    public DbSet<LineageSpouseOrder> LineageSpouseOrders => Set<LineageSpouseOrder>();
+    public DbSet<LineageSpouseOrderItem> LineageSpouseOrderItems => Set<LineageSpouseOrderItem>();
+    public DbSet<LineageRootSiblingOrder> LineageRootSiblingOrders => Set<LineageRootSiblingOrder>();
+    public DbSet<LineageRootSiblingOrderItem> LineageRootSiblingOrderItems => Set<LineageRootSiblingOrderItem>();
 
     private readonly string _dbPath;
     private readonly Action<bool>? _onDispose;
@@ -87,6 +91,31 @@ public class ZupuDbContext : DbContext
 
     private static void ConfigureTargetModel(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<LineageRootSiblingOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasOne<LineageChart>().WithMany().HasForeignKey(e => e.ChartId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(e => e.Items).WithOne().HasForeignKey(e => e.GroupId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<LineageRootSiblingOrderItem>(entity =>
+        {
+            entity.HasKey(e => new { e.GroupId, e.PersonId });
+            entity.HasIndex(e => new { e.GroupId, e.Position }).IsUnique();
+            entity.ToTable(t => t.HasCheckConstraint("CK_LineageRootSiblingOrderItems_Position", "Position > 0"));
+        });
+        modelBuilder.Entity<LineageSpouseOrder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ChartId, e.OwnerId }).IsUnique();
+            entity.HasOne<LineageChart>().WithMany().HasForeignKey(e => e.ChartId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(e => e.Items).WithOne().HasForeignKey(e => e.GroupId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<LineageSpouseOrderItem>(entity =>
+        {
+            entity.HasKey(e => new { e.GroupId, e.UnionId });
+            entity.HasIndex(e => new { e.GroupId, e.Position }).IsUnique();
+            entity.ToTable(t => t.HasCheckConstraint("CK_LineageSpouseOrderItems_Position", "Position > 0"));
+        });
         modelBuilder.Entity<LineageSiblingOrder>(entity =>
         {
             entity.HasKey(e => e.Id);

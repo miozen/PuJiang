@@ -11,6 +11,76 @@ public class HorizontalLineageLayoutTests
     private static HorizontalLayoutResult Layout(HorizontalLayoutPerson[] p, HorizontalLayoutRelationship[] e, params int[] expanded) => HorizontalLineageLayout.Calculate(p, e, expanded.Select(Id).ToHashSet());
 
     [Fact]
+    public void Draft_generation_changes_column_without_reordering_independent_roots()
+    {
+        var original = new[] { P(1, 0), P(2, 1) };
+        var baseline = Layout(original, []);
+        var edited = Layout([original[0], original[1] with { Generation = 0, RootSortGeneration = 1 }], []);
+        Assert.Equal(baseline.Nodes.Single(n => n.PersonId == Id(2)).Y, edited.Nodes.Single(n => n.PersonId == Id(2)).Y);
+        Assert.True(edited.Nodes.Single(n => n.PersonId == Id(1)).Y < edited.Nodes.Single(n => n.PersonId == Id(2)).Y);
+        Assert.Equal(0, edited.Nodes.Single(n => n.PersonId == Id(2)).Generation);
+    }
+
+    [Fact]
+    public void Expanded_spouses_move_following_sibling_and_entire_descendant_branch_together()
+    {
+        var people = new[] { P(1, 0), P(2, 1, 0), P(3, 1, 1), P(4, 2, 0), P(5, 2, 1), P(6, 3, 0) };
+        var edges = new[] { E(11, 1, 2), E(12, 1, 3), E(13, 3, 4), E(14, 3, 5), E(15, 4, 6) };
+        var baseline = Layout(people, edges, 1, 3, 4);
+        var expanded = Layout([people[0], people[1] with { ExtraBelow = 76 }, people[2], people[3], people[4], people[5]], edges, 1, 3, 4);
+        double Top(HorizontalLayoutResult result, int id) => result.Nodes.Single(n => n.PersonId == Id(id)).Y;
+        Assert.Equal(Top(baseline, 2), Top(expanded, 2));
+        foreach (var id in new[] { 3, 4, 5, 6 }) Assert.Equal(Top(baseline, id) + 76, Top(expanded, id));
+        foreach (var edge in expanded.Edges)
+        {
+            var parent = expanded.Nodes.Single(n => n.PersonId == edge.ParentId);
+            var child = expanded.Nodes.Single(n => n.PersonId == edge.ChildId);
+            Assert.Equal(parent.Y + parent.Height / 2, edge.Points[0].Y);
+            Assert.Equal(child.Y + child.Height / 2, edge.Points[^1].Y);
+        }
+    }
+
+    [Fact]
+    public void Parent_extra_information_does_not_expand_children_but_reserves_space_for_parent_sibling()
+    {
+        var people = new[] { P(1, 0, 0), P(2, 0, 1), P(3, 1, 0), P(4, 1, 1), P(5, 1, 2) };
+        var edges = new[] { E(11, 1, 3), E(12, 1, 4), E(13, 1, 5) };
+        var baseline = Layout(people, edges, 1);
+        var expanded = Layout([people[0] with { ExtraBelow = 250 }, people[1], people[2], people[3], people[4]], edges, 1);
+        foreach (var id in new[] { 1, 3, 4, 5 })
+            Assert.Equal(baseline.Nodes.Single(n => n.PersonId == Id(id)).Y, expanded.Nodes.Single(n => n.PersonId == Id(id)).Y);
+        var parent = expanded.Nodes.Single(n => n.PersonId == Id(1));
+        var sibling = expanded.Nodes.Single(n => n.PersonId == Id(2));
+        Assert.True(sibling.Y >= parent.Y + parent.Height + 250);
+    }
+
+    [Fact]
+    public void Extra_information_pushes_only_following_rows_without_moving_its_owner()
+    {
+        var people = new[] { P(1, 0, 0), P(2, 0, 1), P(3, 0, 2) };
+        var baseline = Layout(people, []);
+        var expanded = Layout([people[0], people[1] with { ExtraBelow = 76 }, people[2]], []);
+        Assert.Equal(baseline.Nodes.Single(n => n.PersonId == Id(1)).Y, expanded.Nodes.Single(n => n.PersonId == Id(1)).Y);
+        Assert.Equal(baseline.Nodes.Single(n => n.PersonId == Id(2)).Y, expanded.Nodes.Single(n => n.PersonId == Id(2)).Y);
+        Assert.Equal(baseline.Nodes.Single(n => n.PersonId == Id(3)).Y + 76, expanded.Nodes.Single(n => n.PersonId == Id(3)).Y);
+        Assert.Throws<HorizontalLayoutException>(() => Layout([people[0] with { ExtraBelow = double.NaN }], []));
+    }
+
+    [Fact]
+    public void Extra_height_reserves_only_its_aligned_branch_and_keeps_other_rows_compact()
+    {
+        var people = new[] { P(1, 0, height: 150), P(2, 1, 0), P(3, 1, 1), P(4, 1, 2) };
+        var result = Layout(people, [E(11, 1, 2), E(12, 1, 3), E(13, 1, 4)], 1);
+        var root = result.Nodes.Single(n => n.PersonId == Id(1));
+        var first = result.Nodes.Single(n => n.PersonId == Id(2));
+        var second = result.Nodes.Single(n => n.PersonId == Id(3));
+        var third = result.Nodes.Single(n => n.PersonId == Id(4));
+        Assert.Equal(root.Y + root.Height / 2, first.Y + first.Height / 2);
+        Assert.True(root.Y + root.Height < second.Y);
+        Assert.Equal(54, third.Y - second.Y);
+    }
+
+    [Fact]
     public void SinglePersonAndSingleGenerationForest()
     {
         var single = Layout([P(1, 3)], []);

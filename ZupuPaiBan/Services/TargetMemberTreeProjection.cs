@@ -18,6 +18,10 @@ public static class TargetMemberTreeProjection
         var people = snapshot.People.ToDictionary(p => p.Id);
         var details = people.Keys.ToDictionary(id => id, _ => new List<TargetMemberTreeDetail>());
         var parentCounts = people.Keys.ToDictionary(id => id, _ => 0);
+        var parents = snapshot.Relationships
+            .Where(r => r.Kind is PersonRelationshipKind.BiologicalParent or PersonRelationshipKind.AdoptiveParent or PersonRelationshipKind.HeirParent)
+            .Where(r => r.RelatedPersonId is not null)
+            .GroupBy(r => r.PersonId).ToDictionary(g => g.Key, g => g.Select(r => r.RelatedPersonId!.Value).ToHashSet());
 
         string Display(Guid id) => people.TryGetValue(id, out var person)
             ? $"{person.Name}（ID: {person.Id}）"
@@ -42,7 +46,11 @@ public static class TargetMemberTreeProjection
             var preferred = relation.IsPreferredForLineage ? " [谱载首选标记]" : string.Empty;
             var note = string.IsNullOrWhiteSpace(relation.Note) ? string.Empty : $"；备注：{relation.Note}";
             var source = string.IsNullOrWhiteSpace(relation.SourceCitation) ? string.Empty : $"；来源：{relation.SourceCitation}";
-            details[relation.PersonId].Add(new($"{kind}：{other}{preferred}{note}{source}（关系 ID: {relation.Id}）", relation.RelatedPersonId));
+            var siblingReview = relation.Kind == PersonRelationshipKind.Sibling &&
+                (relation.RelatedPersonId is not Guid sibling || !parents.TryGetValue(relation.PersonId, out var left) ||
+                 !parents.TryGetValue(sibling, out var right) || !left.Overlaps(right))
+                ? "（原始记录；缺少共同父母依据，待核实）" : string.Empty;
+            details[relation.PersonId].Add(new($"{kind}{siblingReview}：{other}{preferred}{note}{source}（关系 ID: {relation.Id}）", relation.RelatedPersonId));
             if (parentKind)
             {
                 parentCounts[relation.PersonId]++;
@@ -55,7 +63,7 @@ public static class TargetMemberTreeProjection
             }
             else if (relation.Kind == PersonRelationshipKind.Sibling && relation.RelatedPersonId is Guid siblingId)
             {
-                details[siblingId].Add(new($"兄妹关系：{Display(relation.PersonId)}{note}{source}（关系 ID: {relation.Id}）", relation.PersonId));
+                details[siblingId].Add(new($"兄妹关系{siblingReview}：{Display(relation.PersonId)}{note}{source}（关系 ID: {relation.Id}）", relation.PersonId));
             }
         }
 

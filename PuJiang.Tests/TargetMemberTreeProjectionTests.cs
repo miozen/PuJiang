@@ -11,6 +11,36 @@ public class TargetMemberTreeProjectionTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task Sibling_record_is_marked_for_review_when_shared_parent_is_removed_without_changing_record()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "虚构谱" };
+        var parent = new Person { GenealogyId = g.Id, Name = "共同父母" };
+        var a = new Person { GenealogyId = g.Id, Name = "甲" };
+        var b = new Person { GenealogyId = g.Id, Name = "乙" };
+        var relation = new PersonRelationship { GenealogyId = g.Id, PersonId = a.Id, RelatedPersonId = b.Id, Kind = PersonRelationshipKind.Sibling, Note = "原记录", SourceCitation = "原来源" };
+        var first = new PersonRelationship { GenealogyId = g.Id, PersonId = a.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        var second = new PersonRelationship { GenealogyId = g.Id, PersonId = b.Id, RelatedPersonId = parent.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(parent, a, b); seed.PersonRelationships.AddRange(relation, first, second); await seed.SaveChangesAsync(); }
+        await using (var context = db.CreateContext())
+        {
+            var before = TargetMemberTreeProjection.Create(await new GenealogyDataService(context).GetGraphSnapshotAsync(g.Id));
+            Assert.DoesNotContain("待核实", before.Single(n => n.PersonId == a.Id).Entries.Single(e => e.OtherPersonId == b.Id).Label);
+            await context.PersonRelationships.Where(r => r.Id == second.Id).ExecuteDeleteAsync();
+        }
+        await using var verify = db.CreateContext();
+        var after = TargetMemberTreeProjection.Create(await new GenealogyDataService(verify).GetGraphSnapshotAsync(g.Id));
+        foreach (var id in new[] { a.Id, b.Id })
+        {
+            var entry = after.Single(n => n.PersonId == id).Entries.Single(e => e.Label.Contains(relation.Id.ToString()));
+            Assert.Contains("待核实", entry.Label); Assert.Contains("原记录", entry.Label); Assert.Contains("原来源", entry.Label);
+        }
+        var original = await verify.PersonRelationships.SingleAsync(r => r.Id == relation.Id);
+        Assert.Equal((a.Id, (Guid?)b.Id, PersonRelationshipKind.Sibling, "原记录", "原来源"), (original.PersonId, original.RelatedPersonId, original.Kind, original.Note, original.SourceCitation));
+        Assert.True(await verify.PersonRelationships.AnyAsync(r => r.Id == first.Id));
+    }
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task Directed_spouse_is_visible_on_both_sides_without_creating_or_merging_records()
     {
         await using var database = new TestDatabase();

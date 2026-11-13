@@ -7,6 +7,52 @@ namespace PuJiang.Tests;
 
 public class WorkbenchChildParentCorrectionTests
 {
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task Combined_relationship_draft_rolls_back_and_rejects_stale_then_saves_after_reload()
+    {
+        await using var db = new TestDatabase(); await db.MigrateAsync();
+        var g = new Genealogy { Name = "虚构谱" };
+        var father = new Person { GenealogyId = g.Id, Name = "父", Sex = PersonSex.Male };
+        var a = new Person { GenealogyId = g.Id, Name = "甲", Sex = PersonSex.Female };
+        var b = new Person { GenealogyId = g.Id, Name = "乙", Sex = PersonSex.Female };
+        var child = new Person { GenealogyId = g.Id, Name = "子" };
+        var unionA = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = father.Id, PartnerTwoId = a.Id, Kind = FamilyUnionKind.Marriage, Note = "旧备注" };
+        var unionB = new FamilyUnion { GenealogyId = g.Id, PartnerOneId = father.Id, PartnerTwoId = b.Id, Kind = FamilyUnionKind.Marriage };
+        var fatherLink = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = father.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        var motherLink = new PersonRelationship { GenealogyId = g.Id, PersonId = child.Id, RelatedPersonId = a.Id, Kind = PersonRelationshipKind.BiologicalParent };
+        await using (var seed = db.CreateContext()) { seed.Genealogies.Add(g); seed.People.AddRange(father, a, b, child); seed.FamilyUnions.AddRange(unionA, unionB); seed.PersonRelationships.AddRange(fatherLink, motherLink); await seed.SaveChangesAsync(); }
+        await using var context = db.CreateContext(); var command = new WorkbenchPersonProfileCommand(context);
+        void Change(WorkbenchPersonDraft draft)
+        {
+            draft.Values = draft.Values with { Name = "父改名" };
+            draft.SetUnionValues(unionA.Id, new(FamilyUnionKind.Marriage, "开始", null, "新备注"));
+            draft.SetChildOtherParent(child.Id, b.Id);
+        }
+        async Task AssertOriginal()
+        {
+            await using var check = db.CreateContext();
+            Assert.Equal("父", (await check.People.SingleAsync(p => p.Id == father.Id)).Name);
+            Assert.Equal("旧备注", (await check.FamilyUnions.SingleAsync(u => u.Id == unionA.Id)).Note);
+            Assert.Equal(a.Id, (await check.PersonRelationships.SingleAsync(r => r.Id == motherLink.Id)).RelatedPersonId);
+            Assert.Equal(father.Id, (await check.PersonRelationships.SingleAsync(r => r.Id == fatherLink.Id)).RelatedPersonId);
+        }
+        var draft = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, father.Id)); Change(draft);
+        await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER RejectCombinedCorrection BEFORE UPDATE ON PersonRelationships BEGIN SELECT RAISE(ABORT, 'injected'); END");
+        await Assert.ThrowsAnyAsync<Exception>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty); await AssertOriginal();
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER RejectCombinedCorrection");
+        await using (var external = db.CreateContext()) await external.People.Where(p => p.Id == b.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Name, "乙外部变更"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => draft.SaveAsync(command)); Assert.True(draft.IsDirty); await AssertOriginal();
+        var fresh = new WorkbenchPersonDraft(await command.ReadAsync(g.Id, father.Id)); Change(fresh); await fresh.SaveAsync(command);
+        await using var final = db.CreateContext();
+        Assert.Equal("父改名", (await final.People.SingleAsync(p => p.Id == father.Id)).Name);
+        Assert.Equal("新备注", (await final.FamilyUnions.SingleAsync(u => u.Id == unionA.Id)).Note);
+        Assert.Equal(b.Id, (await final.PersonRelationships.SingleAsync(r => r.Id == motherLink.Id)).RelatedPersonId);
+        Assert.Equal(father.Id, (await final.PersonRelationships.SingleAsync(r => r.Id == fatherLink.Id)).RelatedPersonId);
+        var reloaded = await new WorkbenchPersonProfileCommand(final).ReadAsync(g.Id, father.Id);
+        Assert.Equal(b.Id, Assert.Single(reloaded.Children!).OtherParentId);
+    }
+
     [Theory]
     [InlineData(PersonSex.Male, PersonSex.Female)] [InlineData(PersonSex.Female, PersonSex.Male)]
     [Trait("Category", "Integration")]
