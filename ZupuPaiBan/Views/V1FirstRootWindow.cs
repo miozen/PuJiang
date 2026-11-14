@@ -28,6 +28,7 @@ public sealed class V1FirstRootWindow : Window
     private readonly Button _empty = new() { Content = "添加空节点", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _reload = new() { Content = "重新读取", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _retry = new() { Content = "重试保存", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed };
+    private readonly Button _rebindChild = new() { Content = "重新绑定子女草稿", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed };
     private readonly Button _addChild = new() { Content = "添加子女", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _addChildEmpty = new() { Content = "添加空子女", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _addSpouse = new() { Content = "添加配偶", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
@@ -39,6 +40,7 @@ public sealed class V1FirstRootWindow : Window
     private AddSpouse? _pendingSpouse;
     private SetChildMother? _pendingMother;
     private UpdatePersonProfile? _pendingProfile;
+    private MoveSpouse? _pendingMove;
     private bool _profileDirty;
     private PersonSex? _selectedSex;
     private int _detailsVersion;
@@ -49,12 +51,14 @@ public sealed class V1FirstRootWindow : Window
     private IReadOnlyList<SpouseNode> _visibleSpouses = Array.Empty<SpouseNode>();
     private Point? _draftLocation;
     private readonly Guid _draftId = Guid.NewGuid();
-    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null;
+    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null;
     private bool _saving, _uncertain, _hasRoot, _loadedOk;
     private Guid? _personId, _placementId;
     private Point? _panStart;
     private Point _panOffset;
     private bool _dragged;
+    private long _spouseRevision, _draftSpouseRevision, _dragSpouseRevision;
+    private Point? _spouseDragStart;
     private double _contentWidth = 650, _contentHeight = 360;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -67,8 +71,8 @@ public sealed class V1FirstRootWindow : Window
         var grid = new Grid(); grid.ColumnDefinitions.Add(new() { Width = new GridLength(210) }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(300) });
         var left = new StackPanel { Margin = new Thickness(12) }; left.Children.Add(new TextBlock { Text = "谱系管理", FontSize = 17 }); left.Children.Add(new TextBlock { Text = "虚构修谱项目\n虚构空谱系", Margin = new Thickness(0, 12, 0, 0) }); grid.Children.Add(left);
         var center = new DockPanel { Margin = new Thickness(8) }; Grid.SetColumn(center, 1);
-        var notice = new TextBlock { Text = "隔离虚构样本；关闭主工作台后样本不会自动恢复。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) }; DockPanel.SetDock(notice, Dock.Top); center.Children.Add(notice);
-        var tools = new WrapPanel(); tools.Children.Add(_create); tools.Children.Add(_empty); tools.Children.Add(_addChild); tools.Children.Add(_addChildEmpty); tools.Children.Add(_addSpouse); tools.Children.Add(_reload); tools.Children.Add(_retry); DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
+        var notice = new TextBlock { Text = "隔离虚构样本；退出应用后不会自动恢复。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) }; DockPanel.SetDock(notice, Dock.Top); center.Children.Add(notice);
+        var tools = new WrapPanel(); tools.Children.Add(_create); tools.Children.Add(_empty); tools.Children.Add(_addChild); tools.Children.Add(_addChildEmpty); tools.Children.Add(_addSpouse); tools.Children.Add(_reload); tools.Children.Add(_retry); tools.Children.Add(_rebindChild); DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
         _canvas.LayoutTransform = _scale; _scroll.Content = _canvas; center.Children.Add(_scroll); grid.Children.Add(center);
         _scroll.SizeChanged += (_, _) => FillCanvasViewport();
         _scroll.ScrollChanged += (_, _) => FillCanvasViewport();
@@ -81,6 +85,7 @@ public sealed class V1FirstRootWindow : Window
         _addChildEmpty.Click += async (_, _) => await BeginEmptyChildAsync();
         _addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse);
         _retry.Click += async (_, _) => { if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
+        _rebindChild.Click += async (_, _) => await RebindChildAsync();
         _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas || _hasRoot || _saving || _pending is not null) return; e.Handled = true; var menu = new ContextMenu(); var item = new MenuItem { Header = "添加首节点" }; item.Click += (_, _) => BeginNamed(); menu.Items.Add(item); var blank = new MenuItem { Header = "添加空节点" }; blank.Click += async (_, _) => await BeginEmptyAsync(); menu.Items.Add(blank); menu.PlacementTarget = _canvas; menu.IsOpen = true; };
         _scroll.PreviewMouseWheel += (_, e) => { var point = e.GetPosition(_scroll); var old = _scale.ScaleX; var next = Math.Clamp(old * (e.Delta > 0 ? 1.15 : 1 / 1.15), 0.4, 2.5); var x = (_scroll.HorizontalOffset + point.X) / old; var y = (_scroll.VerticalOffset + point.Y) / old; _scale.ScaleX = _scale.ScaleY = next; _scroll.UpdateLayout(); _scroll.ScrollToHorizontalOffset(x * next - point.X); _scroll.ScrollToVerticalOffset(y * next - point.Y); e.Handled = true; };
         _canvas.MouseLeftButtonDown += (_, e) => { if (e.OriginalSource != _canvas || _saving) return; _panStart = e.GetPosition(_scroll); _panOffset = new(_scroll.HorizontalOffset, _scroll.VerticalOffset); _dragged = false; _canvas.CaptureMouse(); e.Handled = true; };
@@ -130,7 +135,7 @@ public sealed class V1FirstRootWindow : Window
         if (_inputKind == InputKind.Root) { _pending = new(Guid.NewGuid(), _genealogy, _lineage, RootNameMode.Named, _surname + name); await SubmitPendingAsync(); }
         else if (_personId is Guid person && _placementId is Guid placement)
         {
-            if (_inputKind == InputKind.Child) _pendingChild = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, RootNameMode.Named, _surname + name);
+            if (_inputKind == InputKind.Child) _pendingChild = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, RootNameMode.Named, _surname + name, _draftSpouseRevision);
             else _pendingSpouse = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, RootNameMode.Named, name);
             await SubmitFamilyAsync();
         }
@@ -139,12 +144,25 @@ public sealed class V1FirstRootWindow : Window
     {
         if (!_loadedOk || _saving || HasPending || _profileDirty || _input is not null || _personId is null || _placementId is null || _profiles is not null && _selectedSex != PersonSex.Male) return;
         if (kind == InputKind.Child && _children is null || kind == InputKind.Spouse && _spouses is null) return;
-        _inputKind = kind; ShowInput(kind == InputKind.Child);
+        _rebindChild.Visibility = Visibility.Collapsed; _inputKind = kind; if (kind == InputKind.Child) _draftSpouseRevision = _spouseRevision; ShowInput(kind == InputKind.Child);
+    }
+    private async Task RebindChildAsync()
+    {
+        if (_saving || HasPending || _input is null || _inputKind != InputKind.Child || _spouses is null || _personId is not Guid person || _placementId is not Guid place) return;
+        try
+        {
+            var snapshot = await _spouses.ReadSnapshotAsync(_genealogy, _lineage, person, place);
+            _spouseRevision = _draftSpouseRevision = snapshot.Revision;
+            _rebindChild.Visibility = Visibility.Collapsed;
+            _status.Text = "已按当前配偶顺序重新绑定草稿，请确认后提交。";
+            _input.Focus();
+        }
+        catch (Exception error) { _status.Text = $"无法重新绑定：{error.Message}。草稿已保留。"; }
     }
     private async Task BeginEmptyChildAsync()
     {
         if (!_loadedOk || _saving || HasPending || _profileDirty || _input is not null || _children is null || _personId is not Guid person || _placementId is not Guid placement || _profiles is not null && _selectedSex != PersonSex.Male) return;
-        _pendingChild = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, RootNameMode.Empty, "");
+        _pendingChild = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, RootNameMode.Empty, "", _spouseRevision);
         await SubmitFamilyAsync();
     }
     private async Task SubmitFamilyAsync()
@@ -163,6 +181,7 @@ public sealed class V1FirstRootWindow : Window
                 else if (_pendingSpouse is { } spouse && _spouses is not null) { await _spouses.AddAsync(spouse); _pendingSpouse = null; }
                 else if (_pendingMother is { } mother && _spouses is not null) { await _spouses.SetMotherAsync(mother); _pendingMother = null; }
                 else if (_pendingProfile is { } profile && _profiles is not null) { await _profiles.UpdateAsync(profile); _pendingProfile = null; _profileDirty = false; }
+                else if (_pendingMove is { } move && _spouses is not null) { await _spouses.MoveAsync(move); _pendingMove = null; }
                 else return;
             }
             catch (Exception error)
@@ -173,12 +192,19 @@ public sealed class V1FirstRootWindow : Window
                         : _pendingSpouse is { } s && _spouses is not null ? await _spouses.HasReceiptAsync(s.OperationId, false)
                         : _pendingMother is { } m && _spouses is not null ? await _spouses.HasReceiptAsync(m.OperationId, true)
                         : _pendingProfile is { } p && _profiles is not null ? await _profiles.HasReceiptAsync(p.OperationId)
+                        : _pendingMove is { } order && _spouses is not null ? await _spouses.HasOrderReceiptAsync(order.OperationId)
                         : true;
                     if (!committed)
                     {
-                        _pendingChild = null; _pendingSpouse = null; _pendingMother = null; _pendingProfile = null; _uncertain = false;
+                        var failedChild = _pendingChild;
+                        _pendingChild = null; _pendingSpouse = null; _pendingMother = null; _pendingProfile = null; _pendingMove = null; _uncertain = false;
                         if (_input is not null) _input.IsReadOnly = false;
                         _status.Text = $"未保存：{error.Message}。草稿已保留，可修改后重试。";
+                        if (failedChild is not null && _input is not null && _spouses is not null)
+                        {
+                            try { var current = await _spouses.ReadSnapshotAsync(_genealogy, _lineage, failedChild.ParentPersonId, failedChild.ParentPlacementId); if (current.Revision != failedChild.ExpectedSpouseRevision) { _rebindChild.Visibility = Visibility.Visible; _status.Text = "配偶顺序已变化，草稿已保留；请重新绑定后确认提交。"; } }
+                            catch { /* Preserve the original error and draft if the current context cannot be read. */ }
+                        }
                         return;
                     }
                 }
@@ -188,6 +214,7 @@ public sealed class V1FirstRootWindow : Window
             _uncertain = false;
             if (_inputHost is not null) _canvas.Children.Remove(_inputHost);
             _inputHost = null; _input = null;
+            _rebindChild.Visibility = Visibility.Collapsed;
             try { await ReloadCoreAsync(); _status.Text = "已保存并重新读取。"; }
             catch (Exception error) { _status.Text = $"已保存，但画布读取失败：{error.Message}。请重新读取。"; }
         }
@@ -310,6 +337,26 @@ public sealed class V1FirstRootWindow : Window
                     _canvas.Children.Add(new Line { X1 = item.X + 75, X2 = item.X + 75, Y1 = top - 8, Y2 = top, Stroke = Brushes.SlateGray, StrokeThickness = 1.5, IsHitTestVisible = false, Tag = "V1SpouseLink" });
                     var partner = new Border { Width = 110, Height = 34, Background = Brushes.WhiteSmoke, Padding = new Thickness(4), Tag = spouse,
                         Child = new TextBlock { Text = spouse.Name, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis } };
+                    partner.AllowDrop = true;
+                    partner.PreviewMouseLeftButtonDown += (_, e) => { if (_saving || HasPending || _input is not null || _profileDirty) return; _spouseDragStart = e.GetPosition(partner); _dragSpouseRevision = _spouseRevision; partner.CaptureMouse(); };
+                    partner.PreviewMouseLeftButtonUp += (_, _) => { _spouseDragStart = null; if (partner.IsMouseCaptured) partner.ReleaseMouseCapture(); };
+                    partner.PreviewMouseMove += (_, e) =>
+                    {
+                        if (_spouseDragStart is not Point start || e.LeftButton != MouseButtonState.Pressed) return;
+                        var point = e.GetPosition(partner);
+                        if (Math.Abs(point.X - start.X) < SystemParameters.MinimumHorizontalDragDistance && Math.Abs(point.Y - start.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+                        _spouseDragStart = null; if (partner.IsMouseCaptured) partner.ReleaseMouseCapture();
+                        DragDrop.DoDragDrop(partner, new DataObject("PuJiang.V1.SpouseUnion", spouse.UnionId.ToString("D")), DragDropEffects.Move);
+                    };
+                    partner.DragOver += (_, e) => { e.Effects = e.Data.GetDataPresent("PuJiang.V1.SpouseUnion") ? DragDropEffects.Move : DragDropEffects.None; e.Handled = true; };
+                    partner.Drop += async (_, e) =>
+                    {
+                        e.Handled = true;
+                        if (_saving || HasPending || _input is not null || _profileDirty || _personId is not Guid father || _placementId is not Guid place) return;
+                        if (e.Data.GetData("PuJiang.V1.SpouseUnion") is not string value || !Guid.TryParse(value, out var source) || source == spouse.UnionId) return;
+                        _pendingMove = new(Guid.NewGuid(), _genealogy, _lineage, father, place, source, spouse.UnionId, _dragSpouseRevision);
+                        await SubmitFamilyAsync();
+                    };
                     Canvas.SetLeft(partner, item.X + 20); Canvas.SetTop(partner, top); _canvas.Children.Add(partner);
                 }
             }
@@ -352,8 +399,9 @@ public sealed class V1FirstRootWindow : Window
     private async Task RefreshFamilyDetailsAsync()
     {
         var version = ++_detailsVersion;
+        var readingOwnOrder = false;
         _familyDetails.Children.Clear();
-        _visibleSpouses = Array.Empty<SpouseNode>();
+        _visibleSpouses = Array.Empty<SpouseNode>(); _spouseRevision = 0;
         if (_spouses is null || _personId is not Guid person || _placementId is not Guid placement) return;
         try
         {
@@ -365,11 +413,14 @@ public sealed class V1FirstRootWindow : Window
                 _selectedSex = profile.Sex; UpdateButtons();
                 AddProfileEditor(profile, "姓名 / 性别");
             }
-            var ownSpouses = _selectedSex is PersonSex.Female or PersonSex.Unknown
-                ? Array.Empty<SpouseNode>()
-                : await _spouses.ReadAsync(_genealogy, _lineage, person, placement);
+            readingOwnOrder = true;
+            var snapshot = _selectedSex is PersonSex.Female or PersonSex.Unknown
+                ? new SpouseSnapshot(0, Array.Empty<SpouseNode>())
+                : await _spouses.ReadSnapshotAsync(_genealogy, _lineage, person, placement);
+            readingOwnOrder = false;
+            var ownSpouses = snapshot.Nodes;
             if (version != _detailsVersion || _personId != person || _placementId != placement) return;
-            _visibleSpouses = ownSpouses;
+            _visibleSpouses = ownSpouses; _spouseRevision = snapshot.Revision;
             if (ownSpouses.Count > 0)
                 _familyDetails.Children.Add(new TextBlock { Text = "配偶：" + string.Join("、", ownSpouses.Select(x => x.Name.Length == 0 ? "（未填写姓名）" : x.Name)), TextWrapping = TextWrapping.Wrap });
             if (_profiles is not null)
@@ -420,11 +471,33 @@ public sealed class V1FirstRootWindow : Window
             };
             _familyDetails.Children.Add(box);
         }
-        catch (Exception error) { if (version == _detailsVersion && _personId == person && _placementId == placement) _familyDetails.Children.Add(new TextBlock { Text = $"关系资料读取失败：{error.Message}", TextWrapping = TextWrapping.Wrap }); }
+        catch (Exception error)
+        {
+            if (version != _detailsVersion || _personId != person || _placementId != placement) return;
+            _familyDetails.Children.Add(new TextBlock { Text = $"关系资料读取失败：{error.Message}", TextWrapping = TextWrapping.Wrap });
+            if (readingOwnOrder && error.Message.Contains("配偶排序"))
+            {
+                var repair = new Button { Content = "修复配偶顺序", Margin = new Thickness(0, 8, 0, 0) };
+                repair.Click += async (_, _) => await OpenRepairAsync(person, placement);
+                _familyDetails.Children.Add(repair);
+            }
+        }
+    }
+    private async Task OpenRepairAsync(Guid person, Guid placement)
+    {
+        if (_spouses is null || _saving || HasPending || _profileDirty || _input is not null || _personId != person || _placementId != placement) return;
+        try
+        {
+            var snapshot = await _spouses.ReadRepairAsync(_genealogy, _lineage, person, placement);
+            if (_personId != person || _placementId != placement) return;
+            var dialog = new V1SpouseOrderRepairWindow(_spouses, _genealogy, _lineage, person, placement, snapshot) { Owner = this };
+            if (dialog.ShowDialog() == true) { await ReloadCoreAsync(); _status.Text = "配偶顺序已修复并重新读取；原始记录已保留。"; }
+        }
+        catch (Exception error) { _status.Text = $"无法打开修复：{error.Message}"; }
     }
     private void Select(RootNode node) { _personId = node.PersonId; _placementId = node.PlacementId; _details.Text = $"姓名：{(node.Name.Length == 0 ? "（未填写姓名）" : node.Name)}"; foreach (var card in _canvas.Children.OfType<Border>()) if (card.Tag is RootNode value) card.Background = value.PersonId == _personId && value.PlacementId == _placementId ? Brushes.DarkOrange : Brushes.WhiteSmoke; }
     private void ClearFocus() { _detailsVersion++; _personId = null; _placementId = null; _selectedSex = null; _visibleSpouses = Array.Empty<SpouseNode>(); _details.Text = "未选中人物"; _familyDetails.Children.Clear(); RenderCanvas(); UpdateButtons(); }
-    private void CancelInput() { if (_input is null) return; if (_inputHost is not null) _canvas.Children.Remove(_inputHost); _inputHost = null; _input = null; RenderCanvas(); _status.Text = "已取消输入，未创建人物。"; }
+    private void CancelInput() { if (_input is null) return; if (_inputHost is not null) _canvas.Children.Remove(_inputHost); _inputHost = null; _input = null; _rebindChild.Visibility = Visibility.Collapsed; RenderCanvas(); _status.Text = "已取消输入，未创建人物。"; }
     private void UpdateButtons() { _create.IsEnabled = _loadedOk && !_saving && !_hasRoot && !HasPending; _empty.IsEnabled = _loadedOk && !_saving && !_hasRoot && !HasPending; _reload.IsEnabled = !_saving && !HasPending && !_profileDirty; var canAdd = _loadedOk && !_saving && !HasPending && !_profileDirty && _input is null && _personId is not null && _placementId is not null && (_profiles is null || _selectedSex == PersonSex.Male); _addChild.IsEnabled = _addChildEmpty.IsEnabled = canAdd && _children is not null; _addSpouse.IsEnabled = canAdd && _spouses is not null; _retry.Visibility = _uncertain ? Visibility.Visible : Visibility.Collapsed; _retry.IsEnabled = !_saving; }
     internal bool CanCloseForOwner() { if (!_saving && !HasPending && _input is null && !_profileDirty) return true; _status.Text = _uncertain ? "保存结果尚未确认，请重试以保留输入。" : "请先完成或取消当前输入。"; return false; }
     private void OnClosing(object? sender, CancelEventArgs e) { if (!CanCloseForOwner()) e.Cancel = true; }
@@ -449,6 +522,9 @@ public sealed class V1FirstRootWindow : Window
     internal int NodeCountForTest => _canvas.Children.OfType<Border>().Count(x => x.Tag is RootNode);
     internal int ChildCountForTest => _canvas.Children.OfType<Border>().Count(x => x.Tag is ChildNode);
     internal void BeginChildForTest() => BeginFamilyInput(InputKind.Child);
+    internal Button? RepairButtonForTest => _familyDetails.Children.OfType<Button>().FirstOrDefault(x => Equals(x.Content, "修复配偶顺序"));
+    internal Task RebindChildForTest() => RebindChildAsync();
+    internal bool CanRebindChildForTest => _rebindChild.Visibility == Visibility.Visible;
     internal void ClearFocusForTest() => ClearFocus();
     internal void BeginSpouseForTest() => BeginFamilyInput(InputKind.Spouse);
     internal Task EmptyChildForTest() => BeginEmptyChildAsync();

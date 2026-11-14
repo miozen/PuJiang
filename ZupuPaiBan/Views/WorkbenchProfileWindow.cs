@@ -26,6 +26,7 @@ public sealed class WorkbenchProfileWindow : Window
         public string Label => $"{(Kind == FamilyUnionKind.Marriage ? "婚配" : Kind == FamilyUnionKind.Partnership ? "伴侣" : "类型未详")}：{Name}";
     }
     private PuJiang.V1.Persistence.IsolatedSample? _v1Sample;
+    internal Func<Task<PuJiang.V1.Persistence.IsolatedSample>>? IsolatedSampleProvider { get; init; }
     private bool _v1Opening;
     private readonly TargetContextCoordinator _coordinator;
     private readonly WorkbenchDraftSession _session;
@@ -290,7 +291,7 @@ public sealed class WorkbenchProfileWindow : Window
         _v1Opening = true;
         try
         {
-            _v1Sample ??= await PuJiang.V1.Persistence.IsolatedSample.CreateAsync();
+            _v1Sample ??= await (IsolatedSampleProvider?.Invoke() ?? PuJiang.V1.Persistence.IsolatedSample.CreateAsync());
             var app = new PuJiang.V1.Application.FirstRootApplication(new PuJiang.V1.Persistence.IsolatedFirstRootStore(_v1Sample.Database));
             var children = new PuJiang.V1.Application.ChildApplication(new PuJiang.V1.Persistence.IsolatedChildStore(_v1Sample.Database));
             var spouses = new PuJiang.V1.Application.SpouseApplication(new PuJiang.V1.Persistence.IsolatedSpouseStore(_v1Sample.Database));

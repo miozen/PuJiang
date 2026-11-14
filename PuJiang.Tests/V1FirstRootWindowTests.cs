@@ -116,6 +116,73 @@ public sealed class V1FirstRootWindowTests
         public Task<bool> HasReceiptAsync(Guid id, CancellationToken cancellationToken) => inner.HasReceiptAsync(id, cancellationToken);
     }
     [Fact, Trait("Category", "UI")]
+    public async Task Workbench_offers_explicit_repair_of_damaged_order()
+    {
+        var (db, g, l) = await CreateAsync(); var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var a = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
+        var b = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
+        await using (var c = db.OpenContext()) { var row = await c.SpouseOrderEntries.SingleAsync(x => x.UnionId == b.UnionId); row.Position = 3; await c.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", new ChildApplication(new IsolatedChildStore(db)), spouses); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId);
+                Assert.NotNull(window.RepairButtonForTest);
+                var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = Dispatcher.CurrentDispatcher.BeginInvoke(async () =>
+                {
+                    try
+                    {
+                        V1SpouseOrderRepairWindow? dialog = null;
+                        for (var i = 0; i < 300 && dialog is null; i++) { await Task.Delay(10); dialog = window.OwnedWindows.OfType<V1SpouseOrderRepairWindow>().SingleOrDefault(); }
+                        Assert.NotNull(dialog); Assert.False(dialog!.SaveButtonForTest.IsEnabled);
+                        dialog.CandidateButtonsForTest.Single(x => x.Content.ToString()!.Contains("王氏")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                        Assert.False(dialog.SaveButtonForTest.IsEnabled);
+                        dialog.CandidateButtonsForTest.Single(x => x.Content.ToString()!.Contains("李氏")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                        Assert.True(dialog.SaveButtonForTest.IsEnabled); dialog.SaveButtonForTest.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                        for (var i = 0; i < 300 && dialog.IsVisible; i++) await Task.Delay(10);
+                        Assert.False(dialog.IsVisible); finished.SetResult();
+                    }
+                    catch (Exception error) { finished.SetException(error); foreach (var d in window.OwnedWindows.OfType<V1SpouseOrderRepairWindow>().ToArray()) d.Close(); }
+                });
+                window.RepairButtonForTest!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                await finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                var read = await spouses.ReadSnapshotAsync(g, l, root.PersonId, root.PlacementId); Assert.Equal(new[] { b.UnionId, a.UnionId }, read.Nodes.Select(x => x.UnionId));
+            }
+            finally { window.Close(); }
+        });
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Stale_child_draft_is_preserved_and_can_be_explicitly_rebound()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var children = new ChildApplication(new IsolatedChildStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var first = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
+        var second = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId);
+                window.BeginChildForTest(); window.SetInputForTest("保留");
+                await spouses.MoveAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, second.UnionId, first.UnionId, 2));
+                await window.ConfirmForTest(); Assert.Equal("保留", window.InputForTest); Assert.True(window.CanRebindChildForTest);
+                Assert.Empty(await children.ReadAsync(g, l)); Assert.False(window.CanCloseForOwner());
+                await window.RebindChildForTest(); Assert.Equal("保留", window.InputForTest); Assert.False(window.CanRebindChildForTest);
+                await window.ConfirmForTest(); Assert.Null(window.InputForTest);
+                Assert.Equal(second.PersonId, Assert.Single(await children.ReadAsync(g, l)).MotherId);
+            }
+            finally { window.Close(); }
+        });
+    }
+    [Fact, Trait("Category", "UI")]
     public async Task Child_and_spouse_flow_preserves_focus_and_clear_across_reopen()
     {
         var (db, g, l) = await CreateAsync();
@@ -332,7 +399,9 @@ public sealed class V1FirstRootWindowTests
         var options = new DbContextOptionsBuilder<ZupuDbContext>().UseSqlite($"Data Source={legacyDb.DatabasePath};Pooling=False").Options;
         await RunSta(async () =>
         {
-            var window = new WorkbenchProfileWindow(new TargetContextCoordinator(options)); window.Show();
+            Task<IsolatedSample>? sample = null;
+            Task<IsolatedSample> Sample() => sample ??= IsolatedSample.CreateAsync();
+            var window = new WorkbenchProfileWindow(new TargetContextCoordinator(options)) { IsolatedSampleProvider = Sample }; window.Show();
             try
             {
                 await window.InitializeForTest(); await window.OpenV1SampleForTest();
@@ -345,6 +414,14 @@ public sealed class V1FirstRootWindowTests
                 Assert.Equal(1, reopened.NodeCountForTest); Assert.NotNull(focus.Placement); reopened.Close();
             }
             finally { if (await window.PrepareForOwnerExitAsync()) window.Close(); }
+            var next = new WorkbenchProfileWindow(new TargetContextCoordinator(options)) { IsolatedSampleProvider = Sample }; next.Show();
+            try
+            {
+                await next.InitializeForTest(); await next.OpenV1SampleForTest();
+                var reopened = Assert.Single(next.OwnedWindows.OfType<V1FirstRootWindow>()); await reopened.ReadyForTest;
+                Assert.Equal(1, reopened.NodeCountForTest); reopened.Close();
+            }
+            finally { if (await next.PrepareForOwnerExitAsync()) next.Close(); }
         });
         await using var legacy = legacyDb.CreateContext(); Assert.Empty(await legacy.People.ToListAsync());
     }

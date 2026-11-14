@@ -65,11 +65,10 @@ public sealed class BiologicalParent(Guid id, Guid lineageId, Guid childId, Guid
 public enum ParentRole { Father = 1, Mother = 2 }
 
 // The first confirmed slice supports only an explicit father and a female spouse.
-public sealed class SpouseUnion(Guid id, Guid lineageId, Guid fatherId, Guid spouseId, int position)
+public sealed class SpouseUnion(Guid id, Guid lineageId, Guid fatherId, Guid spouseId)
 {
     public Guid Id { get; private set; } = Identity.Require(id);
     public Guid LineageId { get; private set; } = Identity.Require(lineageId);
     public Guid FatherId { get; private set; } = Identity.Require(fatherId);
     public Guid SpouseId { get; private set; } = spouseId != fatherId ? Identity.Require(spouseId) : throw new ArgumentException("配偶不能是同一人物。");
-    public int Position { get; private set; } = position > 0 ? position : throw new ArgumentOutOfRangeException(nameof(position));
 }
