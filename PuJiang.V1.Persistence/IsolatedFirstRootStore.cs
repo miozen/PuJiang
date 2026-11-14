@@ -36,7 +36,7 @@ public sealed class IsolatedFirstRootStore(IsolatedTestDatabase database) : IFir
         if (await db.People.AnyAsync(x => x.LineageId == command.LineageId, cancellationToken) ||
             await db.Placements.AnyAsync(x => x.LineageId == command.LineageId, cancellationToken))
             throw new InvalidOperationException("添加首节点要求空谱系。");
-        var person = new Person(Guid.NewGuid(), command.LineageId, command.Name);
+        var person = new Person(Guid.NewGuid(), command.LineageId, command.Name, PersonSex.Male);
         var placement = new Placement(Guid.NewGuid(), command.LineageId, person.Id);
         db.People.Add(person);
         db.Placements.Add(placement);
@@ -55,7 +55,7 @@ public sealed class IsolatedFirstRootStore(IsolatedTestDatabase database) : IFir
             throw new InvalidOperationException("目标谱系不存在或不属于该项目。");
         var nodes = await (from placement in db.Placements.AsNoTracking()
                            join person in db.People.AsNoTracking() on new { placement.LineageId, Id = placement.PersonId } equals new { person.LineageId, person.Id }
-                           where placement.LineageId == lineageId
+                           where placement.LineageId == lineageId && placement.ParentPlacementId == null
                            select new RootNode(person.Id, placement.Id, person.Name)).ToListAsync(cancellationToken);
         await tx.CommitAsync(cancellationToken);
         return new RootProjection(genealogyId, lineageId, nodes.AsReadOnly());

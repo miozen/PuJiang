@@ -102,6 +102,201 @@ public sealed class V1FirstRootWindowTests
         });
         await using var context = db.OpenContext(); Assert.Equal("冯朝阳", (await context.People.SingleAsync()).Name);
     }
+    private sealed class FaultChildStore(IChildStore inner) : IChildStore
+    {
+        public bool FailBefore, FailAfter;
+        public async Task<ChildCreated> AddAsync(AddChild command, CancellationToken cancellationToken)
+        {
+            if (FailBefore) { FailBefore = false; throw new InvalidOperationException("模拟提交前失败"); }
+            var result = await inner.AddAsync(command, cancellationToken);
+            if (FailAfter) { FailAfter = false; throw new InvalidOperationException("模拟提交结果丢失"); }
+            return result;
+        }
+        public Task<IReadOnlyList<ChildNode>> ReadAsync(Guid g, Guid l, CancellationToken cancellationToken) => inner.ReadAsync(g, l, cancellationToken);
+        public Task<bool> HasReceiptAsync(Guid id, CancellationToken cancellationToken) => inner.HasReceiptAsync(id, cancellationToken);
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Child_and_spouse_flow_preserves_focus_and_clear_across_reopen()
+    {
+        var (db, g, l) = await CreateAsync();
+        var rootApp = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var childApp = new ChildApplication(new IsolatedChildStore(db));
+        var spouseApp = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await rootApp.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        (Guid? Person, Guid? Placement) focus = default;
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(rootApp, g, l, "冯", childApp, spouseApp); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId);
+                window.BeginChildForTest(); window.SetInputForTest("取消"); window.CancelForTest();
+                Assert.Empty(await childApp.ReadAsync(g, l));
+                await window.EmptyChildForTest(); focus = window.FocusForTest;
+                Assert.NotNull(focus.Person); Assert.NotEqual(root.PersonId, focus.Person); Assert.NotNull(focus.Placement); Assert.Equal(1, window.ChildCountForTest);
+                await window.ChooseMotherForTest(null);
+                await window.SelectForTest(root.PersonId, root.PlacementId);
+                window.BeginSpouseForTest(); Assert.Single(Assert.IsType<System.Windows.Controls.StackPanel>(window.InputHostForTest).Children);
+                window.SetInputForTest("李氏"); await window.ConfirmForTest();
+                await window.SelectForTest(focus.Person!.Value, focus.Placement!.Value);
+                Assert.True((Assert.Single(await childApp.ReadAsync(g, l))).MotherExplicitlyCleared);
+                await window.ReloadForTest(); Assert.Equal(focus, window.FocusForTest);
+            }
+            finally { window.Close(); }
+        });
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(rootApp, g, l, "冯", childApp, spouseApp); window.Show();
+            try { await window.ReadyForTest; Assert.Equal(1, window.ChildCountForTest); }
+            finally { window.Close(); }
+        });
+        await using var context = db.OpenContext();
+        Assert.Equal("", (await context.People.SingleAsync(x => x.Id == focus.Person)).Name);
+        Assert.Empty(await context.BiologicalParents.Where(x => x.ChildId == focus.Person && x.Role == ParentRole.Mother).ToListAsync());
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Child_failure_preserves_editable_draft_and_uncertain_commit_replays()
+    {
+        var (db, g, l) = await CreateAsync();
+        var rootApp = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var root = await rootApp.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var store = new FaultChildStore(new IsolatedChildStore(db));
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(rootApp, g, l, "冯", new ChildApplication(store), new SpouseApplication(new IsolatedSpouseStore(db))); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId);
+                window.BeginChildForTest(); window.SetInputForTest("初稿"); store.FailBefore = true; await window.ConfirmForTest();
+                Assert.Equal("初稿", window.InputForTest); Assert.False(window.InputReadOnlyForTest); Assert.Contains("未保存", window.StatusForTest);
+                window.SetInputForTest("新名"); store.FailAfter = true; await window.ConfirmForTest();
+                Assert.Contains("未确认", window.StatusForTest); Assert.False(window.CanCloseForOwner());
+                await window.RetryFamilyForTest(); Assert.Null(window.InputForTest); Assert.Equal(1, window.ChildCountForTest);
+                Assert.NotEqual(root.PersonId, window.FocusForTest.Person);
+            }
+            finally { window.Close(); }
+        });
+        await using var context = db.OpenContext(); Assert.Single(await context.People.Where(x => x.Name == "冯新名").ToListAsync());
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Empty_child_profile_can_be_named_and_sex_changed_without_replacing_identity()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var children = new ChildApplication(new IsolatedChildStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, ""));
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses, profiles); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(child.PersonId, child.PlacementId);
+                await window.EditProfileForTest("冯女", PersonSex.Female);
+                Assert.Equal((child.PersonId, child.PlacementId), window.FocusForTest);
+                await window.ReloadForTest();
+                Assert.Equal((child.PersonId, child.PlacementId), window.FocusForTest);
+            }
+            finally { window.Close(); }
+        });
+        var profile = await profiles.ReadAsync(g, l, child.PersonId, child.PlacementId);
+        Assert.Equal("冯女", profile.Name); Assert.Equal(PersonSex.Female, profile.Sex);
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Child_descendants_remain_within_scrollable_canvas_after_viewport_change()
+    {
+        var (db, g, l) = await CreateAsync(); var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var children = new ChildApplication(new IsolatedChildStore(db)); var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var person = root.PersonId; var placement = root.PlacementId;
+        for (var i = 0; i < 5; i++)
+        {
+            var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, person, placement, RootNameMode.Named, "冯子" + i));
+            person = child.PersonId; placement = child.PlacementId;
+        }
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses); window.Show();
+            try
+            {
+                await window.ReadyForTest; window.Width = 850; window.UpdateLayout();
+                window.ScrollForTest.ScrollToHorizontalOffset(500); window.UpdateLayout();
+                var last = window.CanvasForTest.Children.OfType<System.Windows.Controls.Border>().Single(x => x.Tag is ChildNode n && n.PersonId == person);
+                Assert.True(window.CanvasForTest.MinWidth >= System.Windows.Controls.Canvas.GetLeft(last) + last.ActualWidth);
+                Assert.True(window.ScrollForTest.ExtentWidth > window.ScrollForTest.ViewportWidth);
+            }
+            finally { window.Close(); }
+        });
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Focused_spouse_fixed_cards_empty_node_and_child_preview_follow_layout()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var children = new ChildApplication(new IsolatedChildStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, ""));
+        await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId); window.UpdateLayout();
+                var canvas = window.CanvasForTest;
+                Assert.Single(canvas.Children.OfType<System.Windows.Controls.Border>(), x => x.Tag is SpouseNode);
+                var blank = Assert.Single(canvas.Children.OfType<System.Windows.Controls.Border>(), x => x.Tag is ChildNode);
+                Assert.Equal("", Assert.IsType<System.Windows.Controls.TextBlock>(blank.Child).Text);
+                Assert.Equal(110, blank.ActualWidth); Assert.Equal(34, blank.ActualHeight);
+                var edge = Assert.Single(canvas.Children.OfType<System.Windows.Shapes.Polyline>());
+                Assert.Contains(edge.Points, p => Math.Abs(p.X - System.Windows.Controls.Canvas.GetLeft(blank)) < 0.1 &&
+                    Math.Abs(p.Y - (System.Windows.Controls.Canvas.GetTop(blank) + blank.ActualHeight / 2)) < 0.1);
+                var oldTop = System.Windows.Controls.Canvas.GetTop(blank);
+                window.BeginChildForTest(); window.UpdateLayout();
+                Assert.Equal(2, canvas.Children.OfType<System.Windows.Shapes.Polyline>().Count());
+                Assert.True(System.Windows.Controls.Canvas.GetTop(window.InputHostForTest!) > oldTop);
+                Assert.Single(await children.ReadAsync(g, l));
+                window.CancelForTest();
+                Assert.Single(canvas.Children.OfType<System.Windows.Shapes.Polyline>());
+                window.ClearFocusForTest();
+                Assert.DoesNotContain(canvas.Children.OfType<System.Windows.Controls.Border>(), x => x.Tag is SpouseNode);
+                await window.SelectForTest(child.PersonId, child.PlacementId);
+                Assert.DoesNotContain(canvas.Children.OfType<System.Windows.Controls.Border>(), x => x.Tag is SpouseNode);
+            }
+            finally { window.Close(); }
+        });
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Child_mother_selector_only_offers_current_fathers_spouses()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var children = new ChildApplication(new IsolatedChildStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var first = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
+        var second = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
+        var outsider = Guid.NewGuid();
+        await using (var context = db.OpenContext()) { context.People.Add(new Person(outsider, l, "其他女性", PersonSex.Female)); await context.SaveChangesAsync(); }
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(child.PersonId, child.PlacementId);
+                Assert.Equal(new[] { first.PersonId, second.PersonId }, window.MotherCandidateIdsForTest);
+                await window.ChooseMotherForTest(second.PersonId);
+                Assert.Equal(second.PersonId, Assert.Single(await children.ReadAsync(g, l)).MotherId);
+                await window.ChooseMotherForTest(null);
+                Assert.True(Assert.Single(await children.ReadAsync(g, l)).MotherExplicitlyCleared);
+            }
+            finally { window.Close(); }
+        });
+    }
     private static void SendKey(V1FirstRootWindow window, Key key)
     {
         var input = Assert.IsType<System.Windows.Controls.TextBox>(window.InputControlForTest);

@@ -292,7 +292,10 @@ public sealed class WorkbenchProfileWindow : Window
         {
             _v1Sample ??= await PuJiang.V1.Persistence.IsolatedSample.CreateAsync();
             var app = new PuJiang.V1.Application.FirstRootApplication(new PuJiang.V1.Persistence.IsolatedFirstRootStore(_v1Sample.Database));
-            new V1FirstRootWindow(app, _v1Sample.GenealogyId, _v1Sample.LineageId, _v1Sample.Surname) { Owner = this }.Show();
+            var children = new PuJiang.V1.Application.ChildApplication(new PuJiang.V1.Persistence.IsolatedChildStore(_v1Sample.Database));
+            var spouses = new PuJiang.V1.Application.SpouseApplication(new PuJiang.V1.Persistence.IsolatedSpouseStore(_v1Sample.Database));
+            var profiles = new PuJiang.V1.Application.PersonProfileApplication(new PuJiang.V1.Persistence.IsolatedPersonProfileStore(_v1Sample.Database));
+            new V1FirstRootWindow(app, _v1Sample.GenealogyId, _v1Sample.LineageId, _v1Sample.Surname, children, spouses, profiles) { Owner = this }.Show();
         }
         catch (Exception error) { _status.Text = $"隔离样本无法打开：{error.Message}"; }
         finally { _v1Opening = false; }
