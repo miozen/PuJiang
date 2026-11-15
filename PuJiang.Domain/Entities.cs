@@ -15,6 +15,14 @@ public sealed class Lineage(Guid id, Guid genealogyId, string name)
     public Guid Id { get; private set; } = Identity.Require(id);
     public Guid GenealogyId { get; private set; } = Identity.Require(genealogyId);
     public string Name { get; private set; } = name ?? throw new ArgumentNullException(nameof(name));
+    public string Category { get; private set; } = "";
+    public string Region { get; private set; } = "";
+    public string Topic { get; private set; } = "";
+    public string Hall { get; private set; } = "";
+    public string Notes { get; private set; } = "";
+    public void SetInformation(string category, string region, string topic, string hall, string notes)
+    { Category = category; Region = region; Topic = topic; Hall = hall; Notes = notes; }
+    public void Rename(string name) { Name = name ?? throw new ArgumentNullException(nameof(name)); }
 }
 public enum PersonSex { Unknown = 0, Male = 1, Female = 2 }
 
@@ -22,14 +30,19 @@ public sealed class Person(Guid id, Guid lineageId, string name, PersonSex sex =
 {
     public Guid Id { get; private set; } = Identity.Require(id);
     public Guid LineageId { get; private set; } = Identity.Require(lineageId);
-    public string Name { get; private set; } = name ?? throw new ArgumentNullException(nameof(name));
+    public string Name { get; private set; } = !string.IsNullOrWhiteSpace(name) ? name : throw new ArgumentException("人物姓名不能为空。", nameof(name));
     public PersonSex Sex { get; private set; } = Enum.IsDefined(sex) ? sex : throw new ArgumentOutOfRangeException(nameof(sex));
     public bool MotherExplicitlyCleared { get; private set; }
+    public int? ExplicitGeneration { get; private set; }
+    public string Title { get; private set; } = "";
+    public string Notes { get; private set; } = "";
+    public void SetRootInformation(int? generation, string title, string notes)
+    { if (generation is <= 0) throw new ArgumentException("世代必须为正数。"); ExplicitGeneration = generation; Title = title; Notes = notes; }
     public void MarkMotherCleared() => MotherExplicitlyCleared = true;
     public void MarkMotherKnown() => MotherExplicitlyCleared = false;
     public void UpdateProfile(string name, PersonSex sex)
     {
-        Name = name ?? throw new ArgumentNullException(nameof(name));
+        Name = !string.IsNullOrWhiteSpace(name) ? name : throw new ArgumentException("人物姓名不能为空。", nameof(name));
         Sex = Enum.IsDefined(sex) ? sex : throw new ArgumentOutOfRangeException(nameof(sex));
     }
 }

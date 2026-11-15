@@ -14,6 +14,81 @@ namespace PuJiang.Tests;
 [Collection("ProcessWorkerExclusive")]
 public sealed class V1FirstRootWindowTests
 {
+    [Fact, Trait("Category", "UI")]
+    public async Task Sibling_draft_cancels_and_stale_mother_preserves_input()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db)); var children = new ChildApplication(new IsolatedChildStore(db)); var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses); window.Show();
+            try
+            {
+                await window.ReadyForTest; await window.SelectForTest(child.PersonId, child.PlacementId);
+                window.BeginSiblingForTest(); window.SetInputForTest("取消"); window.CancelForTest(); Assert.Single(await children.ReadAsync(g, l));
+                window.BeginSiblingForTest(); window.SetInputForTest("草稿");
+                await spouses.SetMotherAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, child.PersonId, null, null, false));
+                await window.ConfirmForTest(); Assert.Equal("草稿", window.InputForTest); Assert.Contains("未保存", window.StatusForTest); Assert.Single(await children.ReadAsync(g, l));
+                Assert.True(window.CanRebindChildForTest); await window.RebindChildForTest(); Assert.Equal("草稿", window.InputForTest);
+                window.SetInputForTest("兄弟"); await window.ConfirmForTest();
+                Assert.Null(window.InputForTest); Assert.Equal(2, window.ChildCountForTest); Assert.NotEqual(child.PersonId, window.FocusForTest.Person);
+            }
+            finally { if (window.InputForTest is not null) window.CancelForTest(); window.Close(); }
+        });
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Explicit_cross_generation_facts_are_read_and_drawn_directly_after_reopen()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var children = new ChildApplication(new IsolatedChildStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        await using (var context = db.OpenContext())
+        {
+            var person = await context.People.SingleAsync(x => x.Id == child.PersonId);
+            person.SetRootInformation(8, "", "");
+            await context.SaveChangesAsync();
+        }
+        Assert.Equal(8, Assert.Single(await children.ReadAsync(g, l)).Generation);
+        for (var i = 0; i < 2; i++) await RunSta(async () =>
+        {
+            var window = new V1FirstRootWindow(roots, g, l, "冯", children, new SpouseApplication(new IsolatedSpouseStore(db)));
+            window.Show();
+            try
+            {
+                await window.ReadyForTest; window.UpdateLayout();
+                var cards = window.CanvasForTest.Children.OfType<System.Windows.Controls.Border>().ToArray();
+                var father = Assert.Single(cards, x => x.Tag is RootNode);
+                var son = Assert.Single(cards, x => x.Tag is ChildNode);
+                var fatherX = System.Windows.Controls.Canvas.GetLeft(father);
+                var sonX = System.Windows.Controls.Canvas.GetLeft(son);
+                Assert.True(sonX - fatherX > 700);
+                var line = Assert.Single(window.CanvasForTest.Children.OfType<System.Windows.Shapes.Polyline>());
+                Assert.Contains(line.Points, p => Math.Abs(p.X - sonX) < 0.1 && Math.Abs(p.Y - (System.Windows.Controls.Canvas.GetTop(son) + 17)) < 0.1);
+            }
+            finally { window.Close(); }
+        });
+        await using var verify = db.OpenContext();
+        Assert.Equal(2, await verify.People.CountAsync()); Assert.Equal(2, await verify.Placements.CountAsync());
+        Assert.Equal(1, await verify.BiologicalParents.CountAsync());
+        Assert.Equal(8, (await verify.People.SingleAsync(x => x.Id == child.PersonId)).ExplicitGeneration);
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Switching_lineages_shows_isolated_home_and_opens_root()
+    {
+        var (db,g,l)=await CreateAsync();var lines=new LineageApplication(new IsolatedLineageStore(db));var roots=new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var second=await lines.CreateAsync(new(Guid.NewGuid(),g,"另一谱","分类","地区","主题","",""));
+        var root=await roots.ExecuteAsync(new(Guid.NewGuid(),g,second,RootNameMode.Named,"冯乙"));
+        await RunSta(async()=>
+        {
+            var window=new V1FirstRootWindow(roots,g,l,"冯",new ChildApplication(new IsolatedChildStore(db)),new SpouseApplication(new IsolatedSpouseStore(db)),null,lines);window.Show();
+            try {await window.ReadyForTest;await window.SwitchLineageForTest(second);Assert.Equal(second,window.LineageForTest);Assert.True(window.HomeVisibleForTest);Assert.Contains("人物总数：1",window.HomeTextForTest);Assert.Contains("创建首节点",window.HomeTextForTest);await window.EnterCanvasForTest(new(root.PersonId,root.PlacementId,"冯乙"));Assert.False(window.HomeVisibleForTest);Assert.Equal(root.PersonId,window.FocusForTest.Person);Assert.Equal(root.PlacementId,window.FocusForTest.Placement);await window.SwitchLineageForTest(l);Assert.Contains("人物总数：0",window.HomeTextForTest);Assert.Null(window.FocusForTest.Person);}
+            finally {window.Close();}
+        });
+    }
     private sealed class FaultStore(IFirstRootStore inner) : IFirstRootStore
     {
         public bool FailBeforeSave, FailAfterSave, FailRead;
@@ -60,7 +135,7 @@ public sealed class V1FirstRootWindowTests
         await RunSta(async () => { var window = new V1FirstRootWindow(new FirstRootApplication(new IsolatedFirstRootStore(db)), g, l, "冯"); window.Show(); try { await window.ReadyForTest; Assert.Equal(1, window.NodeCountForTest); } finally { window.Close(); } });
     }
     [Fact, Trait("Category", "UI")]
-    public async Task Empty_node_and_cancel_input_are_distinct_and_refresh_failure_reports_saved()
+    public async Task Blank_and_cancel_do_not_create_person_and_refresh_failure_reports_saved()
     {
         var (db, g, l) = await CreateAsync(); var store = new FaultStore(new IsolatedFirstRootStore(db));
         await RunSta(async () =>
@@ -70,14 +145,16 @@ public sealed class V1FirstRootWindowTests
             {
                 await window.ReadyForTest; window.BeginForTest(); window.SetInputForTest("暂不提交"); window.CancelForTest();
                 Assert.Empty((await new FirstRootApplication(store).ReadAsync(g,l)).Nodes);
-                store.FailRead = true; await window.EmptyForTest();
+                window.BeginForTest(); window.SetInputForTest("  "); await window.ConfirmForTest();
+                Assert.Empty((await new FirstRootApplication(store).ReadAsync(g,l)).Nodes);
+                window.SetInputForTest("甲"); store.FailRead = true; await window.ConfirmForTest();
                 Assert.Contains("已保存，但画布读取失败", window.StatusForTest); var focus = window.FocusForTest;
                 Assert.NotNull(focus.Person); Assert.NotNull(focus.Placement);
                 await window.ReloadForTest(); Assert.Equal(focus, window.FocusForTest); Assert.Equal(1, window.NodeCountForTest);
             }
             finally { window.Close(); }
         });
-        await using var verify = db.OpenContext(); Assert.Equal("", (await verify.People.SingleAsync()).Name);
+        await using var verify = db.OpenContext(); Assert.Equal("冯甲", (await verify.People.SingleAsync()).Name);
     }
     [Fact, Trait("Category", "UI")]
     public async Task Routed_enter_commits_and_escape_cancels_input()
@@ -199,7 +276,7 @@ public sealed class V1FirstRootWindowTests
                 await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId);
                 window.BeginChildForTest(); window.SetInputForTest("取消"); window.CancelForTest();
                 Assert.Empty(await childApp.ReadAsync(g, l));
-                await window.EmptyChildForTest(); focus = window.FocusForTest;
+                window.BeginChildForTest(); window.SetInputForTest("子"); await window.ConfirmForTest(); focus = window.FocusForTest;
                 Assert.NotNull(focus.Person); Assert.NotEqual(root.PersonId, focus.Person); Assert.NotNull(focus.Placement); Assert.Equal(1, window.ChildCountForTest);
                 await window.ChooseMotherForTest(null);
                 await window.SelectForTest(root.PersonId, root.PlacementId);
@@ -218,7 +295,7 @@ public sealed class V1FirstRootWindowTests
             finally { window.Close(); }
         });
         await using var context = db.OpenContext();
-        Assert.Equal("", (await context.People.SingleAsync(x => x.Id == focus.Person)).Name);
+        Assert.Equal("冯子", (await context.People.SingleAsync(x => x.Id == focus.Person)).Name);
         Assert.Empty(await context.BiologicalParents.Where(x => x.ChildId == focus.Person && x.Role == ParentRole.Mother).ToListAsync());
     }
     [Fact, Trait("Category", "UI")]
@@ -254,7 +331,7 @@ public sealed class V1FirstRootWindowTests
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
         var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
         var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, ""));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
         await RunSta(async () =>
         {
             var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses, profiles); window.Show();
@@ -305,7 +382,7 @@ public sealed class V1FirstRootWindowTests
         var children = new ChildApplication(new IsolatedChildStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
         var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, ""));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
         await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         await RunSta(async () =>
         {
@@ -316,7 +393,7 @@ public sealed class V1FirstRootWindowTests
                 var canvas = window.CanvasForTest;
                 Assert.Single(canvas.Children.OfType<System.Windows.Controls.Border>(), x => x.Tag is SpouseNode);
                 var blank = Assert.Single(canvas.Children.OfType<System.Windows.Controls.Border>(), x => x.Tag is ChildNode);
-                Assert.Equal("", Assert.IsType<System.Windows.Controls.TextBlock>(blank.Child).Text);
+                Assert.Equal("子", Assert.IsType<System.Windows.Controls.TextBlock>(blank.Child).Text);
                 Assert.Equal(110, blank.ActualWidth); Assert.Equal(34, blank.ActualHeight);
                 var edge = Assert.Single(canvas.Children.OfType<System.Windows.Shapes.Polyline>());
                 Assert.Contains(edge.Points, p => Math.Abs(p.X - System.Windows.Controls.Canvas.GetLeft(blank)) < 0.1 &&
@@ -408,7 +485,7 @@ public sealed class V1FirstRootWindowTests
                 var isolated = Assert.Single(window.OwnedWindows.OfType<V1FirstRootWindow>()); await isolated.ReadyForTest;
                 isolated.BeginForTest(); isolated.SetInputForTest("草稿");
                 Assert.False(await window.PrepareForOwnerExitAsync());
-                isolated.CancelForTest(); await isolated.EmptyForTest(); var focus = isolated.FocusForTest;
+                isolated.CancelForTest(); isolated.BeginForTest(); isolated.SetInputForTest("甲"); await isolated.ConfirmForTest(); var focus = isolated.FocusForTest;
                 isolated.Close(); await window.OpenV1SampleForTest();
                 var reopened = Assert.Single(window.OwnedWindows.OfType<V1FirstRootWindow>()); await reopened.ReadyForTest;
                 Assert.Equal(1, reopened.NodeCountForTest); Assert.NotNull(focus.Placement); reopened.Close();

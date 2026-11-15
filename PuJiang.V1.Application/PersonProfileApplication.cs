@@ -19,7 +19,7 @@ public sealed class PersonProfileApplication(IPersonProfileStore store)
     {
         ArgumentNullException.ThrowIfNull(command);
         if (command.OperationId == Guid.Empty || command.GenealogyId == Guid.Empty || command.LineageId == Guid.Empty || command.PersonId == Guid.Empty || command.PlacementId == Guid.Empty ||
-            command.Name is null || command.ExpectedName is null || command.Sex is not (PersonSex.Male or PersonSex.Female) || !Enum.IsDefined(command.ExpectedSex))
+            string.IsNullOrWhiteSpace(command.Name) || command.ExpectedName is null || command.Sex is not (PersonSex.Male or PersonSex.Female) || !Enum.IsDefined(command.ExpectedSex))
             throw new ArgumentException("人物资料或目标身份无效。");
         return store.UpdateAsync(command, cancellationToken);
     }

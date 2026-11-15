@@ -84,9 +84,9 @@ public sealed class V1ChildSliceTests
         var (db, g, l, root) = await Setup();
         var children = new ChildApplication(new IsolatedChildStore(db));
         var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
-        var a = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, ""));
+        var a = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯原名"));
         var b = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙"));
-        var update = new UpdatePersonProfile(Guid.NewGuid(), g, l, a.PersonId, a.PlacementId, "冯甲", PersonSex.Female, "", PersonSex.Male);
+        var update = new UpdatePersonProfile(Guid.NewGuid(), g, l, a.PersonId, a.PlacementId, "冯甲", PersonSex.Female, "冯原名", PersonSex.Male);
         await profiles.UpdateAsync(update); await profiles.UpdateAsync(update);
         var nodes = await children.ReadAsync(g, l);
         Assert.Equal(2, nodes.Single(x => x.PersonId == a.PersonId).Position);
@@ -113,7 +113,7 @@ public sealed class V1ChildSliceTests
             await context.SaveChangesAsync();
         }
         var children = new ChildApplication(new IsolatedChildStore(db));
-        var son = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, ""));
+        var son = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
         var read = await children.ReadAsync(g, l);
         Assert.Equal(1, read.Single(x => x.PersonId == son.PersonId).Position);
         var daughter = read.Single(x => x.PersonId == daughterId); Assert.Equal(2, daughter.Position); Assert.Equal(relationId, daughter.FatherRelationshipId);

@@ -21,12 +21,12 @@ public sealed class V1FirstRootTests
     {
         var (db, g, l) = await CreateAsync(); var app = new FirstRootApplication(new IsolatedFirstRootStore(db));
         Assert.Empty((await app.ReadAsync(g, l)).Nodes);
-        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Empty, "");
+        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲");
         var created = await app.ExecuteAsync(command); var replay = await app.ExecuteAsync(command);
         Assert.False(created.Replayed); Assert.True(replay.Replayed);
         Assert.Equal(created.PersonId, replay.PersonId); Assert.Equal(created.PlacementId, replay.PlacementId);
         var read = await new FirstRootApplication(new IsolatedFirstRootStore(db)).ReadAsync(g, l);
-        var node = Assert.Single(read.Nodes); Assert.Equal(created.PersonId, node.PersonId); Assert.Equal(created.PlacementId, node.PlacementId); Assert.Equal("", node.Name);
+        var node = Assert.Single(read.Nodes); Assert.Equal(created.PersonId, node.PersonId); Assert.Equal(created.PlacementId, node.PlacementId); Assert.Equal("冯甲", node.Name);
         await Assert.ThrowsAsync<InvalidOperationException>(() => app.ExecuteAsync(command with { NameMode = RootNameMode.Named, Name = "另一个" }));
         await Assert.ThrowsAsync<InvalidOperationException>(() => app.ExecuteAsync(command with { OperationId = Guid.NewGuid() }));
     }
@@ -36,10 +36,28 @@ public sealed class V1FirstRootTests
         var (db, g, l) = await CreateAsync(); var app = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "");
         await Assert.ThrowsAsync<ArgumentException>(() => app.ExecuteAsync(command));
+        await Assert.ThrowsAsync<ArgumentException>(() => app.ExecuteAsync(command with { NameMode = RootNameMode.Empty }));
         await Assert.ThrowsAsync<ArgumentException>(() => app.ExecuteAsync(command with { NameMode = RootNameMode.Empty, Name = "非空" }));
         await Assert.ThrowsAsync<InvalidOperationException>(() => app.ExecuteAsync(command with { GenealogyId = Guid.NewGuid(), Name = "姓名" }));
         await Assert.ThrowsAsync<InvalidOperationException>(() => app.ReadAsync(Guid.NewGuid(), l));
         Assert.Empty((await app.ReadAsync(g, l)).Nodes);
+    }
+    [Fact]
+    public async Task Blank_family_names_and_direct_blank_database_writes_are_rejected()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var children = new ChildApplication(new IsolatedChildStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
+        await Assert.ThrowsAsync<ArgumentException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, " \t")));
+        await Assert.ThrowsAsync<ArgumentException>(() => spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, "")));
+        await using var context = db.OpenContext();
+        await Assert.ThrowsAsync<SqliteException>(() => context.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {' '.ToString()} WHERE Id = {root.PersonId}"));
+        Assert.Equal(1, await context.People.CountAsync());
+        Assert.Equal(1, await context.Placements.CountAsync());
+        Assert.Equal(0, await context.BiologicalParents.CountAsync());
+        Assert.Equal(0, await context.SpouseUnions.CountAsync());
     }
     [Fact]
     public async Task Placement_failure_rolls_back_person_and_receipt_then_retry_succeeds()

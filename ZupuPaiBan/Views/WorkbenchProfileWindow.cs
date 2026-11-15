@@ -296,7 +296,8 @@ public sealed class WorkbenchProfileWindow : Window
             var children = new PuJiang.V1.Application.ChildApplication(new PuJiang.V1.Persistence.IsolatedChildStore(_v1Sample.Database));
             var spouses = new PuJiang.V1.Application.SpouseApplication(new PuJiang.V1.Persistence.IsolatedSpouseStore(_v1Sample.Database));
             var profiles = new PuJiang.V1.Application.PersonProfileApplication(new PuJiang.V1.Persistence.IsolatedPersonProfileStore(_v1Sample.Database));
-            new V1FirstRootWindow(app, _v1Sample.GenealogyId, _v1Sample.LineageId, _v1Sample.Surname, children, spouses, profiles) { Owner = this }.Show();
+            var lineages = new PuJiang.V1.Application.LineageApplication(new PuJiang.V1.Persistence.IsolatedLineageStore(_v1Sample.Database));
+            new V1FirstRootWindow(app, _v1Sample.GenealogyId, _v1Sample.LineageId, _v1Sample.Surname, children, spouses, profiles, lineages) { Owner = this }.Show();
         }
         catch (Exception error) { _status.Text = $"隔离样本无法打开：{error.Message}"; }
         finally { _v1Opening = false; }

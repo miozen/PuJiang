@@ -17,10 +17,60 @@ internal sealed class ChildReceipt
     public Guid PersonId { get; set; }
     public Guid PlacementId { get; set; }
 }
+internal sealed class SiblingReceipt
+{
+    public Guid OperationId { get; set; }
+    public string Payload { get; set; } = "";
+    public Guid PersonId { get; set; }
+    public Guid PlacementId { get; set; }
+}
 
 // Isolated ordinary-child path; unsupported multiple-position cases fail closed.
 public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildStore
 {
+    public async Task<bool> HasSiblingReceiptAsync(Guid operationId, CancellationToken ct)
+    {
+        await using var db = database.OpenContext();
+        return await db.SiblingReceipts.AsNoTracking().AnyAsync(x => x.OperationId == operationId, ct);
+    }
+    public async Task<ChildCreated> AddSiblingAsync(AddSibling command, CancellationToken ct)
+    {
+        ChildApplication.ValidateSibling(command);
+        await using var db = database.OpenContext();
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var payload = System.Text.Json.JsonSerializer.Serialize(command);
+        var receipt = await db.SiblingReceipts.SingleOrDefaultAsync(x => x.OperationId == command.OperationId, ct);
+        if (receipt is not null)
+        {
+            if (receipt.Payload != payload) throw new InvalidOperationException("操作身份已用于不同输入。");
+            return new(receipt.PersonId, receipt.PlacementId, true);
+        }
+        if (!await db.Lineages.AnyAsync(x => x.Id == command.LineageId && x.GenealogyId == command.GenealogyId, ct)) throw new InvalidOperationException("目标谱系不存在。");
+        var source = await db.People.SingleOrDefaultAsync(x => x.Id == command.SourcePersonId && x.LineageId == command.LineageId, ct) ?? throw new InvalidOperationException("来源人物已失效。");
+        var sourcePlace = await db.Placements.SingleOrDefaultAsync(x => x.Id == command.SourcePlacementId && x.LineageId == command.LineageId && x.PersonId == source.Id, ct) ?? throw new InvalidOperationException("来源位置已失效。");
+        if (sourcePlace.ParentPlacementId != command.ParentPlacementId || await db.Placements.CountAsync(x => x.LineageId == command.LineageId && x.PersonId == source.Id, ct) != 1) throw new InvalidOperationException("来源父位置已变化或多位置尚不支持。");
+        var parent = await db.People.SingleOrDefaultAsync(x => x.Id == command.ParentPersonId && x.LineageId == command.LineageId, ct) ?? throw new InvalidOperationException("父人物已失效。");
+        var parentPlace = await db.Placements.SingleOrDefaultAsync(x => x.Id == command.ParentPlacementId && x.LineageId == command.LineageId, ct) ?? throw new InvalidOperationException("父位置已失效。");
+        OrdinaryChildRules.ValidateFather(parent, parentPlace, command.LineageId);
+        if (await db.Placements.CountAsync(x => x.LineageId == command.LineageId && x.PersonId == parent.Id, ct) != 1) throw new InvalidOperationException("多位置尚不支持。");
+        if (!await db.BiologicalParents.AnyAsync(x => x.Id == command.ExpectedFatherRelationshipId && x.LineageId == command.LineageId && x.ChildId == source.Id && x.ParentId == parent.Id && x.Role == ParentRole.Father, ct)) throw new InvalidOperationException("来源生父关系已变化。");
+        var sourceMother = await db.BiologicalParents.SingleOrDefaultAsync(x => x.LineageId == command.LineageId && x.ChildId == source.Id && x.Role == ParentRole.Mother, ct);
+        if (sourceMother?.ParentId != command.ExpectedMotherId || source.MotherExplicitlyCleared != command.ExpectedMotherCleared || source.MotherExplicitlyCleared && sourceMother is not null) throw new InvalidOperationException("来源生母资料已变化，请重新发起操作。");
+        if (sourceMother is not null && !await db.People.AnyAsync(x => x.Id == sourceMother.ParentId && x.LineageId == command.LineageId && x.Sex == PersonSex.Female, ct)) throw new InvalidOperationException("来源生母角色不一致，请先核实。");
+        var siblings = await (from p in db.Placements where p.LineageId == command.LineageId && p.ParentPlacementId == parentPlace.Id join person in db.People on new { p.LineageId, Id = p.PersonId } equals new { person.LineageId, person.Id } select new { person.Sex, Placement = p }).ToListAsync(ct);
+        var ordered = siblings.OrderBy(x => x.Placement.Position).ToArray();
+        if (ordered.Any(x => x.Sex == PersonSex.Unknown || x.Placement.Position is null) || !ordered.Select(x => x.Placement.Position!.Value).SequenceEqual(Enumerable.Range(1, siblings.Count)) || !ordered.Select(x => x.Sex).SequenceEqual(ordered.Select(x => x.Sex).Order())) throw new InvalidOperationException("子女排序或性别尚不能安全确认，请先核实。");
+        var position = ordered.Count(x => x.Sex == PersonSex.Male) + 1;
+        foreach (var item in ordered.Where(x => x.Sex == PersonSex.Female)) item.Placement.SetPosition(item.Placement.Position!.Value + 1);
+        var createdPerson = new Person(Guid.NewGuid(), command.LineageId, command.Name, PersonSex.Male);
+        var place = new Placement(Guid.NewGuid(), command.LineageId, createdPerson.Id, parentPlace.Id, position);
+        db.People.Add(createdPerson); db.Placements.Add(place);
+        db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, createdPerson.Id, parent.Id, ParentRole.Father));
+        if (sourceMother is not null) db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, createdPerson.Id, sourceMother.ParentId, ParentRole.Mother));
+        db.SiblingReceipts.Add(new SiblingReceipt { OperationId = command.OperationId, Payload = payload, PersonId = createdPerson.Id, PlacementId = place.Id });
+        await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        return new(createdPerson.Id, place.Id, false);
+    }
     public async Task<bool> HasReceiptAsync(Guid operationId, CancellationToken cancellationToken)
     {
         await using var db = database.OpenContext();
@@ -86,7 +136,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         var placements = await (from p in db.Placements.AsNoTracking()
                            join person in db.People.AsNoTracking() on new { p.LineageId, Id = p.PersonId } equals new { person.LineageId, person.Id }
                            where p.LineageId == lineageId && p.ParentPlacementId != null
-                           select new { person.Id, PlacementId = p.Id, ParentPlacementId = p.ParentPlacementId!.Value, person.Name, Position = p.Position!.Value, person.MotherExplicitlyCleared, person.Sex }).ToListAsync(cancellationToken);
+                           select new { person.Id, PlacementId = p.Id, ParentPlacementId = p.ParentPlacementId!.Value, person.Name, Position = p.Position!.Value, person.MotherExplicitlyCleared, person.Sex, person.ExplicitGeneration }).ToListAsync(cancellationToken);
         var allPlacements = await db.Placements.AsNoTracking().Where(x => x.LineageId == lineageId).ToListAsync(cancellationToken);
         var relations = await db.BiologicalParents.AsNoTracking().Where(x => x.LineageId == lineageId).ToListAsync(cancellationToken);
         var nodes = new List<ChildNode>();
@@ -96,7 +146,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
             var father = relations.SingleOrDefault(x => x.ChildId == p.Id && x.ParentId == parent.PersonId && x.Role == ParentRole.Father) ?? throw new InvalidOperationException("父子关系与位置不一致，无法读取子女。");
             var mother = relations.SingleOrDefault(x => x.ChildId == p.Id && x.Role == ParentRole.Mother);
             if (p.MotherExplicitlyCleared && mother is not null) throw new InvalidOperationException("生母清空状态与关系不一致，请先核实。");
-            nodes.Add(new(p.Id, p.PlacementId, p.ParentPlacementId, p.Name, p.Position, father.Id, mother?.ParentId, p.MotherExplicitlyCleared, p.Sex));
+            nodes.Add(new(p.Id, p.PlacementId, p.ParentPlacementId, p.Name, p.Position, father.Id, mother?.ParentId, p.MotherExplicitlyCleared, p.Sex, p.ExplicitGeneration));
         }
         await tx.CommitAsync(cancellationToken); return nodes.AsReadOnly();
     }
