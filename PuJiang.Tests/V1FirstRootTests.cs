@@ -21,7 +21,7 @@ public sealed class V1FirstRootTests
     {
         var (db, g, l) = await CreateAsync(); var app = new FirstRootApplication(new IsolatedFirstRootStore(db));
         Assert.Empty((await app.ReadAsync(g, l)).Nodes);
-        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲");
+        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲", 1);
         var created = await app.ExecuteAsync(command); var replay = await app.ExecuteAsync(command);
         Assert.False(created.Replayed); Assert.True(replay.Replayed);
         Assert.Equal(created.PersonId, replay.PersonId); Assert.Equal(created.PlacementId, replay.PlacementId);
@@ -34,7 +34,7 @@ public sealed class V1FirstRootTests
     public async Task Invalid_input_and_foreign_target_do_not_write()
     {
         var (db, g, l) = await CreateAsync(); var app = new FirstRootApplication(new IsolatedFirstRootStore(db));
-        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "");
+        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "", 1);
         await Assert.ThrowsAsync<ArgumentException>(() => app.ExecuteAsync(command));
         await Assert.ThrowsAsync<ArgumentException>(() => app.ExecuteAsync(command with { NameMode = RootNameMode.Empty }));
         await Assert.ThrowsAsync<ArgumentException>(() => app.ExecuteAsync(command with { NameMode = RootNameMode.Empty, Name = "非空" }));
@@ -47,10 +47,10 @@ public sealed class V1FirstRootTests
     {
         var (db, g, l) = await CreateAsync();
         var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
         var children = new ChildApplication(new IsolatedChildStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        await Assert.ThrowsAsync<ArgumentException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, " \t")));
+        await Assert.ThrowsAsync<ArgumentException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, " \t", Generation: 2, ExpectedParentGeneration: 1)));
         await Assert.ThrowsAsync<ArgumentException>(() => spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Empty, "")));
         await using var context = db.OpenContext();
         await Assert.ThrowsAsync<SqliteException>(() => context.Database.ExecuteSqlInterpolatedAsync($"UPDATE People SET Name = {' '.ToString()} WHERE Id = {root.PersonId}"));
@@ -64,7 +64,7 @@ public sealed class V1FirstRootTests
     {
         var (db, g, l) = await CreateAsync(); var app = new FirstRootApplication(new IsolatedFirstRootStore(db));
         await using (var context = db.OpenContext()) await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailPlacement BEFORE INSERT ON Placements BEGIN SELECT RAISE(ABORT, 'injected'); END");
-        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲");
+        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲", 1);
         await Assert.ThrowsAsync<DbUpdateException>(() => app.ExecuteAsync(command));
         await using (var context = db.OpenContext())
         {
@@ -78,7 +78,7 @@ public sealed class V1FirstRootTests
     public async Task Concurrent_duplicate_is_created_once()
     {
         var (db, g, l) = await CreateAsync(); var app = new FirstRootApplication(new IsolatedFirstRootStore(db));
-        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲");
+        var command = new AddFirstRoot(Guid.NewGuid(), g, l, RootNameMode.Named, "冯甲", 1);
         var results = await Task.WhenAll(app.ExecuteAsync(command), app.ExecuteAsync(command));
         Assert.Equal(results[0].PersonId, results[1].PersonId); Assert.Equal(results[0].PlacementId, results[1].PlacementId);
         Assert.Single(results, x => x.Replayed); Assert.Single((await app.ReadAsync(g, l)).Nodes);

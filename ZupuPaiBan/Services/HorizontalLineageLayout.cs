@@ -148,7 +148,8 @@ public static class HorizontalLineageLayout
             var child = nodeMap[e.ChildId];
             var start = new HorizontalLayoutPoint(parent.X + parent.Width, parent.Y + parent.Height / 2);
             var end = new HorizontalLayoutPoint(child.X, child.Y + child.Height / 2);
-            var mid = start.X + (end.X - start.X) / 2;
+            var firstChildX = children[e.ParentId].Where(x => nodeMap.ContainsKey(x.ChildId)).Min(x => nodeMap[x.ChildId].X);
+            var mid = start.X + (firstChildX - start.X) / 2;
             if (!double.IsFinite(mid) || mid <= start.X || mid >= end.X)
                 throw new HorizontalLayoutException("Edge routing exceeds the supported coordinate precision.");
             return new HorizontalLayoutEdge(e.Id, e.ParentId, e.ChildId,

@@ -31,6 +31,7 @@ public sealed class IsolatedFirstRootStore(IsolatedTestDatabase database) : IFir
         var place=await db.Placements.SingleOrDefaultAsync(x=>x.Id==command.PlacementId&&x.LineageId==command.LineageId&&x.PersonId==command.PersonId&&x.ParentPlacementId==null,ct)??throw new InvalidOperationException("首节点位置失效。");
         var person=await db.People.SingleAsync(x=>x.Id==place.PersonId&&x.LineageId==command.LineageId,ct);
         if(person.ExplicitGeneration!=command.ExpectedGeneration||person.Title!=command.ExpectedTitle||person.Notes!=command.ExpectedNotes)throw new InvalidOperationException("首节点资料已变化，请重新读取。");
+        if(command.Generation!=command.ExpectedGeneration)throw new InvalidOperationException("世代请使用统一世代更正入口，以同步后代。");
         person.SetRootInformation(command.Generation,command.Title,command.Notes);db.RootDetailsReceipts.Add(new(){OperationId=command.OperationId,Payload=payload});await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
     }
     public async Task<RootCreated> AddFirstAsync(AddFirstRoot command, CancellationToken cancellationToken)

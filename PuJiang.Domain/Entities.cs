@@ -38,6 +38,8 @@ public sealed class Person(Guid id, Guid lineageId, string name, PersonSex sex =
     public string Notes { get; private set; } = "";
     public void SetRootInformation(int? generation, string title, string notes)
     { if (generation is <= 0) throw new ArgumentException("世代必须为正数。"); ExplicitGeneration = generation; Title = title; Notes = notes; }
+    public void SetGeneration(int generation)
+    { if (generation <= 0) throw new ArgumentException("世代必须为正数。"); ExplicitGeneration = generation; }
     public void MarkMotherCleared() => MotherExplicitlyCleared = true;
     public void MarkMotherKnown() => MotherExplicitlyCleared = false;
     public void UpdateProfile(string name, PersonSex sex)

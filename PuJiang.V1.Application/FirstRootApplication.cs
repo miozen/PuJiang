@@ -25,10 +25,15 @@ public sealed class FirstRootApplication(IFirstRootStore store)
     }
     public static void Validate(AddFirstRoot command)
     {
+        ValidateName(command);
+        if (command.Generation is null or <= 0) throw new ArgumentException("首节点主世系必须为正整数。");
+    }
+    public static void ValidateName(AddFirstRoot command)
+    {
         ArgumentNullException.ThrowIfNull(command);
         if (command.OperationId == Guid.Empty || command.GenealogyId == Guid.Empty || command.LineageId == Guid.Empty)
             throw new ArgumentException("操作及目标身份不能为空。");
-        if (string.IsNullOrWhiteSpace(command.Name) || command.Title is null || command.Notes is null || command.Generation is <= 0 || command.NameMode != RootNameMode.Named)
+        if (string.IsNullOrWhiteSpace(command.Name) || command.Title is null || command.Notes is null || command.NameMode != RootNameMode.Named)
             throw new ArgumentException("姓名与新增方式不匹配。");
     }
     public Task<RootProjection> ReadAsync(Guid genealogyId, Guid lineageId, CancellationToken cancellationToken = default)

@@ -19,15 +19,16 @@ public sealed class V1FirstRootWindowTests
     {
         var (db, g, l) = await CreateAsync();
         var roots = new FirstRootApplication(new IsolatedFirstRootStore(db)); var children = new ChildApplication(new IsolatedChildStore(db)); var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", Generation: 2, ExpectedParentGeneration: 1));
+        await using (var context = db.OpenContext()) { (await context.People.SingleAsync(x => x.Id == child.PersonId)).SetGeneration(6); await context.SaveChangesAsync(); }
         await RunSta(async () =>
         {
             var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses); window.Show();
             try
             {
                 await window.ReadyForTest; await window.SelectForTest(child.PersonId, child.PlacementId);
-                window.BeginSiblingForTest(); window.SetInputForTest("取消"); window.CancelForTest(); Assert.Single(await children.ReadAsync(g, l));
+                window.BeginSiblingForTest(); Assert.Null(window.GenerationInputForTest); window.SetInputForTest("取消"); window.CancelForTest(); Assert.Single(await children.ReadAsync(g, l));
                 window.BeginSiblingForTest(); window.SetInputForTest("草稿");
                 await spouses.SetMotherAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, child.PersonId, null, null, false));
                 await window.ConfirmForTest(); Assert.Equal("草稿", window.InputForTest); Assert.Contains("未保存", window.StatusForTest); Assert.Single(await children.ReadAsync(g, l));
@@ -44,15 +45,15 @@ public sealed class V1FirstRootWindowTests
         var (db, g, l) = await CreateAsync();
         var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var children = new ChildApplication(new IsolatedChildStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 8));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", Generation: 9, ExpectedParentGeneration: 8));
         await using (var context = db.OpenContext())
         {
             var person = await context.People.SingleAsync(x => x.Id == child.PersonId);
-            person.SetRootInformation(8, "", "");
+            person.SetRootInformation(15, "", "");
             await context.SaveChangesAsync();
         }
-        Assert.Equal(8, Assert.Single(await children.ReadAsync(g, l)).Generation);
+        Assert.Equal(15, Assert.Single(await children.ReadAsync(g, l)).Generation);
         for (var i = 0; i < 2; i++) await RunSta(async () =>
         {
             var window = new V1FirstRootWindow(roots, g, l, "冯", children, new SpouseApplication(new IsolatedSpouseStore(db)));
@@ -65,7 +66,15 @@ public sealed class V1FirstRootWindowTests
                 var son = Assert.Single(cards, x => x.Tag is ChildNode);
                 var fatherX = System.Windows.Controls.Canvas.GetLeft(father);
                 var sonX = System.Windows.Controls.Canvas.GetLeft(son);
+                Assert.Equal(20, fatherX);
                 Assert.True(sonX - fatherX > 700);
+                var heading = Assert.Single(window.GenerationHeaderForTest.Children.OfType<System.Windows.Controls.TextBlock>(), x => x.Text == "第 8 世");
+                Assert.Equal(20, System.Windows.Controls.Canvas.GetLeft(heading), 2);
+                window.SetViewportForTest(1.5, 0);
+                heading = Assert.Single(window.GenerationHeaderForTest.Children.OfType<System.Windows.Controls.TextBlock>(), x => x.Text == "第 8 世");
+                Assert.Equal(30, System.Windows.Controls.Canvas.GetLeft(heading), 2);
+                window.SetViewportForTest(1, 174);
+                Assert.Contains(window.GenerationHeaderForTest.Children.OfType<System.Windows.Controls.TextBlock>(), x => x.Text == "第 9 世");
                 var line = Assert.Single(window.CanvasForTest.Children.OfType<System.Windows.Shapes.Polyline>());
                 Assert.Contains(line.Points, p => Math.Abs(p.X - sonX) < 0.1 && Math.Abs(p.Y - (System.Windows.Controls.Canvas.GetTop(son) + 17)) < 0.1);
             }
@@ -74,14 +83,14 @@ public sealed class V1FirstRootWindowTests
         await using var verify = db.OpenContext();
         Assert.Equal(2, await verify.People.CountAsync()); Assert.Equal(2, await verify.Placements.CountAsync());
         Assert.Equal(1, await verify.BiologicalParents.CountAsync());
-        Assert.Equal(8, (await verify.People.SingleAsync(x => x.Id == child.PersonId)).ExplicitGeneration);
+        Assert.Equal(15, (await verify.People.SingleAsync(x => x.Id == child.PersonId)).ExplicitGeneration);
     }
     [Fact, Trait("Category", "UI")]
     public async Task Switching_lineages_shows_isolated_home_and_opens_root()
     {
         var (db,g,l)=await CreateAsync();var lines=new LineageApplication(new IsolatedLineageStore(db));var roots=new FirstRootApplication(new IsolatedFirstRootStore(db));
         var second=await lines.CreateAsync(new(Guid.NewGuid(),g,"另一谱","分类","地区","主题","",""));
-        var root=await roots.ExecuteAsync(new(Guid.NewGuid(),g,second,RootNameMode.Named,"冯乙"));
+        var root=await roots.ExecuteAsync(new(Guid.NewGuid(),g,second,RootNameMode.Named,"冯乙", 1));
         await RunSta(async()=>
         {
             var window=new V1FirstRootWindow(roots,g,l,"冯",new ChildApplication(new IsolatedChildStore(db)),new SpouseApplication(new IsolatedSpouseStore(db)),null,lines);window.Show();
@@ -121,7 +130,7 @@ public sealed class V1FirstRootWindowTests
             var window = new V1FirstRootWindow(new FirstRootApplication(store), g, l, "冯"); window.Show();
             try
             {
-                await window.ReadyForTest; window.BeginForTest(); window.SetInputForTest("初稿"); store.FailBeforeSave = true;
+                await window.ReadyForTest; window.BeginForTest(); window.SetGenerationForTest("1"); window.SetInputForTest("初稿"); store.FailBeforeSave = true;
                 await window.ConfirmForTest(); Assert.Equal("初稿", window.InputForTest); Assert.False(window.InputReadOnlyForTest); Assert.Contains("未保存", window.StatusForTest);
                 window.SetInputForTest("朝阳"); store.FailAfterSave = true;
                 await window.ConfirmForTest(); Assert.Equal("朝阳", window.InputForTest); Assert.Contains("未确认", window.StatusForTest); Assert.False(window.CanCloseForOwner());
@@ -143,9 +152,9 @@ public sealed class V1FirstRootWindowTests
             var window = new V1FirstRootWindow(new FirstRootApplication(store), g, l, "冯"); window.Show();
             try
             {
-                await window.ReadyForTest; window.BeginForTest(); window.SetInputForTest("暂不提交"); window.CancelForTest();
+                await window.ReadyForTest; window.BeginForTest(); window.SetGenerationForTest("1"); window.SetInputForTest("暂不提交"); window.CancelForTest();
                 Assert.Empty((await new FirstRootApplication(store).ReadAsync(g,l)).Nodes);
-                window.BeginForTest(); window.SetInputForTest("  "); await window.ConfirmForTest();
+                window.BeginForTest(); window.SetGenerationForTest("1"); window.SetInputForTest("  "); await window.ConfirmForTest();
                 Assert.Empty((await new FirstRootApplication(store).ReadAsync(g,l)).Nodes);
                 window.SetInputForTest("甲"); store.FailRead = true; await window.ConfirmForTest();
                 Assert.Contains("已保存，但画布读取失败", window.StatusForTest); var focus = window.FocusForTest;
@@ -165,13 +174,13 @@ public sealed class V1FirstRootWindowTests
             var window = new V1FirstRootWindow(new FirstRootApplication(new IsolatedFirstRootStore(db)), g, l, "冯"); window.Show();
             try
             {
-                await window.ReadyForTest; window.BeginForTest();
+                await window.ReadyForTest; window.BeginForTest(); window.SetGenerationForTest("1");
                 var host = Assert.IsType<System.Windows.Controls.StackPanel>(window.InputHostForTest);
                 Assert.Equal("冯", Assert.IsType<System.Windows.Controls.TextBlock>(host.Children[0]).Text);
                 Assert.Same(window.InputControlForTest, host.Children[1]);
                 window.SetInputForTest("取消");
                 SendKey(window, Key.Escape); Assert.Null(window.InputForTest); Assert.Null(window.InputHostForTest);
-                window.BeginForTest(); window.SetInputForTest("朝阳"); SendKey(window, Key.Enter);
+                window.BeginForTest(); window.SetGenerationForTest("1"); window.SetInputForTest("朝阳"); SendKey(window, Key.Enter);
                 for (var i = 0; i < 200 && window.NodeCountForTest == 0; i++) await Task.Delay(10);
                 Assert.Equal(1, window.NodeCountForTest); Assert.NotNull(window.FocusForTest.Placement); Assert.Null(window.InputHostForTest);
             }
@@ -197,7 +206,7 @@ public sealed class V1FirstRootWindowTests
     {
         var (db, g, l) = await CreateAsync(); var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
         var a = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var b = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
         await using (var c = db.OpenContext()) { var row = await c.SpouseOrderEntries.SingleAsync(x => x.UnionId == b.UnionId); row.Position = 3; await c.SaveChangesAsync(); }
@@ -239,7 +248,7 @@ public sealed class V1FirstRootWindowTests
         var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var children = new ChildApplication(new IsolatedChildStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
         var first = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var second = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
         await RunSta(async () =>
@@ -266,7 +275,7 @@ public sealed class V1FirstRootWindowTests
         var rootApp = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var childApp = new ChildApplication(new IsolatedChildStore(db));
         var spouseApp = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await rootApp.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var root = await rootApp.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
         (Guid? Person, Guid? Placement) focus = default;
         await RunSta(async () =>
         {
@@ -276,14 +285,14 @@ public sealed class V1FirstRootWindowTests
                 await window.ReadyForTest; await window.SelectForTest(root.PersonId, root.PlacementId);
                 window.BeginChildForTest(); window.SetInputForTest("取消"); window.CancelForTest();
                 Assert.Empty(await childApp.ReadAsync(g, l));
-                window.BeginChildForTest(); window.SetInputForTest("子"); await window.ConfirmForTest(); focus = window.FocusForTest;
+                window.BeginChildForTest(); Assert.Null(window.GenerationInputForTest); window.SetInputForTest("子"); await window.ConfirmForTest(); focus = window.FocusForTest;
                 Assert.NotNull(focus.Person); Assert.NotEqual(root.PersonId, focus.Person); Assert.NotNull(focus.Placement); Assert.Equal(1, window.ChildCountForTest);
                 await window.ChooseMotherForTest(null);
                 await window.SelectForTest(root.PersonId, root.PlacementId);
                 window.BeginSpouseForTest(); Assert.Single(Assert.IsType<System.Windows.Controls.StackPanel>(window.InputHostForTest).Children);
                 window.SetInputForTest("李氏"); await window.ConfirmForTest();
                 await window.SelectForTest(focus.Person!.Value, focus.Placement!.Value);
-                Assert.True((Assert.Single(await childApp.ReadAsync(g, l))).MotherExplicitlyCleared);
+                var savedChild = Assert.Single(await childApp.ReadAsync(g, l)); Assert.True(savedChild.MotherExplicitlyCleared); Assert.Equal(2, savedChild.Generation);
                 await window.ReloadForTest(); Assert.Equal(focus, window.FocusForTest);
             }
             finally { window.Close(); }
@@ -303,7 +312,7 @@ public sealed class V1FirstRootWindowTests
     {
         var (db, g, l) = await CreateAsync();
         var rootApp = new FirstRootApplication(new IsolatedFirstRootStore(db));
-        var root = await rootApp.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var root = await rootApp.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
         var store = new FaultChildStore(new IsolatedChildStore(db));
         await RunSta(async () =>
         {
@@ -330,8 +339,8 @@ public sealed class V1FirstRootWindowTests
         var children = new ChildApplication(new IsolatedChildStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
         var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", Generation: 2, ExpectedParentGeneration: 1));
         await RunSta(async () =>
         {
             var window = new V1FirstRootWindow(roots, g, l, "冯", children, spouses, profiles); window.Show();
@@ -353,11 +362,11 @@ public sealed class V1FirstRootWindowTests
     {
         var (db, g, l) = await CreateAsync(); var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var children = new ChildApplication(new IsolatedChildStore(db)); var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
         var person = root.PersonId; var placement = root.PlacementId;
         for (var i = 0; i < 5; i++)
         {
-            var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, person, placement, RootNameMode.Named, "冯子" + i));
+            var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, person, placement, RootNameMode.Named, "冯子" + i, Generation: i + 2, ExpectedParentGeneration: i + 1));
             person = child.PersonId; placement = child.PlacementId;
         }
         await RunSta(async () =>
@@ -381,8 +390,8 @@ public sealed class V1FirstRootWindowTests
         var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var children = new ChildApplication(new IsolatedChildStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", Generation: 2, ExpectedParentGeneration: 1));
         await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         await RunSta(async () =>
         {
@@ -420,8 +429,8 @@ public sealed class V1FirstRootWindowTests
         var roots = new FirstRootApplication(new IsolatedFirstRootStore(db));
         var children = new ChildApplication(new IsolatedChildStore(db));
         var spouses = new SpouseApplication(new IsolatedSpouseStore(db));
-        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", Generation: 2, ExpectedParentGeneration: 1));
         var first = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var second = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
         var outsider = Guid.NewGuid();
@@ -459,7 +468,7 @@ public sealed class V1FirstRootWindowTests
                 await window.ReadyForTest; window.Width = 1500; window.Height = 900; window.UpdateLayout();
                 Assert.True(window.CanvasForTest.ActualWidth >= window.ScrollForTest.ViewportWidth - 2);
                 Assert.True(window.CanvasForTest.ActualHeight >= window.ScrollForTest.ViewportHeight - 2);
-                window.BeginForTest(); window.SetInputForTest("朝阳");
+                window.BeginForTest(); window.SetGenerationForTest("1"); window.SetInputForTest("朝阳");
                 var canvas = window.CanvasForTest;
                 canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent });
                 canvas.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
@@ -485,7 +494,7 @@ public sealed class V1FirstRootWindowTests
                 var isolated = Assert.Single(window.OwnedWindows.OfType<V1FirstRootWindow>()); await isolated.ReadyForTest;
                 isolated.BeginForTest(); isolated.SetInputForTest("草稿");
                 Assert.False(await window.PrepareForOwnerExitAsync());
-                isolated.CancelForTest(); isolated.BeginForTest(); isolated.SetInputForTest("甲"); await isolated.ConfirmForTest(); var focus = isolated.FocusForTest;
+                isolated.CancelForTest(); isolated.BeginForTest(); isolated.SetGenerationForTest("1"); isolated.SetInputForTest("甲"); await isolated.ConfirmForTest(); var focus = isolated.FocusForTest;
                 isolated.Close(); await window.OpenV1SampleForTest();
                 var reopened = Assert.Single(window.OwnedWindows.OfType<V1FirstRootWindow>()); await reopened.ReadyForTest;
                 Assert.Equal(1, reopened.NodeCountForTest); Assert.NotNull(focus.Placement); reopened.Close();

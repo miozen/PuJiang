@@ -5,6 +5,16 @@ namespace PuJiang.Tests;
 
 public class HorizontalLineageLayoutTests
 {
+    [Fact]
+    public void Cross_generation_siblings_share_parent_trunk()
+    {
+        var people = new[] { P(1, 0), P(2, 1, 0), P(3, 3, 1) };
+        var result = HorizontalLineageLayout.Calculate(people, new[] { E(11, 1, 2), E(12, 1, 3) }, new HashSet<Guid> { Id(1) }, allowSkippedGenerations: true);
+        var first = result.Edges.Single(e => e.ChildId == Id(2)); var skipped = result.Edges.Single(e => e.ChildId == Id(3));
+        Assert.Equal(first.Points[1].X, skipped.Points[1].X);
+        Assert.Equal(skipped.Points[2].Y, skipped.Points[3].Y);
+        Assert.Equal(result.Nodes.Single(n => n.PersonId == Id(3)).X, skipped.Points[3].X);
+    }
     private static Guid Id(int n) => Guid.Parse($"00000000-0000-0000-0000-{n:D12}");
     private static HorizontalLayoutPerson P(int id, int generation, int order = 0, double width = 80, double height = 30) => new(Id(id), generation, order, width, height);
     private static HorizontalLayoutRelationship E(int id, int parent, int child) => new(Id(id), Id(parent), Id(child));

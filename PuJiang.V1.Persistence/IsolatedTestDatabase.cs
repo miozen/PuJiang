@@ -47,6 +47,7 @@ public sealed class V1Context : DbContext
     internal DbSet<FirstRootReceipt> FirstRootReceipts => Set<FirstRootReceipt>();
     internal DbSet<ChildReceipt> ChildReceipts => Set<ChildReceipt>();
     internal DbSet<SiblingReceipt> SiblingReceipts => Set<SiblingReceipt>();
+    internal DbSet<GenerationReceipt> GenerationReceipts => Set<GenerationReceipt>();
     internal DbSet<SpouseReceipt> SpouseReceipts => Set<SpouseReceipt>();
     internal DbSet<MotherReceipt> MotherReceipts => Set<MotherReceipt>();
     internal DbSet<PersonProfileReceipt> PersonProfileReceipts => Set<PersonProfileReceipt>();
@@ -64,6 +65,7 @@ public sealed class V1Context : DbContext
         b.Entity<LineageUpdateReceipt>().HasKey(x => x.OperationId);
         b.Entity<RootDetailsReceipt>().HasKey(x => x.OperationId);
         b.Entity<SiblingReceipt>().HasKey(x => x.OperationId);
+        b.Entity<GenerationReceipt>().HasKey(x => x.OperationId);
         b.Entity<Person>().ToTable("People", t => t.HasCheckConstraint("CK_Person_Id", nonempty)).HasKey(x => x.Id);
         b.Entity<Person>().HasAlternateKey(x => new { x.LineageId, x.Id });
         b.Entity<Person>().Property(x => x.Name).IsRequired();

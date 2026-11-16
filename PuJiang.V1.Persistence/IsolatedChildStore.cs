@@ -14,6 +14,8 @@ internal sealed class ChildReceipt
     public RootNameMode NameMode { get; set; }
     public string Name { get; set; } = "";
     public long ExpectedSpouseRevision { get; set; }
+    public int? Generation { get; set; }
+    public int? ExpectedParentGeneration { get; set; }
     public Guid PersonId { get; set; }
     public Guid PlacementId { get; set; }
 }
@@ -52,6 +54,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         var parent = await db.People.SingleOrDefaultAsync(x => x.Id == command.ParentPersonId && x.LineageId == command.LineageId, ct) ?? throw new InvalidOperationException("父人物已失效。");
         var parentPlace = await db.Placements.SingleOrDefaultAsync(x => x.Id == command.ParentPlacementId && x.LineageId == command.LineageId, ct) ?? throw new InvalidOperationException("父位置已失效。");
         OrdinaryChildRules.ValidateFather(parent, parentPlace, command.LineageId);
+        if (parent.ExplicitGeneration != command.ExpectedParentGeneration) throw new InvalidOperationException("父亲世代已变化，请重新发起录入。");
         if (await db.Placements.CountAsync(x => x.LineageId == command.LineageId && x.PersonId == parent.Id, ct) != 1) throw new InvalidOperationException("多位置尚不支持。");
         if (!await db.BiologicalParents.AnyAsync(x => x.Id == command.ExpectedFatherRelationshipId && x.LineageId == command.LineageId && x.ChildId == source.Id && x.ParentId == parent.Id && x.Role == ParentRole.Father, ct)) throw new InvalidOperationException("来源生父关系已变化。");
         var sourceMother = await db.BiologicalParents.SingleOrDefaultAsync(x => x.LineageId == command.LineageId && x.ChildId == source.Id && x.Role == ParentRole.Mother, ct);
@@ -63,6 +66,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         var position = ordered.Count(x => x.Sex == PersonSex.Male) + 1;
         foreach (var item in ordered.Where(x => x.Sex == PersonSex.Female)) item.Placement.SetPosition(item.Placement.Position!.Value + 1);
         var createdPerson = new Person(Guid.NewGuid(), command.LineageId, command.Name, PersonSex.Male);
+        createdPerson.SetGeneration(command.Generation!.Value);
         var place = new Placement(Guid.NewGuid(), command.LineageId, createdPerson.Id, parentPlace.Id, position);
         db.People.Add(createdPerson); db.Placements.Add(place);
         db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, createdPerson.Id, parent.Id, ParentRole.Father));
@@ -85,7 +89,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         if (receipt is not null)
         {
             if (receipt.GenealogyId != command.GenealogyId || receipt.LineageId != command.LineageId || receipt.ParentPersonId != command.ParentPersonId ||
-                receipt.ParentPlacementId != command.ParentPlacementId || receipt.NameMode != command.NameMode || receipt.Name != command.Name || receipt.ExpectedSpouseRevision != command.ExpectedSpouseRevision)
+                receipt.ParentPlacementId != command.ParentPlacementId || receipt.NameMode != command.NameMode || receipt.Name != command.Name || receipt.ExpectedSpouseRevision != command.ExpectedSpouseRevision || receipt.Generation != command.Generation || receipt.ExpectedParentGeneration != command.ExpectedParentGeneration)
                 throw new InvalidOperationException("操作身份已用于不同的输入。");
             return new(receipt.PersonId, receipt.PlacementId, true);
         }
@@ -96,6 +100,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         var placement = await db.Placements.SingleOrDefaultAsync(x => x.Id == command.ParentPlacementId && x.LineageId == command.LineageId, cancellationToken)
             ?? throw new InvalidOperationException("当前父位置不存在或不属于当前谱系。");
         OrdinaryChildRules.ValidateFather(parent, placement, command.LineageId);
+        if (parent.ExplicitGeneration != command.ExpectedParentGeneration) throw new InvalidOperationException("父亲世代已变化，请重新发起录入。");
         if (await db.Placements.CountAsync(x => x.LineageId == command.LineageId && x.PersonId == parent.Id, cancellationToken) != 1)
             throw new InvalidOperationException("多位置后代承接尚未接入，请先核实当前父位置。");
         var (group, spouses) = await SpouseOrderQueries.Read(db, command.LineageId, parent.Id, cancellationToken);
@@ -118,13 +123,14 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         var position = ordered.Count(x => x.Sex == PersonSex.Male) + 1;
         foreach (var sibling in ordered.Where(x => x.Sex == PersonSex.Female)) sibling.Placement.SetPosition(sibling.Placement.Position!.Value + 1);
         var child = new Person(Guid.NewGuid(), command.LineageId, command.Name, PersonSex.Male);
+        child.SetGeneration(command.Generation!.Value);
         var childPlacement = new Placement(Guid.NewGuid(), command.LineageId, child.Id, placement.Id, position);
         db.People.Add(child); db.Placements.Add(childPlacement);
         db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, child.Id, parent.Id, ParentRole.Father));
         if (mother is not null) db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, child.Id, mother.Id, ParentRole.Mother));
         db.ChildReceipts.Add(new ChildReceipt { OperationId=command.OperationId, GenealogyId=command.GenealogyId, LineageId=command.LineageId,
             ParentPersonId=command.ParentPersonId, ParentPlacementId=command.ParentPlacementId, NameMode=command.NameMode, Name=command.Name,
-            PersonId=child.Id, PlacementId=childPlacement.Id, ExpectedSpouseRevision=command.ExpectedSpouseRevision });
+            PersonId=child.Id, PlacementId=childPlacement.Id, ExpectedSpouseRevision=command.ExpectedSpouseRevision, Generation=command.Generation, ExpectedParentGeneration=command.ExpectedParentGeneration });
         await db.SaveChangesAsync(cancellationToken); await tx.CommitAsync(cancellationToken);
         return new(child.Id, childPlacement.Id, false);
     }

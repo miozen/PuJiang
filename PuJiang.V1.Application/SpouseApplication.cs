@@ -58,7 +58,7 @@ public sealed class SpouseApplication(ISpouseStore store)
     {
         ArgumentNullException.ThrowIfNull(command);
         if (command.FatherPersonId == Guid.Empty || command.FatherPlacementId == Guid.Empty) throw new ArgumentException("父亲和父位置不能为空。");
-        FirstRootApplication.Validate(new(command.OperationId, command.GenealogyId, command.LineageId, command.NameMode, command.Name));
+        FirstRootApplication.ValidateName(new(command.OperationId, command.GenealogyId, command.LineageId, command.NameMode, command.Name));
     }
     public Task SetMotherAsync(SetChildMother command, CancellationToken cancellationToken = default)
     {

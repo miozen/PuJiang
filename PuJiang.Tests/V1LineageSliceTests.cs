@@ -21,12 +21,14 @@ public sealed class V1LineageSliceTests
         var rootCommand=new AddFirstRoot(Guid.NewGuid(),g,a,RootNameMode.Named,"冯甲",8,"公","备注");
         var root=await roots.ExecuteAsync(rootCommand);Assert.True((await roots.ExecuteAsync(rootCommand)).Replayed);
         var spouse=new SpouseApplication(new IsolatedSpouseStore(db));await spouse.AddAsync(new(Guid.NewGuid(),g,a,root.PersonId,root.PlacementId,RootNameMode.Named,"李氏"));
-        var children=new ChildApplication(new IsolatedChildStore(db));await children.ExecuteAsync(new(Guid.NewGuid(),g,a,root.PersonId,root.PlacementId,RootNameMode.Named,"冯子",1));
+        var children=new ChildApplication(new IsolatedChildStore(db));await children.ExecuteAsync(new(Guid.NewGuid(),g,a,root.PersonId,root.PlacementId,RootNameMode.Named,"冯子",1,9,8));
         var home=await new LineageApplication(new IsolatedLineageStore(db)).ReadHomeAsync(g,a);
         Assert.Equal(3,home.Total);Assert.Equal(2,home.Male);Assert.Equal(1,home.Female);Assert.Equal(2,home.Activities.Count);Assert.Equal(root.PersonId,Assert.Single(home.Roots).PersonId);
         var update=new UpdateLineage(Guid.NewGuid(),g,a,"朝阳更正","一房","新地区","主题","堂号","备注",LineageApplication.Evidence(home));await lines.UpdateAsync(update);await lines.UpdateAsync(update);
         await Assert.ThrowsAsync<InvalidOperationException>(()=>lines.UpdateAsync(update with {OperationId=Guid.NewGuid()}));
-        var rootUpdate=new UpdateRootDetails(Guid.NewGuid(),g,a,root.PersonId,root.PlacementId,9,"先生","更正",8,"公","备注");await roots.UpdateDetailsAsync(rootUpdate);await roots.UpdateDetailsAsync(rootUpdate);
+        var generations = new GenerationApplication(new IsolatedGenerationStore(db)); var snapshot = await generations.ReadAsync(g,a,root.PersonId,root.PlacementId);
+        await generations.UpdateAsync(new(Guid.NewGuid(),g,a,root.PersonId,root.PlacementId,9,snapshot.Evidence));
+        var rootUpdate=new UpdateRootDetails(Guid.NewGuid(),g,a,root.PersonId,root.PlacementId,9,"先生","更正",9,"公","备注");await roots.UpdateDetailsAsync(rootUpdate);await roots.UpdateDetailsAsync(rootUpdate);
         await Assert.ThrowsAsync<InvalidOperationException>(()=>roots.UpdateDetailsAsync(rootUpdate with {OperationId=Guid.NewGuid()}));
         var corrected=await lines.ReadHomeAsync(g,a);Assert.Equal("朝阳更正",corrected.Name);Assert.Equal("新地区",corrected.Region);Assert.Equal(9,Assert.Single(corrected.Roots).Generation);
         Assert.Equal(0,(await lines.ReadHomeAsync(g,b)).Total); await Assert.ThrowsAsync<InvalidOperationException>(()=>lines.ReadHomeAsync(Guid.NewGuid(),a));

@@ -4,19 +4,54 @@ using PuJiang.V1.Application;
 
 namespace ZupuPaiBan.Views;
 
+internal sealed class V1GenerationEditDialog : Window
+{
+    private bool _saving, _uncertain;
+    internal V1GenerationEditDialog(GenerationApplication app, Guid genealogy, Guid lineage, GenerationSnapshot snapshot)
+    {
+        Title = "更正世代"; Width = 420; Height = 230; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        var panel = new StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new TextBlock { Text = "更正世代后，普通后代按相同差值同步。", TextWrapping = TextWrapping.Wrap });
+        var value = new TextBox { Text = snapshot.Generation.ToString(), Margin = new Thickness(0, 8, 0, 0) }; panel.Children.Add(value);
+        var save = new Button { Content = "保存", Padding = new Thickness(8), Margin = new Thickness(0, 8, 0, 0) }; panel.Children.Add(save);
+        var status = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = System.Windows.Media.Brushes.Firebrick }; panel.Children.Add(status);
+        var refresh = new Button { Content = "重新读取当前世代", Padding = new Thickness(6), Margin = new Thickness(0, 4, 0, 0) }; panel.Children.Add(refresh);
+        var current = snapshot;
+        UpdateGeneration? pending = null;
+        refresh.Click += async (_, _) => { if (_saving || _uncertain) return; try { current = await app.ReadAsync(genealogy, lineage, snapshot.PersonId, snapshot.PlacementId); pending = null; status.Text = $"当前为第 {current.Generation} 世；输入已保留，请核对后保存。"; } catch (Exception error) { status.Text = $"重新读取失败：{error.Message} 输入已保留。"; } };
+        save.Click += async (_, _) =>
+        {
+            if (_saving) return;
+            if (!int.TryParse(value.Text, out var generation) || generation <= 0) { status.Text = "世代请输入正整数。"; return; }
+            pending ??= new(Guid.NewGuid(), genealogy, lineage, snapshot.PersonId, snapshot.PlacementId, generation, current.Evidence);
+            _saving = true; save.IsEnabled = false;
+            try { await app.UpdateAsync(pending); _saving = false; _uncertain = false; DialogResult = true; }
+            catch (Exception error)
+            {
+                try { if (!await app.HasReceiptAsync(pending.OperationId)) { pending = null; _uncertain = false; status.Text = $"未保存：{error.Message} 输入已保留。"; } else { _uncertain = true; status.Text = "保存结果待确认，请重试。"; } }
+                catch { _uncertain = true; status.Text = "保存结果未确认，请重试。"; }
+                value.IsReadOnly = _uncertain;
+            }
+            finally { _saving = false; save.IsEnabled = true; }
+        };
+        Closing += (_, e) => { if (_saving || _uncertain) { e.Cancel = true; status.Text = "保存尚未确认，请重试。"; } };
+        Content = panel;
+    }
+}
+
 internal sealed class V1RootEditDialog : Window
 {
     private bool _saving,_uncertain;
     internal V1RootEditDialog(FirstRootApplication app,Guid g,Guid l,RootNode root)
     {
         Title="修改首节点信息"; Width=420; Height=400; WindowStartupLocation=WindowStartupLocation.CenterOwner;
-        var gen=new TextBox{Text=root.Generation?.ToString()??""};var title=new TextBox{Text=root.Title};var notes=new TextBox{Text=root.Notes};var panel=new StackPanel{Margin=new Thickness(16)};
+        var gen=new TextBox{Text=root.Generation?.ToString()??"",IsReadOnly=true};var title=new TextBox{Text=root.Title};var notes=new TextBox{Text=root.Notes};var panel=new StackPanel{Margin=new Thickness(16)};
         void Add(string label,TextBox box){panel.Children.Add(new TextBlock{Text=label,Margin=new Thickness(0,8,0,2)});panel.Children.Add(box);}
-        panel.Children.Add(new TextBlock{Text="姓名可在人物资料中修改。"});Add("主世系（以房头为一世，可留空）",gen);Add("称谓",title);Add("备注",notes);
+        panel.Children.Add(new TextBlock{Text="姓名及世代可在人物资料中修改。"});Add("主世系（以房头为一世）",gen);Add("称谓",title);Add("备注",notes);
         var status=new TextBlock{Foreground=System.Windows.Media.Brushes.Firebrick,TextWrapping=TextWrapping.Wrap};var save=new Button{Content="保存",Padding=new Thickness(8),Margin=new Thickness(0,10,0,0)};panel.Children.Add(save);panel.Children.Add(status);UpdateRootDetails? pending=null;
         save.Click+=async(_,_)=>{if(_saving)return;int? generation=null;if(!string.IsNullOrWhiteSpace(gen.Text)){if(!int.TryParse(gen.Text,out var n)||n<=0){status.Text="主世系请输入正整数。";return;}generation=n;}pending??=new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,generation,title.Text.Trim(),notes.Text.Trim(),root.Generation,root.Title,root.Notes);_saving=true;save.IsEnabled=false;
             try{await app.UpdateDetailsAsync(pending);_saving=false;_uncertain=false;DialogResult=true;}
-            catch(Exception error){try{if(!await app.HasDetailsReceiptAsync(pending.OperationId)){pending=null;_uncertain=false;status.Text=$"未保存：{error.Message}，输入已保留。";}else{_uncertain=true;status.Text="保存结果待确认，请重试。";}}catch{_uncertain=true;status.Text="保存结果未确认，请重试。";}foreach(var box in new[]{gen,title,notes})box.IsReadOnly=_uncertain;}
+            catch(Exception error){try{if(!await app.HasDetailsReceiptAsync(pending.OperationId)){pending=null;_uncertain=false;status.Text=$"未保存：{error.Message}，输入已保留。";}else{_uncertain=true;status.Text="保存结果待确认，请重试。";}}catch{_uncertain=true;status.Text="保存结果未确认，请重试。";}gen.IsReadOnly=true;title.IsReadOnly=notes.IsReadOnly=_uncertain;}
             finally{_saving=false;save.IsEnabled=true;}};
         Closing+=(_,e)=>{if(_saving||_uncertain){e.Cancel=true;status.Text="保存尚未确认，请重试。";}};Content=panel;
     }
@@ -73,9 +108,9 @@ internal sealed class V1RootDetailsDialog : Window
         Title="录入首节点（可取消）"; Width=420; Height=460; WindowStartupLocation=WindowStartupLocation.CenterOwner;
         var panel=new StackPanel { Margin=new Thickness(16) }; panel.Children.Add(new TextBlock { Text="姓氏："+surname });
         void Add(string label,TextBox box) { panel.Children.Add(new TextBlock { Text=label, Margin=new Thickness(0,8,0,2) }); panel.Children.Add(box); }
-        Add("谱名",_name); Add("主世系（以房头为一世，可留空）",_generation); Add("称谓",_title); Add("备注",_notes);
+        Add("谱名",_name); Add("主世系（以房头为一世，必填）",_generation); Add("称谓",_title); Add("备注",_notes);
         var status=new TextBlock { Foreground=System.Windows.Media.Brushes.Firebrick, TextWrapping=TextWrapping.Wrap }; var save=new Button { Content="保存首节点", Padding=new Thickness(8), Margin=new Thickness(0,10,0,0) }; var cancel=new Button { Content="暂不录入", Padding=new Thickness(8) }; panel.Children.Add(save); panel.Children.Add(cancel); panel.Children.Add(status);
-        save.Click += async (_,_) => { if(_saving)return; if(string.IsNullOrWhiteSpace(_name.Text)) {status.Text="请填写谱名；取消不会创建人物。";return;} int? gen=null; if(!string.IsNullOrWhiteSpace(_generation.Text)) {if(!int.TryParse(_generation.Text,out var n)||n<=0){status.Text="主世系请输入正整数。";return;}gen=n;} Command ??= new(Guid.NewGuid(),g,l,RootNameMode.Named,surname+_name.Text.Trim(),gen,_title.Text.Trim(),_notes.Text.Trim()); _saving=true;save.IsEnabled=false; cancel.IsEnabled=false;
+        save.Click += async (_,_) => { if(_saving)return; if(string.IsNullOrWhiteSpace(_name.Text)) {status.Text="请填写谱名；取消不会创建人物。";return;} if(!int.TryParse(_generation.Text,out var gen)||gen<=0){status.Text="主世系请输入正整数。";return;} Command ??= new(Guid.NewGuid(),g,l,RootNameMode.Named,surname+_name.Text.Trim(),gen,_title.Text.Trim(),_notes.Text.Trim()); _saving=true;save.IsEnabled=false; cancel.IsEnabled=false;
             try { Created=await app.ExecuteAsync(Command); _uncertain=false;_saving=false;DialogResult=true; }
             catch(Exception error) { try {if((await app.ReadAsync(g,l)).Nodes.Count==0){Command=null;_uncertain=false;status.Text=$"未保存：{error.Message}，输入已保留。";}else{_uncertain=true;status.Text="保存结果待确认，请重试同一操作。";}}catch{_uncertain=true;status.Text="保存结果未确认，请重试同一操作。";} foreach(var box in new[]{_name,_generation,_title,_notes})box.IsReadOnly=_uncertain; }
             finally { _saving=false;save.IsEnabled=true;cancel.IsEnabled=!_uncertain; } };

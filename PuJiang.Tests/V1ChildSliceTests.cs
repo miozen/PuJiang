@@ -30,7 +30,7 @@ public sealed class V1ChildSliceTests
     {
         var (db, g, l, root) = await Setup();
         var children = new ChildApplication(new IsolatedChildStore(db)); var family = new SpouseApplication(new IsolatedSpouseStore(db));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", Generation: 2, ExpectedParentGeneration: 1));
         var spouse = await family.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var second = await family.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "赵氏"));
         var other = Guid.NewGuid();
@@ -51,8 +51,8 @@ public sealed class V1ChildSliceTests
     {
         var (db, g, l, root) = await Setup();
         var children = new ChildApplication(new IsolatedChildStore(db)); var family = new SpouseApplication(new IsolatedSpouseStore(db));
-        var a = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲"));
-        var descendant = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, a.PersonId, a.PlacementId, RootNameMode.Named, "冯乙"));
+        var a = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", Generation: 2, ExpectedParentGeneration: 1));
+        var descendant = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, a.PersonId, a.PlacementId, RootNameMode.Named, "冯乙", Generation: 3, ExpectedParentGeneration: 2));
         var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
         await profiles.UpdateAsync(new(Guid.NewGuid(), g, l, descendant.PersonId, descendant.PlacementId, "冯乙", PersonSex.Female, "冯乙", PersonSex.Male));
         await using (var context = db.OpenContext()) { var u=Guid.NewGuid(); context.SpouseUnions.Add(new(u, l, root.PersonId, descendant.PersonId)); context.SpouseOrderGroups.Add(new() {LineageId=l,FatherId=root.PersonId,Revision=1}); context.SpouseOrderEntries.Add(new() {LineageId=l,FatherId=root.PersonId,UnionId=u,Position=1}); await context.SaveChangesAsync(); }
@@ -65,7 +65,7 @@ public sealed class V1ChildSliceTests
     {
         var (db, g, l, root) = await Setup();
         var children = new ChildApplication(new IsolatedChildStore(db)); var family = new SpouseApplication(new IsolatedSpouseStore(db));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", Generation: 2, ExpectedParentGeneration: 1));
         var outsider = Guid.NewGuid();
         await using (var context = db.OpenContext())
         {
@@ -84,8 +84,8 @@ public sealed class V1ChildSliceTests
         var (db, g, l, root) = await Setup();
         var children = new ChildApplication(new IsolatedChildStore(db));
         var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
-        var a = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯原名"));
-        var b = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙"));
+        var a = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯原名", Generation: 2, ExpectedParentGeneration: 1));
+        var b = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙", Generation: 2, ExpectedParentGeneration: 1));
         var update = new UpdatePersonProfile(Guid.NewGuid(), g, l, a.PersonId, a.PlacementId, "冯甲", PersonSex.Female, "冯原名", PersonSex.Male);
         await profiles.UpdateAsync(update); await profiles.UpdateAsync(update);
         var nodes = await children.ReadAsync(g, l);
@@ -113,7 +113,7 @@ public sealed class V1ChildSliceTests
             await context.SaveChangesAsync();
         }
         var children = new ChildApplication(new IsolatedChildStore(db));
-        var son = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子"));
+        var son = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", Generation: 2, ExpectedParentGeneration: 1));
         var read = await children.ReadAsync(g, l);
         Assert.Equal(1, read.Single(x => x.PersonId == son.PersonId).Position);
         var daughter = read.Single(x => x.PersonId == daughterId); Assert.Equal(2, daughter.Position); Assert.Equal(relationId, daughter.FatherRelationshipId);
@@ -122,7 +122,7 @@ public sealed class V1ChildSliceTests
     {
         var database=IsolatedTestDatabase.CreateNew(); var g=Guid.NewGuid();var l=Guid.NewGuid();
         await using(var db=database.OpenContext()){await db.Database.EnsureCreatedAsync();db.Genealogies.Add(new(g,"虚构项目","冯"));db.Lineages.Add(new(l,g,"虚构谱"));await db.SaveChangesAsync();}
-        var root=await new FirstRootApplication(new IsolatedFirstRootStore(database)).ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"冯父"));
+        var root=await new FirstRootApplication(new IsolatedFirstRootStore(database)).ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"冯父", 1));
         return(database,g,l,root);
     }
     [Fact, Trait("Category", "Integration")]
@@ -139,7 +139,7 @@ public sealed class V1ChildSliceTests
         await app.RepairAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, original.Evidence, new[] { a.UnionId }));
         var repaired = await app.ReadSnapshotAsync(g, l, root.PersonId, root.PlacementId); Assert.True(repaired.Revision > 1);
         var children = new ChildApplication(new IsolatedChildStore(db));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "旧稿", 1)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "旧稿", 1, Generation: 2, ExpectedParentGeneration: 1)));
     }
     [Fact, Trait("Category", "Integration")]
     public async Task Repair_of_invalid_union_reference_archives_the_orphan()
@@ -164,7 +164,7 @@ public sealed class V1ChildSliceTests
         var (db, g, l, root) = await Setup(); var app = new SpouseApplication(new IsolatedSpouseStore(db)); var children = new ChildApplication(new IsolatedChildStore(db));
         var a = await app.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var b = await app.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
-        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", 2));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", 2, Generation: 2, ExpectedParentGeneration: 1));
         await using (var c = db.OpenContext()) { var row = await c.SpouseOrderEntries.SingleAsync(x => x.UnionId == b.UnionId); row.Position = 3; await c.SaveChangesAsync(); }
         await Assert.ThrowsAsync<InvalidOperationException>(() => app.ReadSnapshotAsync(g, l, root.PersonId, root.PlacementId));
         var original = await app.ReadRepairAsync(g, l, root.PersonId, root.PlacementId);
@@ -181,8 +181,8 @@ public sealed class V1ChildSliceTests
         var reopened = await new SpouseApplication(new IsolatedSpouseStore(db)).ReadSnapshotAsync(g, l, root.PersonId, root.PlacementId);
         Assert.Equal(new[] { b.UnionId, a.UnionId }, reopened.Nodes.Select(x => x.UnionId)); Assert.True(reopened.Revision > 2);
         Assert.Equal(a.PersonId, Assert.Single(await children.ReadAsync(g, l)).MotherId);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "旧草稿", 2)));
-        var next = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙", reopened.Revision));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "旧草稿", 2, Generation: 2, ExpectedParentGeneration: 1)));
+        var next = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙", reopened.Revision, Generation: 2, ExpectedParentGeneration: 1));
         Assert.Equal(b.PersonId, (await children.ReadAsync(g, l)).Single(x => x.PersonId == next.PersonId).MotherId);
     }
     [Fact, Trait("Category", "Integration")]
@@ -193,13 +193,13 @@ public sealed class V1ChildSliceTests
         var children = new ChildApplication(new IsolatedChildStore(db));
         var first = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var second = await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
-        var before = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", 2));
+        var before = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯甲", 2, Generation: 2, ExpectedParentGeneration: 1));
         var move = new MoveSpouse(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, second.UnionId, first.UnionId, 2);
         await spouses.MoveAsync(move); await spouses.MoveAsync(move);
         await Assert.ThrowsAsync<InvalidOperationException>(() => spouses.MoveAsync(move with { TargetUnionId = second.UnionId, SourceUnionId = first.UnionId }));
         await Assert.ThrowsAsync<InvalidOperationException>(() => spouses.MoveAsync(move with { OperationId = Guid.NewGuid() }));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "过期", 2)));
-        var after = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙", 3));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "过期", 2, Generation: 2, ExpectedParentGeneration: 1)));
+        var after = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯乙", 3, Generation: 2, ExpectedParentGeneration: 1));
         var reopened = new SpouseApplication(new IsolatedSpouseStore(db));
         var snapshot = await reopened.ReadSnapshotAsync(g, l, root.PersonId, root.PlacementId);
         Assert.Equal(3, snapshot.Revision); Assert.Equal(new[] { second.PersonId, first.PersonId }, snapshot.Nodes.Select(x => x.PersonId));
@@ -213,7 +213,7 @@ public sealed class V1ChildSliceTests
     {
         var (db, g, l, root) = await Setup(); var other = Guid.NewGuid();
         await using (var context = db.OpenContext()) { context.Lineages.Add(new(other, g, "另一虚构谱")); await context.SaveChangesAsync(); }
-        var otherRoot = await new FirstRootApplication(new IsolatedFirstRootStore(db)).ExecuteAsync(new(Guid.NewGuid(), g, other, RootNameMode.Named, "冯他"));
+        var otherRoot = await new FirstRootApplication(new IsolatedFirstRootStore(db)).ExecuteAsync(new(Guid.NewGuid(), g, other, RootNameMode.Named, "冯他", 1));
         var app = new SpouseApplication(new IsolatedSpouseStore(db));
         var a = await app.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "李氏"));
         var b = await app.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "王氏"));
@@ -242,7 +242,7 @@ public sealed class V1ChildSliceTests
     public async Task Child_first_spouse_backfills_only_eligible_and_clear_survives_reopen()
     {
         var (db,g,l,root)=await Setup();var children=new ChildApplication(new IsolatedChildStore(db));var spouses=new SpouseApplication(new IsolatedSpouseStore(db));
-        AddChild Child(string name)=>new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,name);
+        AddChild Child(string name)=>new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,name, Generation: 2, ExpectedParentGeneration: 1);
         var a=await children.ExecuteAsync(Child("冯甲"));var b=await children.ExecuteAsync(Child("冯乙"));
         await spouses.SetMotherAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,b.PersonId,null,null,false));
         var add=new AddSpouse(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"李氏");
@@ -268,7 +268,7 @@ public sealed class V1ChildSliceTests
     public async Task Failed_backfill_rolls_back_spouse_and_retry_reuses_operation()
     {
         var(db,g,l,root)=await Setup();var children=new ChildApplication(new IsolatedChildStore(db));var spouses=new SpouseApplication(new IsolatedSpouseStore(db));
-        await children.ExecuteAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯甲"));
+        await children.ExecuteAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯甲", Generation: 2, ExpectedParentGeneration: 1));
         await using(var context=db.OpenContext())await context.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailMother BEFORE INSERT ON BiologicalParents WHEN NEW.Role = 2 BEGIN SELECT RAISE(ABORT, 'injected'); END");
         var command=new AddSpouse(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"李氏");
         await Assert.ThrowsAsync<DbUpdateException>(()=>spouses.AddAsync(command));
@@ -280,7 +280,7 @@ public sealed class V1ChildSliceTests
     public async Task Invalid_position_and_damaged_spouse_order_fail_without_child()
     {
         var(db,g,l,root)=await Setup();var children=new ChildApplication(new IsolatedChildStore(db));
-        var command=new AddChild(Guid.NewGuid(),g,l,root.PersonId,Guid.NewGuid(),RootNameMode.Named,"冯甲");
+        var command=new AddChild(Guid.NewGuid(),g,l,root.PersonId,Guid.NewGuid(),RootNameMode.Named,"冯甲", Generation: 2, ExpectedParentGeneration: 1);
         await Assert.ThrowsAsync<InvalidOperationException>(()=>children.ExecuteAsync(command));
         await using(var context=db.OpenContext()) { var spouse=new Person(Guid.NewGuid(),l,"李氏",PersonSex.Female);var u=Guid.NewGuid();context.People.Add(spouse);context.SpouseUnions.Add(new(u,l,root.PersonId,spouse.Id));context.SpouseOrderGroups.Add(new(){LineageId=l,FatherId=root.PersonId,Revision=1});context.SpouseOrderEntries.Add(new(){LineageId=l,FatherId=root.PersonId,UnionId=u,Position=2});await context.SaveChangesAsync(); }
         var error=await Assert.ThrowsAsync<InvalidOperationException>(()=>children.ExecuteAsync(command with {ParentPlacementId=root.PlacementId})); Assert.Contains("排序",error.Message);
@@ -290,7 +290,7 @@ public sealed class V1ChildSliceTests
     public async Task Mismatched_mother_role_and_failed_child_write_are_rejected_without_partial_data()
     {
         var(db,g,l,root)=await Setup(); var childApp=new ChildApplication(new IsolatedChildStore(db));
-        var command=new AddChild(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯甲",1);
+        var command=new AddChild(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯甲",1, Generation: 2, ExpectedParentGeneration: 1);
         await using(var context=db.OpenContext())
         {
             var spouse=new Person(Guid.NewGuid(),l,"待核实配偶",PersonSex.Male);
