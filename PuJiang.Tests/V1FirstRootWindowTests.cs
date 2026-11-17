@@ -15,6 +15,25 @@ namespace PuJiang.Tests;
 public sealed class V1FirstRootWindowTests
 {
     [Fact, Trait("Category", "UI")]
+    public async Task Child_order_updates_right_panel_and_focus_after_reopen()
+    {
+        var (db,g,l)=await CreateAsync(); var roots=new FirstRootApplication(new IsolatedFirstRootStore(db)); var children=new ChildApplication(new IsolatedChildStore(db)); var spouses=new SpouseApplication(new IsolatedSpouseStore(db)); var profiles=new PersonProfileApplication(new IsolatedPersonProfileStore(db)); var orders=new ChildOrderApplication(new IsolatedChildOrderStore(db));
+        var root=await roots.ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"冯父",1));
+        var a=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯甲",0,2,1));
+        var b=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯乙",0,2,1));
+        await RunSta(async()=> { var w=new V1FirstRootWindow(roots,g,l,"冯",children,spouses,profiles,childOrders:orders); w.Show(); try { await w.ReadyForTest; await w.SelectForTest(b.PersonId,b.PlacementId); Assert.Contains("次子",w.FamilyTextForTest); await w.MoveChildOrderForTest(root.PlacementId,b.PlacementId,a.PlacementId); Assert.Contains("长子",w.FamilyTextForTest); Assert.Equal((b.PersonId,b.PlacementId),(w.FocusForTest.Person!.Value,w.FocusForTest.Placement!.Value)); } finally {w.Close();} });
+        await RunSta(async()=> { var w=new V1FirstRootWindow(roots,g,l,"冯",children,spouses,profiles,childOrders:orders); w.Show(); try { await w.ReadyForTest; await w.SelectForTest(b.PersonId,b.PlacementId); Assert.Contains("长子",w.FamilyTextForTest); } finally {w.Close();} });
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Child_order_failure_keeps_intent_and_retry_saves()
+    {
+        var (db,g,l)=await CreateAsync(); var roots=new FirstRootApplication(new IsolatedFirstRootStore(db)); var children=new ChildApplication(new IsolatedChildStore(db)); var spouses=new SpouseApplication(new IsolatedSpouseStore(db)); var profiles=new PersonProfileApplication(new IsolatedPersonProfileStore(db)); var orders=new ChildOrderApplication(new IsolatedChildOrderStore(db));
+        var root=await roots.ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"冯父",1));
+        var a=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯甲",0,2,1)); var b=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,root.PersonId,root.PlacementId,RootNameMode.Named,"冯乙",0,2,1));
+        await using(var c=db.OpenContext()) await c.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailChildOrderUI BEFORE INSERT ON ChildOrderReceipts BEGIN SELECT RAISE(ABORT, 'injected'); END");
+        await RunSta(async()=> { var w=new V1FirstRootWindow(roots,g,l,"冯",children,spouses,profiles,childOrders:orders); w.Show(); try { await w.ReadyForTest; await w.SelectForTest(b.PersonId,b.PlacementId); await w.MoveChildOrderForTest(root.PlacementId,b.PlacementId,a.PlacementId); Assert.True(w.ChildOrderPendingForTest); Assert.Contains("未保存",w.StatusForTest); Assert.False(w.CanCloseForOwner()); await using(var c=db.OpenContext()) await c.Database.ExecuteSqlRawAsync("DROP TRIGGER FailChildOrderUI"); await w.RetryChildOrderForTest(); Assert.False(w.ChildOrderPendingForTest); Assert.Contains("长子",w.FamilyTextForTest); } finally {w.Close();} });
+    }
+    [Fact, Trait("Category", "UI")]
     public async Task Sibling_draft_cancels_and_stale_mother_preserves_input()
     {
         var (db, g, l) = await CreateAsync();

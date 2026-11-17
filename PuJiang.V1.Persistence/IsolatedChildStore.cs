@@ -72,6 +72,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, createdPerson.Id, parent.Id, ParentRole.Father));
         if (sourceMother is not null) db.BiologicalParents.Add(new BiologicalParent(Guid.NewGuid(), command.LineageId, createdPerson.Id, sourceMother.ParentId, ParentRole.Mother));
         db.SiblingReceipts.Add(new SiblingReceipt { OperationId = command.OperationId, Payload = payload, PersonId = createdPerson.Id, PlacementId = place.Id });
+        await ChildOrderVersions.Touch(db, command.LineageId, parentPlace.Id, ct);
         await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
         return new(createdPerson.Id, place.Id, false);
     }
@@ -131,6 +132,7 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
         db.ChildReceipts.Add(new ChildReceipt { OperationId=command.OperationId, GenealogyId=command.GenealogyId, LineageId=command.LineageId,
             ParentPersonId=command.ParentPersonId, ParentPlacementId=command.ParentPlacementId, NameMode=command.NameMode, Name=command.Name,
             PersonId=child.Id, PlacementId=childPlacement.Id, ExpectedSpouseRevision=command.ExpectedSpouseRevision, Generation=command.Generation, ExpectedParentGeneration=command.ExpectedParentGeneration });
+        await ChildOrderVersions.Touch(db, command.LineageId, placement.Id, cancellationToken);
         await db.SaveChangesAsync(cancellationToken); await tx.CommitAsync(cancellationToken);
         return new(child.Id, childPlacement.Id, false);
     }

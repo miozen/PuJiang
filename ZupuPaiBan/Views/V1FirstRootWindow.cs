@@ -18,6 +18,13 @@ public sealed class V1FirstRootWindow : Window
     private readonly SpouseApplication? _spouses;
     private readonly PersonProfileApplication? _profiles;
     private readonly GenerationApplication? _generations;
+    private readonly ChildOrderApplication? _childOrders;
+    private readonly Dictionary<Guid, ChildOrderSnapshot> _orderSnapshots = new();
+    private readonly Dictionary<Guid, string> _orderIssues = new();
+    private MoveChildOrder? _pendingChildOrder;
+    private bool _childOrderUnknown;
+    private Point? _childDragStart;
+    private ChildOrderSnapshot? _childDragSnapshot;
     private readonly Guid _genealogy;
     private Guid _lineage;
     private readonly LineageApplication? _lineages;
@@ -36,6 +43,7 @@ public sealed class V1FirstRootWindow : Window
     private readonly Button _create = new() { Content = "添加首节点", Padding = new Thickness(6) };
     private readonly Button _reload = new() { Content = "重新读取", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _retry = new() { Content = "重试保存", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed };
+    private readonly Button _abandonOrder = new() { Content = "放弃排行调整", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed };
     private readonly Button _rebindChild = new() { Content = "重新绑定子女草稿", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed };
     private readonly Button _addChild = new() { Content = "添加子女", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
     private readonly Button _addSibling = new() { Content = "添加兄弟姐妹", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
@@ -64,7 +72,7 @@ public sealed class V1FirstRootWindow : Window
     private IReadOnlyList<SpouseNode> _visibleSpouses = Array.Empty<SpouseNode>();
     private Point? _draftLocation;
     private readonly Guid _draftId = Guid.NewGuid();
-    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSibling is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null;
+    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSibling is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null || _pendingChildOrder is not null;
     private bool _saving, _uncertain, _hasRoot, _loadedOk;
     private Guid? _personId, _placementId;
     private Point? _panStart;
@@ -75,10 +83,10 @@ public sealed class V1FirstRootWindow : Window
     private double _contentWidth = 650, _contentHeight = 360;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    internal V1FirstRootWindow(FirstRootApplication app, Guid genealogy, Guid lineage, string surname, ChildApplication? children = null, SpouseApplication? spouses = null, PersonProfileApplication? profiles = null, LineageApplication? lineages = null, GenerationApplication? generations = null)
+    internal V1FirstRootWindow(FirstRootApplication app, Guid genealogy, Guid lineage, string surname, ChildApplication? children = null, SpouseApplication? spouses = null, PersonProfileApplication? profiles = null, LineageApplication? lineages = null, GenerationApplication? generations = null, ChildOrderApplication? childOrders = null)
     {
         _app = app; _genealogy = genealogy; _lineage = lineage; _surname = surname;
-        _children = children; _spouses = spouses; _profiles = profiles; _lineages = lineages; _generations = generations;
+        _children = children; _spouses = spouses; _profiles = profiles; _lineages = lineages; _generations = generations; _childOrders = childOrders;
         Title = "世系编修工作台 — V1 虚构隔离样本"; Width = 1100; Height = 720; MinWidth = 760; MinHeight = 480;
         var outer = new DockPanel(); DockPanel.SetDock(_status, Dock.Bottom); outer.Children.Add(_status);
         var grid = new Grid(); grid.ColumnDefinitions.Add(new() { Width = new GridLength(210) }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(300) });
@@ -87,7 +95,7 @@ public sealed class V1FirstRootWindow : Window
         grid.Children.Add(left);
         var center = new DockPanel { Margin = new Thickness(8) }; _canvasPanel = center; Grid.SetColumn(center, 1);
         var notice = new TextBlock { Text = "隔离虚构样本；退出应用后不会自动恢复。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) }; DockPanel.SetDock(notice, Dock.Top); center.Children.Add(notice);
-        var tools = new WrapPanel(); tools.Children.Add(_create); tools.Children.Add(_addChild); tools.Children.Add(_addSibling); tools.Children.Add(_addSpouse); tools.Children.Add(_reload); tools.Children.Add(_retry); tools.Children.Add(_rebindChild); DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
+        var tools = new WrapPanel(); tools.Children.Add(_create); tools.Children.Add(_addChild); tools.Children.Add(_addSibling); tools.Children.Add(_addSpouse); tools.Children.Add(_reload); tools.Children.Add(_retry); tools.Children.Add(_abandonOrder); tools.Children.Add(_rebindChild); DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
         DockPanel.SetDock(_generationHeader, Dock.Top); center.Children.Add(_generationHeader);
         _canvas.LayoutTransform = _scale; _scroll.Content = _canvas; center.Children.Add(_scroll); grid.Children.Add(center); Grid.SetColumn(_home, 1); grid.Children.Add(_home);
         _scroll.SizeChanged += (_, _) => FillCanvasViewport();
@@ -100,7 +108,8 @@ public sealed class V1FirstRootWindow : Window
         _addChild.Click += (_, _) => BeginFamilyInput(InputKind.Child);
         _addSibling.Click += (_, _) => BeginSiblingInput();
         _addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse);
-        _retry.Click += async (_, _) => { if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
+        _retry.Click += async (_, _) => { if (_pendingChildOrder is not null) await SubmitChildOrderAsync(); else if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
+        _abandonOrder.Click += async (_, _) => { if (_saving || _childOrderUnknown) return; _pendingChildOrder=null; UpdateButtons(); try { await ReloadCoreAsync(); _status.Text="已放弃排行调整并重新读取。"; } catch(Exception error) { _status.Text=$"重新读取失败：{error.Message}"; } };
         _rebindChild.Click += async (_, _) => await RebindChildAsync();
         _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas || _hasRoot || _saving || _pending is not null) return; e.Handled = true; var menu = new ContextMenu(); var item = new MenuItem { Header = "添加首节点" }; item.Click += (_, _) => BeginNamed(); menu.Items.Add(item); menu.PlacementTarget = _canvas; menu.IsOpen = true; };
         _scroll.PreviewMouseWheel += (_, e) => { var point = e.GetPosition(_scroll); var old = _scale.ScaleX; var next = Math.Clamp(old * (e.Delta > 0 ? 1.15 : 1 / 1.15), 0.4, 2.5); var x = (_scroll.HorizontalOffset + point.X) / old; var y = (_scroll.VerticalOffset + point.Y) / old; _scale.ScaleX = _scale.ScaleY = next; _scroll.UpdateLayout(); _scroll.ScrollToHorizontalOffset(x * next - point.X); _scroll.ScrollToVerticalOffset(y * next - point.Y); UpdateGenerationHeader(); e.Handled = true; };
@@ -414,6 +423,12 @@ public sealed class V1FirstRootWindow : Window
         var result = await _app.ReadAsync(_genealogy, _lineage);
         var children = _children is null ? Array.Empty<ChildNode>() : await _children.ReadAsync(_genealogy, _lineage);
         _rootNodes = result.Nodes; _childNodes = children;
+        _orderSnapshots.Clear(); _orderIssues.Clear();
+        if (_childOrders is not null) foreach (var group in children.GroupBy(x => x.ParentPlacementId))
+        {
+            try { var snapshot=await _childOrders.ReadAsync(_genealogy,_lineage,group.Key); if(snapshot.Items.Select(x=>(x.PlacementId,x.PersonId,x.Sex,x.Position)).SequenceEqual(group.OrderBy(x=>x.Position).Select(x=>(x.PlacementId,x.PersonId,x.Sex,x.Position)))) _orderSnapshots[group.Key]=snapshot; else _orderIssues[group.Key]="同胞资料读取期间已变化，请重新读取。"; }
+            catch (InvalidOperationException error) { _orderIssues[group.Key]=error.Message; }
+        }
         _hasRoot = _rootNodes.Count > 0; _loadedOk = true;
         if (_personId is Guid person && _placementId is Guid placement &&
             !_rootNodes.Any(n => n.PersonId == person && n.PlacementId == placement) &&
@@ -463,7 +478,16 @@ public sealed class V1FirstRootWindow : Window
             var visibleName = node.Name.Length == 0 ? "" : node.Name.StartsWith(_surname, StringComparison.Ordinal) ? node.Name[_surname.Length..] : node.Name;
             var card = new Border { Width = item.Width, Height = item.Height, Background = node.Person == _personId && node.Placement == _placementId ? Brushes.DarkOrange : Brushes.WhiteSmoke, BorderBrush = node.Name.Length == 0 ? Brushes.SlateGray : Brushes.Transparent, BorderThickness = node.Name.Length == 0 ? new Thickness(1) : new Thickness(0), Padding = new Thickness(4), Child = new TextBlock { Text = visibleName, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis }, Tag = node.Original };
             Canvas.SetLeft(card, item.X + 20); Canvas.SetTop(card, item.Y + 50); _canvas.Children.Add(card);
-            card.MouseLeftButtonDown += async (_, e) => { e.Handled = true; if (_input is not null || HasPending || _saving || _profileDirty) return; _personId = node.Person; _placementId = node.Placement; UpdateSelection(); await RefreshFamilyDetailsAsync(); RenderCanvas(); };
+            card.MouseLeftButtonDown += async (_, e) => { e.Handled = true; if (_input is not null || HasPending || _saving || _profileDirty || (_personId==node.Person && _placementId==node.Placement)) return; _personId = node.Person; _placementId = node.Placement; UpdateSelection(); await RefreshFamilyDetailsAsync(); RenderCanvas(); };
+            if (node.Original is ChildNode orderChild && _childOrders is not null && _orderSnapshots.TryGetValue(orderChild.ParentPlacementId, out var orderSnapshot))
+            {
+                card.AllowDrop=true;
+                card.PreviewMouseLeftButtonDown += (_,e) => { if(_saving || HasPending || _input is not null || _profileDirty || _placementId!=orderChild.PlacementId) return; _childDragStart=e.GetPosition(card); _childDragSnapshot=orderSnapshot; card.CaptureMouse(); };
+                card.PreviewMouseLeftButtonUp += (_,_) => { _childDragStart=null; if(card.IsMouseCaptured) card.ReleaseMouseCapture(); };
+                card.PreviewMouseMove += (_,e) => { if(_childDragStart is not Point start || e.LeftButton!=MouseButtonState.Pressed) return; var pt=e.GetPosition(card); if(Math.Abs(pt.X-start.X)<SystemParameters.MinimumHorizontalDragDistance && Math.Abs(pt.Y-start.Y)<SystemParameters.MinimumVerticalDragDistance) return; _childDragStart=null; if(card.IsMouseCaptured) card.ReleaseMouseCapture(); DragDrop.DoDragDrop(card,new DataObject("PuJiang.V1.ChildPlacement",orderChild.PlacementId.ToString("D")),DragDropEffects.Move); };
+                card.DragOver += (_,e) => { e.Effects=e.Data.GetDataPresent("PuJiang.V1.ChildPlacement") ? DragDropEffects.Move : DragDropEffects.None; e.Handled=true; };
+                card.Drop += async (_,e) => { e.Handled=true; if(_saving || HasPending || _profileDirty || _input is not null || _childDragSnapshot is null || e.Data.GetData("PuJiang.V1.ChildPlacement") is not string id || !Guid.TryParse(id,out var source)) return; await BeginChildOrderAsync(_childDragSnapshot,source,orderChild.PlacementId); };
+            }
             if (_children is not null && _spouses is not null)
             {
                 var menu = new ContextMenu();
@@ -476,6 +500,12 @@ public sealed class V1FirstRootWindow : Window
                 var addChild = new MenuItem { Header = "添加子女" }; addChild.Click += (_, _) => BeginFamilyInput(InputKind.Child); menu.Items.Add(addChild);
                 var addSibling = new MenuItem { Header = "添加兄弟姐妹", IsEnabled = node.Parent is not null }; addSibling.Click += (_, _) => BeginSiblingInput(); menu.Items.Add(addSibling);
                 var addSpouse = new MenuItem { Header = "添加配偶" }; addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse); menu.Items.Add(addSpouse);
+                if(node.Original is ChildNode childNode && _childOrders is not null && _orderSnapshots.TryGetValue(childNode.ParentPlacementId,out var group))
+                {
+                    var peers=group.Items.Where(x=>x.Sex==childNode.Sex).OrderBy(x=>x.Position).ToArray(); var idx=Array.FindIndex(peers,x=>x.PlacementId==childNode.PlacementId);
+                    var up=new MenuItem {Header="上移",IsEnabled=idx>0}; if(idx>0) up.Click+=async(_,_)=>await BeginChildOrderAsync(group,childNode.PlacementId,peers[idx-1].PlacementId); menu.Items.Add(up);
+                    var down=new MenuItem {Header="下移",IsEnabled=idx>=0 && idx+1<peers.Length}; if(idx>=0 && idx+1<peers.Length) down.Click+=async(_,_)=>await BeginChildOrderAsync(group,childNode.PlacementId,peers[idx+1].PlacementId); menu.Items.Add(down);
+                }
                 card.ContextMenu = menu;
             }
             if (node.Person == _personId && node.Placement == _placementId)
@@ -515,6 +545,40 @@ public sealed class V1FirstRootWindow : Window
         FillCanvasViewport();
     }
     private sealed record DisplayNode(Guid Person, Guid Placement, Guid? Parent, string Name, int Order, Guid? Relationship, object? Original, int? Generation = null);
+    private static string RankName(int rank, PersonSex sex)
+    {
+        string[] digits={"零","一","二","三","四","五","六","七","八","九"};
+        var prefix=rank==1?"长":rank==2?"次":rank<10?digits[rank]:rank<100?(rank<20?"十":digits[rank/10]+"十")+(rank%10==0?"":digits[rank%10]):$"第{rank}";
+        return prefix+(sex==PersonSex.Male?"子":"女");
+    }
+    private async Task BeginChildOrderAsync(ChildOrderSnapshot snapshot, Guid source, Guid target)
+    {
+        if(_saving || HasPending || _input is not null || _profileDirty || _childOrders is null || source==target) return;
+        var a=snapshot.Items.SingleOrDefault(x=>x.PlacementId==source); var b=snapshot.Items.SingleOrDefault(x=>x.PlacementId==target);
+        if(a is null || b is null || a.Sex!=b.Sex) { _status.Text="只能调整同一父位置、同性别组的排行。"; return; }
+        _personId=a.PersonId; _placementId=a.PlacementId;
+        _pendingChildOrder=new(Guid.NewGuid(),_genealogy,_lineage,snapshot.ParentPlacementId,source,target,snapshot.Revision,snapshot.Evidence);
+        await SubmitChildOrderAsync();
+    }
+    private async Task SubmitChildOrderAsync()
+    {
+        if(_saving || _pendingChildOrder is not { } command || _childOrders is null) return;
+        _saving=true; UpdateButtons();
+        try
+        {
+            try { await _childOrders.MoveAsync(command); _pendingChildOrder=null; _childOrderUnknown=false; }
+            catch(Exception error)
+            {
+                try { _childOrderUnknown=await _childOrders.HasReceiptAsync(command.OperationId); }
+                catch { _childOrderUnknown=true; }
+                _status.Text=_childOrderUnknown ? $"排行保存结果未确认：{error.Message}。请重试同一操作。" : $"排行未保存：{error.Message}。调整意图已保留，可重试或放弃后重新读取。";
+                return;
+            }
+            try { await ReloadCoreAsync(); _status.Text="排行已保存并重新读取。"; }
+            catch(Exception error) { _status.Text=$"排行已保存，但画布读取失败：{error.Message}。请重新读取。"; }
+        }
+        finally { _saving=false; UpdateButtons(); }
+    }
     private void UpdateSelection()
     {
         foreach (var card in _canvas.Children.OfType<Border>())
@@ -616,6 +680,12 @@ public sealed class V1FirstRootWindow : Window
             }
             var child = _childNodes.FirstOrDefault(x => x.PersonId == person && x.PlacementId == placement);
             if (child is null) return;
+            if (_orderIssues.TryGetValue(child.ParentPlacementId,out var issue)) _familyDetails.Children.Add(new TextBlock { Text="排行暂不可调整："+issue, TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,8,0,0) });
+            if (_orderSnapshots.TryGetValue(child.ParentPlacementId,out var rankGroup))
+            {
+                var group=rankGroup.Items.Where(x=>x.Sex==child.Sex).OrderBy(x=>x.Position).ToArray(); var rank=Array.FindIndex(group,x=>x.PlacementId==placement)+1;
+                if(rank>0) _familyDetails.Children.Add(new TextBlock {Text="实际排行："+RankName(rank,child.Sex),Margin=new Thickness(0,8,0,0)});
+            }
             var parentPerson = _rootNodes.Where(x => x.PlacementId == child.ParentPlacementId).Select(x => (Guid?)x.PersonId)
                 .Concat(_childNodes.Where(x => x.PlacementId == child.ParentPlacementId).Select(x => (Guid?)x.PersonId)).SingleOrDefault()
                 ?? throw new InvalidOperationException("父位置缺失。");
@@ -666,8 +736,8 @@ public sealed class V1FirstRootWindow : Window
     private void Select(RootNode node) { _personId = node.PersonId; _placementId = node.PlacementId; _details.Text = $"姓名：{(node.Name.Length == 0 ? "（未填写姓名）" : node.Name)}"; foreach (var card in _canvas.Children.OfType<Border>()) if (card.Tag is RootNode value) card.Background = value.PersonId == _personId && value.PlacementId == _placementId ? Brushes.DarkOrange : Brushes.WhiteSmoke; }
     private void ClearFocus() { _detailsVersion++; _personId = null; _placementId = null; _selectedSex = null; _visibleSpouses = Array.Empty<SpouseNode>(); _details.Text = "未选中人物"; _familyDetails.Children.Clear(); RenderCanvas(); UpdateButtons(); }
     private void CancelInput() { if (_input is null) return; if (_inputHost is not null) _canvas.Children.Remove(_inputHost); if (_generationInput is not null) _canvas.Children.Remove(_generationInput); if (_generationLabel is not null) _canvas.Children.Remove(_generationLabel); _generationInput = null; _generationLabel = null; _inputHost = null; _input = null; _siblingDraft = null; _rebindChild.Visibility = Visibility.Collapsed; RenderCanvas(); _status.Text = "已取消输入，未创建人物。"; }
-    private void UpdateButtons() { _create.IsEnabled = _loadedOk && !_saving && !_hasRoot && !HasPending; _reload.IsEnabled = !_saving && !HasPending && !_profileDirty; var ready = _loadedOk && !_saving && !HasPending && !_profileDirty && _input is null && _personId is not null && _placementId is not null; var canAdd = ready && (_profiles is null || _selectedSex == PersonSex.Male); _addChild.IsEnabled = canAdd && _children is not null; _addSibling.IsEnabled = ready && _children is not null && _childNodes.Any(x => x.PersonId == _personId && x.PlacementId == _placementId); _addSpouse.IsEnabled = canAdd && _spouses is not null; _retry.Visibility = _uncertain ? Visibility.Visible : Visibility.Collapsed; _retry.IsEnabled = !_saving; }
-    internal bool CanCloseForOwner() { if (!_saving && !HasPending && _input is null && !_profileDirty) return true; _status.Text = _uncertain ? "保存结果尚未确认，请重试以保留输入。" : "请先完成或取消当前输入。"; return false; }
+    private void UpdateButtons() { _create.IsEnabled = _loadedOk && !_saving && !_hasRoot && !HasPending; _reload.IsEnabled = !_saving && !HasPending && !_profileDirty; var ready = _loadedOk && !_saving && !HasPending && !_profileDirty && _input is null && _personId is not null && _placementId is not null; var canAdd = ready && (_profiles is null || _selectedSex == PersonSex.Male); _addChild.IsEnabled = canAdd && _children is not null; _addSibling.IsEnabled = ready && _children is not null && _childNodes.Any(x => x.PersonId == _personId && x.PlacementId == _placementId); _addSpouse.IsEnabled = canAdd && _spouses is not null; _retry.Visibility = _uncertain || _pendingChildOrder is not null ? Visibility.Visible : Visibility.Collapsed; _retry.IsEnabled = !_saving; _abandonOrder.Visibility = _pendingChildOrder is not null && !_childOrderUnknown ? Visibility.Visible : Visibility.Collapsed; _abandonOrder.IsEnabled=!_saving; }
+    internal bool CanCloseForOwner() { if (!_saving && !HasPending && _input is null && !_profileDirty) return true; _status.Text = _uncertain || _childOrderUnknown ? "保存结果尚未确认，请重试以保留输入。" : "请先完成或取消当前输入。"; return false; }
     private void OnClosing(object? sender, CancelEventArgs e) { if (!CanCloseForOwner()) e.Cancel = true; }
 
     internal Task ReadyForTest => _ready.Task;
@@ -685,6 +755,10 @@ public sealed class V1FirstRootWindow : Window
     internal Task ConfirmForTest() => ConfirmNamedAsync();
     internal Task RetryForTest() => SubmitPendingAsync();
     internal Task RetryFamilyForTest() => SubmitFamilyAsync();
+    internal Task MoveChildOrderForTest(Guid parent, Guid source, Guid target) => BeginChildOrderAsync(_orderSnapshots[parent],source,target);
+    internal Task RetryChildOrderForTest() => SubmitChildOrderAsync();
+    internal bool ChildOrderPendingForTest => _pendingChildOrder is not null;
+    internal string FamilyTextForTest => string.Join("\n",_familyDetails.Children.OfType<TextBlock>().Select(x=>x.Text));
     internal Task ReloadForTest() => ReloadAsync();
     internal void CancelForTest() => CancelInput();
     internal (Guid? Person, Guid? Placement) FocusForTest => (_personId, _placementId);

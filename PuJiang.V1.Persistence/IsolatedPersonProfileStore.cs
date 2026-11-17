@@ -73,6 +73,7 @@ public sealed class IsolatedPersonProfileStore(IsolatedTestDatabase database) : 
                 var target = command.Sex == PersonSex.Male ? ordered.Count(x => x.Person.Sex == PersonSex.Male) : ordered.Count;
                 ordered.Insert(target, selected);
                 for (int i = 0; i < ordered.Count; i++) ordered[i].Place.SetPosition(i + 1);
+                await ChildOrderVersions.Touch(db, command.LineageId, parent, cancellationToken);
             }
         }
         person.UpdateProfile(command.Name, command.Sex);

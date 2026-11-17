@@ -48,6 +48,8 @@ public sealed class V1Context : DbContext
     internal DbSet<ChildReceipt> ChildReceipts => Set<ChildReceipt>();
     internal DbSet<SiblingReceipt> SiblingReceipts => Set<SiblingReceipt>();
     internal DbSet<GenerationReceipt> GenerationReceipts => Set<GenerationReceipt>();
+    internal DbSet<ChildOrderVersion> ChildOrderVersions => Set<ChildOrderVersion>();
+    internal DbSet<ChildOrderReceipt> ChildOrderReceipts => Set<ChildOrderReceipt>();
     internal DbSet<SpouseReceipt> SpouseReceipts => Set<SpouseReceipt>();
     internal DbSet<MotherReceipt> MotherReceipts => Set<MotherReceipt>();
     internal DbSet<PersonProfileReceipt> PersonProfileReceipts => Set<PersonProfileReceipt>();
@@ -66,6 +68,9 @@ public sealed class V1Context : DbContext
         b.Entity<RootDetailsReceipt>().HasKey(x => x.OperationId);
         b.Entity<SiblingReceipt>().HasKey(x => x.OperationId);
         b.Entity<GenerationReceipt>().HasKey(x => x.OperationId);
+        b.Entity<ChildOrderVersion>().HasKey(x => new { x.LineageId, x.ParentPlacementId });
+        b.Entity<ChildOrderVersion>().HasOne<Placement>().WithMany().HasForeignKey(x => new { x.LineageId, Id = x.ParentPlacementId }).HasPrincipalKey(x => new { x.LineageId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<ChildOrderReceipt>().HasKey(x => x.OperationId);
         b.Entity<Person>().ToTable("People", t => t.HasCheckConstraint("CK_Person_Id", nonempty)).HasKey(x => x.Id);
         b.Entity<Person>().HasAlternateKey(x => new { x.LineageId, x.Id });
         b.Entity<Person>().Property(x => x.Name).IsRequired();
