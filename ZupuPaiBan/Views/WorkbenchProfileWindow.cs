@@ -27,6 +27,7 @@ public sealed class WorkbenchProfileWindow : Window
     }
     private PuJiang.V1.Persistence.IsolatedSample? _v1Sample;
     internal Func<Task<PuJiang.V1.Persistence.IsolatedSample>>? IsolatedSampleProvider { get; init; }
+    internal Func<Task<PuJiang.V1.Persistence.IsolatedSample>>? NewIsolatedSampleProvider { get; init; }
     private bool _v1Opening;
     private readonly TargetContextCoordinator _coordinator;
     private readonly WorkbenchDraftSession _session;
@@ -205,6 +206,8 @@ public sealed class WorkbenchProfileWindow : Window
         create.Click += async (_, _) => await BeginInlineRootAsync(1); tools.Children.Add(create);
         var isolated = new Button { Content = "V1 隔离样本", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
         isolated.Click += async (_, _) => await OpenV1SampleAsync(); tools.Children.Add(isolated);
+        var newSample = new Button { Content = "新建 V1 虚构样本", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
+        newSample.Click += async (_, _) => await OpenV1SampleAsync(true); tools.Children.Add(newSample);
         var reopen = new Button { Content = "重新打开画布", Padding = new Thickness(6), Margin = new Thickness(5, 0, 0, 0) };
         reopen.Click += async (_, _) => await ReopenCanvasAsync(); tools.Children.Add(reopen);
         DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
@@ -283,15 +286,16 @@ public sealed class WorkbenchProfileWindow : Window
         Closing += OnClosing;
         ShowDraft();
     }
-    private async Task OpenV1SampleAsync()
+    private async Task OpenV1SampleAsync(bool createNew = false)
     {
         if (_v1Opening) return;
         var existing = OwnedWindows.OfType<V1FirstRootWindow>().FirstOrDefault();
-        if (existing is not null) { existing.Activate(); return; }
+        if (existing is not null) { if (createNew) _status.Text = "请先关闭当前虚构样本，未提交输入将按现有提示处理。"; existing.Activate(); return; }
         _v1Opening = true;
         try
         {
-            _v1Sample ??= await (IsolatedSampleProvider?.Invoke() ?? PuJiang.V1.Persistence.IsolatedSample.CreateAsync());
+            if (createNew) _v1Sample = await (NewIsolatedSampleProvider?.Invoke() ?? PuJiang.V1.Persistence.ControlledFictionalSamples.CreateAsync());
+            else _v1Sample ??= await (IsolatedSampleProvider?.Invoke() ?? PuJiang.V1.Persistence.ControlledFictionalSamples.OpenLatestOrCreateAsync());
             var app = new PuJiang.V1.Application.FirstRootApplication(new PuJiang.V1.Persistence.IsolatedFirstRootStore(_v1Sample.Database));
             var children = new PuJiang.V1.Application.ChildApplication(new PuJiang.V1.Persistence.IsolatedChildStore(_v1Sample.Database));
             var spouses = new PuJiang.V1.Application.SpouseApplication(new PuJiang.V1.Persistence.IsolatedSpouseStore(_v1Sample.Database));

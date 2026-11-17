@@ -9,6 +9,11 @@ public sealed record IsolatedSample(IsolatedTestDatabase Database, Guid Genealog
     public static async Task<IsolatedSample> CreateAsync()
     {
         var database = IsolatedTestDatabase.CreateNew();
+        return await InitializeAsync(database);
+    }
+
+    internal static async Task<IsolatedSample> InitializeAsync(IsolatedTestDatabase database)
+    {
         var genealogy = Guid.NewGuid(); var lineage = Guid.NewGuid();
         await using var context = database.OpenContext();
         await context.Database.EnsureCreatedAsync();

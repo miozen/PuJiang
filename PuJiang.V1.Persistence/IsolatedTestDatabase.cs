@@ -5,15 +5,20 @@ using PuJiang.Domain;
 namespace PuJiang.V1.Persistence;
 
 // A capability for a newly allocated test database only; no caller-supplied path or production registration.
-public sealed class IsolatedTestDatabase
+public sealed class IsolatedTestDatabase : IDisposable
 {
     private readonly string _connectionString;
+    private readonly IDisposable? _pathLease;
+    private bool _disposed;
     public string DatabasePath { get; }
-    private IsolatedTestDatabase(string path)
+    private IsolatedTestDatabase(string path, IDisposable? pathLease = null)
     {
         DatabasePath = path;
+        _pathLease = pathLease;
         _connectionString = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadWrite, ForeignKeys = true, Pooling = false }.ToString();
     }
+    internal static IsolatedTestDatabase FromControlledFile(string path, IDisposable pathLease) => new(path, pathLease);
+    public void Dispose() { _disposed = true; _pathLease?.Dispose(); }
     public static IsolatedTestDatabase CreateNew()
     {
         var root = Path.Combine(Path.GetTempPath(), "PuJiang.V1.IsolatedTests");
@@ -23,7 +28,7 @@ public sealed class IsolatedTestDatabase
         using (new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
         return new IsolatedTestDatabase(path);
     }
-    public V1Context OpenContext() => new(_connectionString);
+    public V1Context OpenContext() { ObjectDisposedException.ThrowIf(_disposed, this); return new(_connectionString); }
 }
 
 public sealed class V1Context : DbContext

@@ -15,8 +15,14 @@ namespace ZupuPaiBan;
 
 public partial class MainWindow : Window
 {
-    private Task<PuJiang.V1.Persistence.IsolatedSample>? _isolatedSample;
-    private Task<PuJiang.V1.Persistence.IsolatedSample> GetIsolatedSampleAsync() => _isolatedSample ??= PuJiang.V1.Persistence.IsolatedSample.CreateAsync();
+    private PuJiang.V1.Persistence.IsolatedSample? _isolatedSample;
+    private async Task<PuJiang.V1.Persistence.IsolatedSample> GetIsolatedSampleAsync() => _isolatedSample ??= await PuJiang.V1.Persistence.ControlledFictionalSamples.OpenLatestOrCreateAsync();
+    private async Task<PuJiang.V1.Persistence.IsolatedSample> CreateIsolatedSampleAsync()
+    {
+        var next = await PuJiang.V1.Persistence.ControlledFictionalSamples.CreateAsync();
+        _isolatedSample?.Database.Dispose();
+        return _isolatedSample = next;
+    }
     private void WorkbenchPrototype_Click(object sender, RoutedEventArgs e) =>
         new WorkbenchPrototypeWindow { Owner = this }.Show();
 
@@ -24,7 +30,7 @@ public partial class MainWindow : Window
     {
         var existing = OwnedWindows.OfType<WorkbenchProfileWindow>().FirstOrDefault();
         if (existing is not null) { existing.Activate(); return; }
-        new WorkbenchProfileWindow(_targetContexts) { Owner = this, AfterCommitAsync = RefreshAfterWorkbenchCommitAsync, IsolatedSampleProvider = GetIsolatedSampleAsync }.Show();
+        new WorkbenchProfileWindow(_targetContexts) { Owner = this, AfterCommitAsync = RefreshAfterWorkbenchCommitAsync, IsolatedSampleProvider = GetIsolatedSampleAsync, NewIsolatedSampleProvider = CreateIsolatedSampleAsync }.Show();
     }
 
     private async Task RefreshAfterWorkbenchCommitAsync(Guid genealogyId)

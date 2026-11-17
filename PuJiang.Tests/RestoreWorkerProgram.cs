@@ -42,6 +42,8 @@ internal static class RestoreWorkerProgram
             return await WpfInflightWorker.RunTargetLinkEditingAsync(args[1]);
         if (args.Length == 3 && args[0] == "--wpf-app-exit")
             return await WpfAppExitWorker.RunAsync(args[1], args[2]);
+        if (args.Length == 3 && args[0] == "--v1-app-reopen")
+            return await V1AppReopenWorker.RunAsync(args[1], args[2]);
         if (args.Length != 3) return 2;
         var target = new TestDatabase(args[0]);
         var sourceDirectory = new TestDatabase(args[1]);

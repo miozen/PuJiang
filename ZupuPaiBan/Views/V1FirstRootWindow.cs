@@ -94,7 +94,7 @@ public sealed class V1FirstRootWindow : Window
         if (_lineages is not null) { var addLineage = new Button { Content="新建谱系", Margin=new Thickness(0,8,0,0), Padding=new Thickness(6) }; left.Children.Add(addLineage); left.Children.Add(_lineageList); addLineage.Click += async (_,_) => await CreateLineageAsync(); _lineageList.SelectionChanged += async (_,_) => { if (!_navigation && _lineageList.SelectedItem is LineageSummary item && item.Id != _lineage) await SwitchLineageAsync(item.Id); }; }
         grid.Children.Add(left);
         var center = new DockPanel { Margin = new Thickness(8) }; _canvasPanel = center; Grid.SetColumn(center, 1);
-        var notice = new TextBlock { Text = "隔离虚构样本；退出应用后不会自动恢复。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) }; DockPanel.SetDock(notice, Dock.Top); center.Children.Add(notice);
+        var notice = new TextBlock { Text = "隔离虚构样本；重新进入时可打开上次使用的样本。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) }; DockPanel.SetDock(notice, Dock.Top); center.Children.Add(notice);
         var tools = new WrapPanel(); tools.Children.Add(_create); tools.Children.Add(_addChild); tools.Children.Add(_addSibling); tools.Children.Add(_addSpouse); tools.Children.Add(_reload); tools.Children.Add(_retry); tools.Children.Add(_abandonOrder); tools.Children.Add(_rebindChild); DockPanel.SetDock(tools, Dock.Top); center.Children.Add(tools);
         DockPanel.SetDock(_generationHeader, Dock.Top); center.Children.Add(_generationHeader);
         _canvas.LayoutTransform = _scale; _scroll.Content = _canvas; center.Children.Add(_scroll); grid.Children.Add(center); Grid.SetColumn(_home, 1); grid.Children.Add(_home);
