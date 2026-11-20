@@ -24,6 +24,8 @@ public sealed class V1FirstRootWindow : Window
     private readonly Dictionary<Guid, string> _orderIssues = new();
     private MoveChildOrder? _pendingChildOrder;
     private DetachBranch? _pendingDetach;
+    private AttachBranch? _pendingAttach;
+    private (Guid Lineage, Guid Source, Guid Target)? _lastAttachSelection;
     private DeleteBranch? _pendingDelete;
     private DeleteSpouse? _pendingSpouseDelete;
     private UpdateRootParents? _pendingRootParents;
@@ -79,7 +81,7 @@ public sealed class V1FirstRootWindow : Window
     private IReadOnlyList<SpouseNode> _visibleSpouses = Array.Empty<SpouseNode>();
     private Point? _draftLocation;
     private readonly Guid _draftId = Guid.NewGuid();
-    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSibling is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null || _pendingChildOrder is not null || _pendingDetach is not null || _pendingDelete is not null || _pendingSpouseDelete is not null || _pendingRootParents is not null;
+    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSibling is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null || _pendingChildOrder is not null || _pendingDetach is not null || _pendingAttach is not null || _pendingDelete is not null || _pendingSpouseDelete is not null || _pendingRootParents is not null;
     private bool _saving, _uncertain, _hasRoot, _loadedOk;
     private Guid? _personId, _placementId;
     private Point? _panStart;
@@ -115,7 +117,7 @@ public sealed class V1FirstRootWindow : Window
         _addChild.Click += (_, _) => BeginFamilyInput(InputKind.Child);
         _addSibling.Click += (_, _) => BeginSiblingInput();
         _addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse);
-        _retry.Click += async (_, _) => { if (_pendingDetach is not null || _pendingDelete is not null || _pendingSpouseDelete is not null || _pendingRootParents is not null) await SubmitBranchAsync(); else if (_pendingChildOrder is not null) await SubmitChildOrderAsync(); else if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
+        _retry.Click += async (_, _) => { if (_pendingDetach is not null || _pendingAttach is not null || _pendingDelete is not null || _pendingSpouseDelete is not null || _pendingRootParents is not null) await SubmitBranchAsync(); else if (_pendingChildOrder is not null) await SubmitChildOrderAsync(); else if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
         _abandonOrder.Click += async (_, _) => { if (_saving || _childOrderUnknown) return; _pendingChildOrder=null; UpdateButtons(); try { await ReloadCoreAsync(); _status.Text="已放弃排行调整并重新读取。"; } catch(Exception error) { _status.Text=$"重新读取失败：{error.Message}"; } };
         _rebindChild.Click += async (_, _) => await RebindChildAsync();
         _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas || _hasRoot || _saving || _pending is not null) return; e.Handled = true; var menu = new ContextMenu(); var item = new MenuItem { Header = "添加首节点" }; item.Click += (_, _) => BeginNamed(); menu.Items.Add(item); menu.PlacementTarget = _canvas; menu.IsOpen = true; };
@@ -176,10 +178,22 @@ public sealed class V1FirstRootWindow : Window
         _home.Children.Add(new TextBlock { Text="首节点", Margin=new Thickness(0,8,0,4), FontWeight=FontWeights.Bold });
         if(home.Roots.Count==0) _home.Children.Add(new TextBlock { Text="暂无首节点" });
         foreach(var root in home.Roots) { var button=new Button { Content=root.Name.Length==0?"（空姓名）":root.Name, Margin=new Thickness(0,2,0,2), HorizontalAlignment=HorizontalAlignment.Left }; _home.Children.Add(button); button.Click += async (_,_) => await EnterCanvasAsync(root); }
-        _home.Children.Add(new TextBlock { Text="操作日志（仅记录本功能接入后的谱系与首节点创建）", Margin=new Thickness(0,10,0,4), TextWrapping=TextWrapping.Wrap, FontWeight=FontWeights.Bold });
+        _home.Children.Add(new TextBlock { Text="操作日志（记录谱系、首节点创建及分支挂接）", Margin=new Thickness(0,10,0,4), TextWrapping=TextWrapping.Wrap, FontWeight=FontWeights.Bold });
         if(home.Activities.Count==0) _home.Children.Add(new TextBlock { Text="暂无记录" });
-        foreach(var item in home.Activities) _home.Children.Add(new TextBlock { Text=$"{item.OccurredAt.ToLocalTime():yyyy-MM-dd HH:mm}　{item.Kind}　{item.Detail}", TextWrapping=TextWrapping.Wrap });
+        foreach(var item in home.Activities) _home.Children.Add(new TextBlock { Text=$"{item.OccurredAt.ToLocalTime():yyyy-MM-dd HH:mm}　{item.Kind}　{ActivityDetail(item)}", TextWrapping=TextWrapping.Wrap });
         _details.Text="未选中人物"; _familyDetails.Children.Clear(); _status.Text="已切换谱系。"; UpdateButtons();
+    }
+    private static string ActivityDetail(LineageActivityView item)
+    {
+        if (item.Kind != "挂接分支") return item.Detail;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(item.Detail);
+            var root = doc.RootElement;
+            var oldFather = root.GetProperty("PreviousParents").EnumerateArray().Where(x => x.GetProperty("Role").GetInt32() == (int)ParentRole.Father).Select(x => x.GetProperty("Name").GetString()).FirstOrDefault();
+            return $"{root.GetProperty("ChildName").GetString()}：生父由 {oldFather ?? "未记录"} 改为 {root.GetProperty("NewFather").GetString()}";
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { return "挂接记录无法显示详情"; }
     }
     private async Task EnterCanvasAsync(RootNode? root)
     {
@@ -509,6 +523,12 @@ public sealed class V1FirstRootWindow : Window
                 var addSpouse = new MenuItem { Header = "添加配偶" }; addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse); menu.Items.Add(addSpouse);
                 if (_branches is not null)
                 {
+                    if (node.Original is RootNode)
+                    {
+                        var attach = new MenuItem { Header = "挂接此分支" };
+                        attach.Click += async (_, _) => await BeginAttachAsync(node.Person, node.Placement);
+                        menu.Items.Add(attach);
+                    }
                     if (node.Original is ChildNode detachable && _orderSnapshots.TryGetValue(detachable.ParentPlacementId, out var detachGroup))
                     {
                         var detach = new MenuItem { Header = "拆支" };
@@ -569,6 +589,35 @@ public sealed class V1FirstRootWindow : Window
         FillCanvasViewport();
     }
     private sealed record DisplayNode(Guid Person, Guid Placement, Guid? Parent, string Name, int Order, Guid? Relationship, object? Original, int? Generation = null);
+    private sealed record AttachTarget(Guid PersonId, Guid PlacementId, string Label);
+    private async Task BeginAttachAsync(Guid person, Guid placement)
+    {
+        if (_branches is null || _saving || HasPending || _profileDirty || _input is not null || _personId != person || _placementId != placement) return;
+        var options = _rootNodes.Select(x => new AttachTarget(x.PersonId, x.PlacementId, $"{x.Name} · {x.PlacementId.ToString()[..8]}"))
+            .Concat(_childNodes.Select(x => new AttachTarget(x.PersonId, x.PlacementId, $"{x.Name} · {x.PlacementId.ToString()[..8]}")))
+            .Where(x => x.PlacementId != placement).ToArray();
+        if (options.Length == 0) { _status.Text = "没有可选择的新父位置。"; return; }
+        var picker = new Window { Title = "选择新父亲", Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner, SizeToContent = SizeToContent.WidthAndHeight, ResizeMode = ResizeMode.NoResize };
+        var panel = new StackPanel { Margin = new Thickness(16), MinWidth = 300 };
+        var box = new ComboBox { ItemsSource = options, DisplayMemberPath = "Label", SelectedIndex = 0, Margin = new Thickness(0, 8, 0, 8) };
+        if (_lastAttachSelection is { } last && last.Lineage == _lineage && last.Source == placement)
+            box.SelectedItem = options.FirstOrDefault(x => x.PlacementId == last.Target) ?? options[0];
+        var confirm = new Button { Content = "查看挂接影响", Padding = new Thickness(8), IsDefault = true };
+        confirm.Click += (_, _) => picker.DialogResult = true;
+        panel.Children.Add(new TextBlock { Text = "选择同一谱系中的新父位置：" }); panel.Children.Add(box); panel.Children.Add(confirm); picker.Content = panel;
+        if (picker.ShowDialog() != true || box.SelectedItem is not AttachTarget target) return;
+        _lastAttachSelection = (_lineage, placement, target.PlacementId);
+        try
+        {
+            var preview = await _branches.PreviewAttachAsync(_genealogy, _lineage, person, placement, target.PlacementId);
+            if (_personId != person || _placementId != placement || _profileDirty || _input is not null || HasPending) { _status.Text = "选择或草稿已变化，请重新操作。"; return; }
+            var text = $"挂接分支：{preview.SourceName}（共 {preview.PeopleCount} 人）\n新父亲：{preview.TargetName}\n原生父：{preview.OldFatherName ?? "未记录"}；原生母：{preview.OldMotherName ?? "未记录"}\n新生母：{preview.NewMotherName ?? "暂不记录"}\n首节点世代：第 {preview.OldGeneration} 世 → 第 {preview.NewGeneration} 世\n后代世代按相同差值调整，人物追加到目标同性别组末尾。\n\n确认挂接？";
+            if (MessageBox.Show(this, text, "确认挂接影响", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) { _status.Text = "已取消挂接。"; return; }
+            _pendingAttach = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, target.PlacementId, preview.Evidence);
+            await SubmitBranchAsync();
+        }
+        catch (Exception error) { _status.Text = $"无法挂接：{error.Message}"; }
+    }
     private async Task BeginDeleteBranchAsync(Guid person, Guid placement)
     {
         if (_branches is null || _saving || HasPending || _profileDirty || _input is not null || _personId != person || _placementId != placement) return;
@@ -597,13 +646,14 @@ public sealed class V1FirstRootWindow : Window
     }
     private async Task SubmitBranchAsync()
     {
-        if (_branches is null || _saving || (_pendingDetach is null && _pendingDelete is null && _pendingSpouseDelete is null && _pendingRootParents is null)) return;
+        if (_branches is null || _saving || (_pendingDetach is null && _pendingAttach is null && _pendingDelete is null && _pendingSpouseDelete is null && _pendingRootParents is null)) return;
         _saving = true; if (_pendingRootParents is not null) { if (_rootFatherInput is not null) _rootFatherInput.IsReadOnly = true; if (_rootMotherInput is not null) _rootMotherInput.IsReadOnly = true; } UpdateButtons(); var wasDelete = _pendingDelete is not null;
         try
         {
             try
             {
                 if (_pendingDetach is { } detach) await _branches.DetachAsync(detach);
+                else if (_pendingAttach is { } attach) await _branches.AttachAsync(attach);
                 else if (_pendingDelete is { } delete) await _branches.DeleteAsync(delete);
                 else if (_pendingSpouseDelete is { } spouse) await _branches.DeleteSpouseAsync(spouse);
                 else if (_pendingRootParents is { } parents) await _branches.UpdateRootParentsAsync(parents);
@@ -611,11 +661,11 @@ public sealed class V1FirstRootWindow : Window
             catch (Exception error)
             {
                 bool committed;
-                try { committed = _pendingDetach is { } d ? await _branches.HasDetachReceiptAsync(d.OperationId) : _pendingDelete is { } b ? await _branches.HasDeleteReceiptAsync(b.OperationId) : _pendingSpouseDelete is { } s ? await _branches.HasSpouseDeleteReceiptAsync(s.OperationId) : await _branches.HasRootParentsReceiptAsync(_pendingRootParents!.OperationId); }
+                try { committed = _pendingDetach is { } d ? await _branches.HasDetachReceiptAsync(d.OperationId) : _pendingAttach is { } a ? await _branches.HasAttachReceiptAsync(a.OperationId) : _pendingDelete is { } b ? await _branches.HasDeleteReceiptAsync(b.OperationId) : _pendingSpouseDelete is { } s ? await _branches.HasSpouseDeleteReceiptAsync(s.OperationId) : await _branches.HasRootParentsReceiptAsync(_pendingRootParents!.OperationId); }
                 catch { _branchUnknown = true; if (_rootFatherInput is not null) _rootFatherInput.IsReadOnly = true; if (_rootMotherInput is not null) _rootMotherInput.IsReadOnly = true; _status.Text = $"操作结果尚未确认：{error.Message}。请重试同一操作。"; return; }
-                if (!committed) { _pendingDetach = null; _pendingDelete = null; _pendingSpouseDelete = null; _pendingRootParents = null; _branchUnknown = false; _status.Text = $"操作未保存：{error.Message}。输入已保留，请核实后重试。"; return; }
+                if (!committed) { _pendingDetach = null; _pendingAttach = null; _pendingDelete = null; _pendingSpouseDelete = null; _pendingRootParents = null; _branchUnknown = false; _status.Text = $"操作未保存：{error.Message}。输入已保留，请核实后重试。"; return; }
             }
-            _pendingDetach = null; _pendingDelete = null; _pendingSpouseDelete = null; _pendingRootParents = null; _branchUnknown = false; _profileDirty = false;
+            _pendingDetach = null; _pendingAttach = null; _pendingDelete = null; _pendingSpouseDelete = null; _pendingRootParents = null; _branchUnknown = false; _profileDirty = false;
             if (wasDelete) ClearFocus();
             try { await ReloadCoreAsync(); _status.Text = "操作已保存并重新读取。"; }
             catch (Exception error) { _loadedOk = false; _status.Text = $"操作已保存，但读取失败：{error.Message}。请重新读取。"; }

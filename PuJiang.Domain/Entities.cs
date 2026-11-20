@@ -66,6 +66,11 @@ public sealed class Placement(Guid id, Guid lineageId, Guid personId, Guid? pare
         if (ParentPlacementId is null) throw new InvalidOperationException("当前位置已经是独立分支。");
         ParentPlacementId = null; Position = null;
     }
+    public void Attach(Guid parentPlacementId, int position)
+    {
+        if (ParentPlacementId is not null || parentPlacementId == Id || position <= 0) throw new InvalidOperationException("挂接位置无效。");
+        ParentPlacementId = Identity.Require(parentPlacementId); Position = position;
+    }
 }
 
 // A recorded biological parent fact; other kinship types are not inferred here.

@@ -7,6 +7,80 @@ namespace PuJiang.V1.Persistence;
 
 public sealed class IsolatedBranchStore(IsolatedTestDatabase database) : IBranchStore
 {
+    private sealed record AttachState(Snapshot Snapshot, Person Source, Person Target, Person? Mother, int Generation, string Evidence);
+    private static async Task<AttachState> LoadAttach(V1Context db, Guid g, Guid l, Guid person, Guid place, Guid targetPlace, CancellationToken ct)
+    {
+        var s = await LoadSnapshot(db, g, l, person, place, ct);
+        if (s.ParentPlacementId is not null) throw new InvalidOperationException("请先将分支拆出，再挂接。");
+        var targetPosition = s.Places.SingleOrDefault(x => x.Id == targetPlace) ?? throw new InvalidOperationException("目标位置已失效。");
+        if (s.BranchPlaceIds.Contains(targetPlace)) throw new InvalidOperationException("不能挂接到本分支或其后代。");
+        var source = s.People.Single(x => x.Id == person);
+        var target = s.People.Single(x => x.Id == targetPosition.PersonId);
+        if (target.Sex != PersonSex.Male || source.Sex is not (PersonSex.Male or PersonSex.Female) || target.ExplicitGeneration is null or <= 0 || source.ExplicitGeneration is null or <= 0) throw new InvalidOperationException("目标父亲或分支资料不符合普通挂接条件。");
+        if (s.Places.Count(x => x.PersonId == target.Id) != 1) throw new InvalidOperationException("目标多位置暂不支持。");
+        var order = await IsolatedChildOrderStore.Load(db, g, l, targetPlace, ct);
+        var (spouseGroup, spouses) = await SpouseOrderQueries.Read(db, l, target.Id, ct);
+        var mother = spouses.Count == 0 ? null : s.People.SingleOrDefault(x => x.Id == spouses[0].Union.SpouseId);
+        if (spouses.Count > 0 && (mother is null || mother.Sex != PersonSex.Female || mother.Id == person)) throw new InvalidOperationException("首位配偶生母角色无效，请先核实。");
+        var delta = (long)target.ExplicitGeneration.Value + 1 - source.ExplicitGeneration.Value;
+        foreach (var id in s.BranchPersonIds)
+        {
+            var member = s.People.Single(x => x.Id == id);
+            if (member.ExplicitGeneration is null or <= 0 || member.ExplicitGeneration.Value + delta is <= 0 or > int.MaxValue) throw new InvalidOperationException("分支世代无效或超出范围，请先核实。");
+            var childPlace = s.Places.Single(x => x.PersonId == id);
+            if (childPlace.ParentPlacementId is Guid parentId)
+            {
+                var parent = s.Places.Single(x => x.Id == parentId);
+                var parentPerson = s.People.Single(x => x.Id == parent.PersonId);
+                if (!s.Parents.Any(x => x.ChildId == id && x.ParentId == parent.PersonId && x.Role == ParentRole.Father) || member.ExplicitGeneration != parentPerson.ExplicitGeneration + 1) throw new InvalidOperationException("分支含非普通父子世代或关系，请先核实。");
+            }
+            if (s.Parents.Any(x => x.ParentId == id && x.Role == ParentRole.Father && !s.Places.Any(p => p.PersonId == x.ChildId && p.ParentPlacementId == childPlace.Id))) throw new InvalidOperationException("分支存在范围外后代关系，请先核实。");
+        }
+        var evidence = JsonSerializer.Serialize(new { Snapshot = s.Evidence, Target = targetPlace, OrderRevision = order.Revision, Order = IsolatedChildOrderStore.Evidence(order.Items), SpouseRevision = spouseGroup?.Revision, Spouses = spouses.Select(x => new { x.Union.Id, x.Union.SpouseId, x.Position }).ToArray() });
+        return new(s, source, target, mother, checked(target.ExplicitGeneration.Value + 1), evidence);
+    }
+    public async Task<AttachPreview> PreviewAttachAsync(Guid g, Guid l, Guid person, Guid place, Guid targetPlace, CancellationToken ct)
+    {
+        await using var db = database.OpenContext(); await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var a = await LoadAttach(db, g, l, person, place, targetPlace, ct);
+        var father = a.Snapshot.Parents.SingleOrDefault(x => x.ChildId == person && x.Role == ParentRole.Father);
+        var mother = a.Snapshot.Parents.SingleOrDefault(x => x.ChildId == person && x.Role == ParentRole.Mother);
+        string? Name(Guid? id) => id is null ? null : a.Snapshot.People.Single(x => x.Id == id).Name;
+        var result = new AttachPreview(a.Source.Name, a.Target.Name, Name(father?.ParentId), Name(mother?.ParentId), a.Mother?.Name, a.Source.ExplicitGeneration!.Value, a.Generation, a.Snapshot.BranchPersonIds.Count, a.Evidence);
+        await tx.CommitAsync(ct); return result;
+    }
+    public async Task<bool> HasAttachReceiptAsync(Guid id, CancellationToken ct)
+    { await using var db = database.OpenContext(); return await db.ChildOrderReceipts.AsNoTracking().AnyAsync(x => x.OperationId == id && x.Payload.StartsWith("attach:"), ct); }
+    public async Task AttachAsync(AttachBranch command, CancellationToken ct)
+    {
+        await using var db = database.OpenContext(); await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var payload = "attach:" + JsonSerializer.Serialize(command);
+        var receipt = await db.ChildOrderReceipts.SingleOrDefaultAsync(x => x.OperationId == command.OperationId, ct);
+        if (receipt is not null) { if (receipt.Payload != payload) throw new InvalidOperationException("操作身份已用于不同输入。"); return; }
+        var a = await LoadAttach(db, command.GenealogyId, command.LineageId, command.PersonId, command.PlacementId, command.TargetPlacementId, ct);
+        if (a.Evidence != command.ExpectedEvidence) throw new InvalidOperationException("挂接范围已变化，请重新查看并确认。");
+        var oldParents = await db.BiologicalParents.Where(x => x.LineageId == command.LineageId && x.ChildId == command.PersonId).ToListAsync(ct);
+        var history = oldParents.Select(x => new { x.Id, x.Role, x.ParentId, Name = a.Snapshot.People.Single(p => p.Id == x.ParentId).Name }).ToArray();
+        var group = await IsolatedChildOrderStore.Load(db, command.GenealogyId, command.LineageId, command.TargetPlacementId, ct);
+        var insert = group.Items.Count(x => x.Person.Sex <= a.Source.Sex);
+        for (var i = insert; i < group.Items.Count; i++) group.Items[i].Place.SetPosition(i + 2);
+        var root = await db.Placements.SingleAsync(x => x.LineageId == command.LineageId && x.Id == command.PlacementId, ct);
+        root.Attach(command.TargetPlacementId, insert + 1);
+        var ids = a.Snapshot.BranchPersonIds.ToArray();
+        var people = await db.People.Where(x => x.LineageId == command.LineageId && ids.Contains(x.Id)).ToListAsync(ct);
+        var delta = a.Generation - a.Source.ExplicitGeneration!.Value;
+        foreach (var member in people) member.SetGeneration(checked(member.ExplicitGeneration!.Value + delta));
+        people.Single(x => x.Id == command.PersonId).MarkMotherKnown();
+        db.BiologicalParents.RemoveRange(oldParents); await db.SaveChangesAsync(ct);
+        db.BiologicalParents.Add(new(Guid.NewGuid(), command.LineageId, command.PersonId, a.Target.Id, ParentRole.Father));
+        if (a.Mother is not null) db.BiologicalParents.Add(new(Guid.NewGuid(), command.LineageId, command.PersonId, a.Mother.Id, ParentRole.Mother));
+        await db.SaveChangesAsync(ct);
+        foreach (var oldParent in oldParents.Select(x => x.ParentId).Distinct()) await CleanupCandidate(db, command.LineageId, oldParent, ct);
+        db.LineageActivities.Add(new() { Id = Guid.NewGuid(), LineageId = command.LineageId, OperationId = command.OperationId, Kind = "挂接分支", OccurredAt = DateTimeOffset.UtcNow, Detail = JsonSerializer.Serialize(new { ChildId = command.PersonId, ChildName = a.Source.Name, PreviousParents = history, NewFatherId = a.Target.Id, NewFather = a.Target.Name, NewMotherId = a.Mother?.Id }) });
+        await ChildOrderVersions.Touch(db, command.LineageId, command.TargetPlacementId, ct);
+        db.ChildOrderReceipts.Add(new() { OperationId = command.OperationId, Payload = payload });
+        await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+    }
     public async Task<RootParentInfo> ReadRootParentsAsync(Guid genealogyId, Guid lineageId, Guid personId, Guid placementId, CancellationToken ct)
     {
         await using var db = database.OpenContext(); await using var tx = await db.Database.BeginTransactionAsync(ct);

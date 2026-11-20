@@ -7,8 +7,13 @@ public sealed record SpouseDeletionPreview(Guid SpouseId, Guid UnionId, string S
 public sealed record DeleteSpouse(Guid OperationId, Guid GenealogyId, Guid LineageId, Guid FatherId, Guid FatherPlacementId, Guid SpouseId, Guid UnionId, string ExpectedEvidence);
 public sealed record RootParentInfo(Guid? FatherId, string? FatherName, Guid? MotherId, string? MotherName, string Evidence);
 public sealed record UpdateRootParents(Guid OperationId, Guid GenealogyId, Guid LineageId, Guid PersonId, Guid PlacementId, string? FatherName, string? MotherName, string ExpectedEvidence);
+public sealed record AttachBranch(Guid OperationId, Guid GenealogyId, Guid LineageId, Guid PersonId, Guid PlacementId, Guid TargetPlacementId, string ExpectedEvidence);
+public sealed record AttachPreview(string SourceName, string TargetName, string? OldFatherName, string? OldMotherName, string? NewMotherName, int OldGeneration, int NewGeneration, int PeopleCount, string Evidence);
 public interface IBranchStore
 {
+    Task<AttachPreview> PreviewAttachAsync(Guid genealogyId, Guid lineageId, Guid personId, Guid placementId, Guid targetPlacementId, CancellationToken ct);
+    Task AttachAsync(AttachBranch command, CancellationToken ct);
+    Task<bool> HasAttachReceiptAsync(Guid operationId, CancellationToken ct);
     Task DetachAsync(DetachBranch command, CancellationToken ct);
     Task<bool> HasDetachReceiptAsync(Guid operationId, CancellationToken ct);
     Task<BranchDeletionPreview> PreviewDeleteAsync(Guid genealogyId, Guid lineageId, Guid personId, Guid placementId, CancellationToken ct);
@@ -23,6 +28,18 @@ public interface IBranchStore
 }
 public sealed class BranchApplication(IBranchStore store)
 {
+    public Task<AttachPreview> PreviewAttachAsync(Guid g, Guid l, Guid person, Guid place, Guid target, CancellationToken ct = default)
+    {
+        if (g == Guid.Empty || l == Guid.Empty || person == Guid.Empty || place == Guid.Empty || target == Guid.Empty || place == target) throw new ArgumentException("挂接目标无效。");
+        return store.PreviewAttachAsync(g, l, person, place, target, ct);
+    }
+    public Task AttachAsync(AttachBranch command, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.OperationId == Guid.Empty || command.GenealogyId == Guid.Empty || command.LineageId == Guid.Empty || command.PersonId == Guid.Empty || command.PlacementId == Guid.Empty || command.TargetPlacementId == Guid.Empty || command.PlacementId == command.TargetPlacementId || string.IsNullOrWhiteSpace(command.ExpectedEvidence)) throw new ArgumentException("挂接上下文无效。");
+        return store.AttachAsync(command, ct);
+    }
+    public Task<bool> HasAttachReceiptAsync(Guid id, CancellationToken ct = default) => store.HasAttachReceiptAsync(id, ct);
     public Task DetachAsync(DetachBranch command, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
