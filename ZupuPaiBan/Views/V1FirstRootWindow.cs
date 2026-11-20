@@ -19,9 +19,16 @@ public sealed class V1FirstRootWindow : Window
     private readonly PersonProfileApplication? _profiles;
     private readonly GenerationApplication? _generations;
     private readonly ChildOrderApplication? _childOrders;
+    private readonly BranchApplication? _branches;
     private readonly Dictionary<Guid, ChildOrderSnapshot> _orderSnapshots = new();
     private readonly Dictionary<Guid, string> _orderIssues = new();
     private MoveChildOrder? _pendingChildOrder;
+    private DetachBranch? _pendingDetach;
+    private DeleteBranch? _pendingDelete;
+    private DeleteSpouse? _pendingSpouseDelete;
+    private UpdateRootParents? _pendingRootParents;
+    private TextBox? _rootFatherInput, _rootMotherInput;
+    private bool _branchUnknown;
     private bool _childOrderUnknown;
     private Point? _childDragStart;
     private ChildOrderSnapshot? _childDragSnapshot;
@@ -72,7 +79,7 @@ public sealed class V1FirstRootWindow : Window
     private IReadOnlyList<SpouseNode> _visibleSpouses = Array.Empty<SpouseNode>();
     private Point? _draftLocation;
     private readonly Guid _draftId = Guid.NewGuid();
-    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSibling is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null || _pendingChildOrder is not null;
+    private bool HasPending => _pending is not null || _pendingChild is not null || _pendingSibling is not null || _pendingSpouse is not null || _pendingMother is not null || _pendingProfile is not null || _pendingMove is not null || _pendingChildOrder is not null || _pendingDetach is not null || _pendingDelete is not null || _pendingSpouseDelete is not null || _pendingRootParents is not null;
     private bool _saving, _uncertain, _hasRoot, _loadedOk;
     private Guid? _personId, _placementId;
     private Point? _panStart;
@@ -83,10 +90,10 @@ public sealed class V1FirstRootWindow : Window
     private double _contentWidth = 650, _contentHeight = 360;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    internal V1FirstRootWindow(FirstRootApplication app, Guid genealogy, Guid lineage, string surname, ChildApplication? children = null, SpouseApplication? spouses = null, PersonProfileApplication? profiles = null, LineageApplication? lineages = null, GenerationApplication? generations = null, ChildOrderApplication? childOrders = null)
+    internal V1FirstRootWindow(FirstRootApplication app, Guid genealogy, Guid lineage, string surname, ChildApplication? children = null, SpouseApplication? spouses = null, PersonProfileApplication? profiles = null, LineageApplication? lineages = null, GenerationApplication? generations = null, ChildOrderApplication? childOrders = null, BranchApplication? branches = null)
     {
         _app = app; _genealogy = genealogy; _lineage = lineage; _surname = surname;
-        _children = children; _spouses = spouses; _profiles = profiles; _lineages = lineages; _generations = generations; _childOrders = childOrders;
+        _children = children; _spouses = spouses; _profiles = profiles; _lineages = lineages; _generations = generations; _childOrders = childOrders; _branches = branches;
         Title = "世系编修工作台 — V1 虚构隔离样本"; Width = 1100; Height = 720; MinWidth = 760; MinHeight = 480;
         var outer = new DockPanel(); DockPanel.SetDock(_status, Dock.Bottom); outer.Children.Add(_status);
         var grid = new Grid(); grid.ColumnDefinitions.Add(new() { Width = new GridLength(210) }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(300) });
@@ -108,7 +115,7 @@ public sealed class V1FirstRootWindow : Window
         _addChild.Click += (_, _) => BeginFamilyInput(InputKind.Child);
         _addSibling.Click += (_, _) => BeginSiblingInput();
         _addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse);
-        _retry.Click += async (_, _) => { if (_pendingChildOrder is not null) await SubmitChildOrderAsync(); else if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
+        _retry.Click += async (_, _) => { if (_pendingDetach is not null || _pendingDelete is not null || _pendingSpouseDelete is not null || _pendingRootParents is not null) await SubmitBranchAsync(); else if (_pendingChildOrder is not null) await SubmitChildOrderAsync(); else if (_pending is not null) await SubmitPendingAsync(); else await SubmitFamilyAsync(); };
         _abandonOrder.Click += async (_, _) => { if (_saving || _childOrderUnknown) return; _pendingChildOrder=null; UpdateButtons(); try { await ReloadCoreAsync(); _status.Text="已放弃排行调整并重新读取。"; } catch(Exception error) { _status.Text=$"重新读取失败：{error.Message}"; } };
         _rebindChild.Click += async (_, _) => await RebindChildAsync();
         _canvas.MouseRightButtonDown += (_, e) => { if (e.OriginalSource != _canvas || _hasRoot || _saving || _pending is not null) return; e.Handled = true; var menu = new ContextMenu(); var item = new MenuItem { Header = "添加首节点" }; item.Click += (_, _) => BeginNamed(); menu.Items.Add(item); menu.PlacementTarget = _canvas; menu.IsOpen = true; };
@@ -500,6 +507,17 @@ public sealed class V1FirstRootWindow : Window
                 var addChild = new MenuItem { Header = "添加子女" }; addChild.Click += (_, _) => BeginFamilyInput(InputKind.Child); menu.Items.Add(addChild);
                 var addSibling = new MenuItem { Header = "添加兄弟姐妹", IsEnabled = node.Parent is not null }; addSibling.Click += (_, _) => BeginSiblingInput(); menu.Items.Add(addSibling);
                 var addSpouse = new MenuItem { Header = "添加配偶" }; addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse); menu.Items.Add(addSpouse);
+                if (_branches is not null)
+                {
+                    if (node.Original is ChildNode detachable && _orderSnapshots.TryGetValue(detachable.ParentPlacementId, out var detachGroup))
+                    {
+                        var detach = new MenuItem { Header = "拆支" };
+                        detach.Click += async (_, _) => { if (_saving || HasPending || _profileDirty || _input is not null) return; _pendingDetach = new(Guid.NewGuid(), _genealogy, _lineage, detachable.PersonId, detachable.PlacementId, detachable.ParentPlacementId, detachGroup.Revision, detachGroup.Evidence); await SubmitBranchAsync(); };
+                        menu.Items.Add(detach);
+                    }
+                    var delete = new MenuItem { Header = "删除此分支" };
+                    delete.Click += async (_, _) => await BeginDeleteBranchAsync(node.Person, node.Placement); menu.Items.Add(delete);
+                }
                 if(node.Original is ChildNode childNode && _childOrders is not null && _orderSnapshots.TryGetValue(childNode.ParentPlacementId,out var group))
                 {
                     var peers=group.Items.Where(x=>x.Sex==childNode.Sex).OrderBy(x=>x.Position).ToArray(); var idx=Array.FindIndex(peers,x=>x.PlacementId==childNode.PlacementId);
@@ -516,6 +534,12 @@ public sealed class V1FirstRootWindow : Window
                     _canvas.Children.Add(new Line { X1 = item.X + 75, X2 = item.X + 75, Y1 = top - 8, Y2 = top, Stroke = Brushes.SlateGray, StrokeThickness = 1.5, IsHitTestVisible = false, Tag = "V1SpouseLink" });
                     var partner = new Border { Width = 110, Height = 34, Background = Brushes.WhiteSmoke, Padding = new Thickness(4), Tag = spouse,
                         Child = new TextBlock { Text = spouse.Name, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis } };
+                    if (_branches is not null)
+                    {
+                        var spouseMenu = new ContextMenu(); var deleteSpouse = new MenuItem { Header = "删除配偶" };
+                        deleteSpouse.Click += async (_, _) => await BeginDeleteSpouseAsync(node.Person, node.Placement, spouse);
+                        spouseMenu.Items.Add(deleteSpouse); partner.ContextMenu = spouseMenu;
+                    }
                     partner.AllowDrop = true;
                     partner.PreviewMouseLeftButtonDown += (_, e) => { if (_saving || HasPending || _input is not null || _profileDirty) return; _spouseDragStart = e.GetPosition(partner); _dragSpouseRevision = _spouseRevision; partner.CaptureMouse(); };
                     partner.PreviewMouseLeftButtonUp += (_, _) => { _spouseDragStart = null; if (partner.IsMouseCaptured) partner.ReleaseMouseCapture(); };
@@ -545,6 +569,59 @@ public sealed class V1FirstRootWindow : Window
         FillCanvasViewport();
     }
     private sealed record DisplayNode(Guid Person, Guid Placement, Guid? Parent, string Name, int Order, Guid? Relationship, object? Original, int? Generation = null);
+    private async Task BeginDeleteBranchAsync(Guid person, Guid placement)
+    {
+        if (_branches is null || _saving || HasPending || _profileDirty || _input is not null || _personId != person || _placementId != placement) return;
+        try
+        {
+            var preview = await _branches.PreviewDeleteAsync(_genealogy, _lineage, person, placement);
+            if (_personId != person || _placementId != placement) { _status.Text = "选择已变化，请重新操作。"; return; }
+            var text = "将移除所选分支及其配偶。\n人物：" + string.Join("、", preview.People) + "\n配偶：" + (preview.Spouses.Count == 0 ? "无" : string.Join("、", preview.Spouses)) + "\n因保留关系而留存档案：" + (preview.RetainedPeople.Count == 0 ? "无" : string.Join("、", preview.RetainedPeople)) + "\n失去最后引用后自动清理的关联档案：" + (preview.AutoCleanedPeople.Count == 0 ? "无" : string.Join("、", preview.AutoCleanedPeople)) + "\n\n已拆出的分支保留。确定删除？";
+            if (MessageBox.Show(this, text, "确认删除分支", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) { _status.Text = "已取消删除。"; return; }
+            _pendingDelete = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, preview.Evidence); await SubmitBranchAsync();
+        }
+        catch (Exception error) { _status.Text = $"无法确认删除范围：{error.Message}"; }
+    }
+    private async Task BeginDeleteSpouseAsync(Guid father, Guid placement, SpouseNode spouse)
+    {
+        if (_branches is null || _saving || HasPending || _profileDirty || _input is not null || _personId != father || _placementId != placement) return;
+        try
+        {
+            var preview = await _branches.PreviewSpouseAsync(_genealogy, _lineage, father, placement, spouse.PersonId, spouse.UnionId);
+            if (_personId != father || _placementId != placement) { _status.Text = "选择已变化，请重新操作。"; return; }
+            var text = $"将删除配偶 {preview.SpouseName}，保留子女。" + (preview.AffectedChildren.Count == 0 ? "" : "\n以下子女的生母暂时留空：" + string.Join("、", preview.AffectedChildren)) + "\n\n确定删除？";
+            if (MessageBox.Show(this, text, "确认删除配偶", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) { _status.Text = "已取消删除。"; return; }
+            _pendingSpouseDelete = new(Guid.NewGuid(), _genealogy, _lineage, father, placement, spouse.PersonId, spouse.UnionId, preview.Evidence); await SubmitBranchAsync();
+        }
+        catch (Exception error) { _status.Text = $"无法确认配偶删除范围：{error.Message}"; }
+    }
+    private async Task SubmitBranchAsync()
+    {
+        if (_branches is null || _saving || (_pendingDetach is null && _pendingDelete is null && _pendingSpouseDelete is null && _pendingRootParents is null)) return;
+        _saving = true; if (_pendingRootParents is not null) { if (_rootFatherInput is not null) _rootFatherInput.IsReadOnly = true; if (_rootMotherInput is not null) _rootMotherInput.IsReadOnly = true; } UpdateButtons(); var wasDelete = _pendingDelete is not null;
+        try
+        {
+            try
+            {
+                if (_pendingDetach is { } detach) await _branches.DetachAsync(detach);
+                else if (_pendingDelete is { } delete) await _branches.DeleteAsync(delete);
+                else if (_pendingSpouseDelete is { } spouse) await _branches.DeleteSpouseAsync(spouse);
+                else if (_pendingRootParents is { } parents) await _branches.UpdateRootParentsAsync(parents);
+            }
+            catch (Exception error)
+            {
+                bool committed;
+                try { committed = _pendingDetach is { } d ? await _branches.HasDetachReceiptAsync(d.OperationId) : _pendingDelete is { } b ? await _branches.HasDeleteReceiptAsync(b.OperationId) : _pendingSpouseDelete is { } s ? await _branches.HasSpouseDeleteReceiptAsync(s.OperationId) : await _branches.HasRootParentsReceiptAsync(_pendingRootParents!.OperationId); }
+                catch { _branchUnknown = true; if (_rootFatherInput is not null) _rootFatherInput.IsReadOnly = true; if (_rootMotherInput is not null) _rootMotherInput.IsReadOnly = true; _status.Text = $"操作结果尚未确认：{error.Message}。请重试同一操作。"; return; }
+                if (!committed) { _pendingDetach = null; _pendingDelete = null; _pendingSpouseDelete = null; _pendingRootParents = null; _branchUnknown = false; _status.Text = $"操作未保存：{error.Message}。输入已保留，请核实后重试。"; return; }
+            }
+            _pendingDetach = null; _pendingDelete = null; _pendingSpouseDelete = null; _pendingRootParents = null; _branchUnknown = false; _profileDirty = false;
+            if (wasDelete) ClearFocus();
+            try { await ReloadCoreAsync(); _status.Text = "操作已保存并重新读取。"; }
+            catch (Exception error) { _loadedOk = false; _status.Text = $"操作已保存，但读取失败：{error.Message}。请重新读取。"; }
+        }
+        finally { _saving = false; if (!_branchUnknown) { if (_rootFatherInput is not null) _rootFatherInput.IsReadOnly = false; if (_rootMotherInput is not null) _rootMotherInput.IsReadOnly = false; } UpdateButtons(); }
+    }
     private static string RankName(int rank, PersonSex sex)
     {
         string[] digits={"零","一","二","三","四","五","六","七","八","九"};
@@ -609,11 +686,32 @@ public sealed class V1FirstRootWindow : Window
         name.LostKeyboardFocus += async (_, _) => { await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background); await SaveProfile(); };
         sex.SelectionChanged += async (_, _) => { MarkDirty(); await SaveProfile(); };
     }
+    private void AddRootParentEditor(Guid person, Guid placement, RootParentInfo parents)
+    {
+        var father = new TextBox { Text = parents.FatherName ?? "", Margin = new Thickness(0, 4, 0, 0), ToolTip = "输入新生父姓名；Enter 或离开输入框保存" };
+        var mother = new TextBox { Text = parents.MotherName ?? "", Margin = new Thickness(0, 4, 0, 0), ToolTip = "输入新生母姓名；Enter 或离开输入框保存" };
+        _rootFatherInput = father; _rootMotherInput = mother;
+        _familyDetails.Children.Add(new TextBlock { Text = "生父", Margin = new Thickness(0, 6, 0, 0) }); _familyDetails.Children.Add(father);
+        _familyDetails.Children.Add(new TextBlock { Text = "生母", Margin = new Thickness(0, 6, 0, 0) }); _familyDetails.Children.Add(mother);
+        void MarkDirty() { _profileDirty = father.Text.Trim() != (parents.FatherName ?? "") || mother.Text.Trim() != (parents.MotherName ?? ""); UpdateButtons(); }
+        async Task Save()
+        {
+            if (!_profileDirty || _saving || HasPending || _branches is null || _personId != person || _placementId != placement) return;
+            _pendingRootParents = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, father.Text.Trim(), mother.Text.Trim(), parents.Evidence);
+            await SubmitBranchAsync();
+        }
+        async Task HandleParentKey(KeyEventArgs e) { if (e.Key == Key.Enter) { e.Handled = true; await Save(); } else if (e.Key == Key.Escape && !_saving && !HasPending) { e.Handled = true; father.Text = parents.FatherName ?? ""; mother.Text = parents.MotherName ?? ""; MarkDirty(); } }
+        father.TextChanged += (_, _) => MarkDirty(); mother.TextChanged += (_, _) => MarkDirty();
+        father.PreviewKeyDown += async (_, e) => await HandleParentKey(e); mother.PreviewKeyDown += async (_, e) => await HandleParentKey(e);
+        father.LostKeyboardFocus += async (_, _) => { await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background); if (!father.IsKeyboardFocusWithin && !mother.IsKeyboardFocusWithin) await Save(); };
+        mother.LostKeyboardFocus += async (_, _) => { await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background); if (!father.IsKeyboardFocusWithin && !mother.IsKeyboardFocusWithin) await Save(); };
+    }
     private async Task RefreshFamilyDetailsAsync()
     {
         var version = ++_detailsVersion;
         var readingOwnOrder = false;
         _familyDetails.Children.Clear();
+        _rootFatherInput = null; _rootMotherInput = null;
         _visibleSpouses = Array.Empty<SpouseNode>(); _spouseRevision = 0;
         if (_spouses is null || _personId is not Guid person || _placementId is not Guid placement) return;
         try
@@ -644,6 +742,25 @@ public sealed class V1FirstRootWindow : Window
                 }
                 var currentRoot=_rootNodes.FirstOrDefault(x=>x.PersonId==person&&x.PlacementId==placement);
                 if(currentRoot is not null) { var editRoot=new Button {Content="修改首节点信息",Margin=new Thickness(0,6,0,0)}; _familyDetails.Children.Add(editRoot); editRoot.Click+=async(_,_)=>{if(_saving||HasPending||_profileDirty||_input is not null)return;var dialog=new V1RootEditDialog(_app,_genealogy,_lineage,currentRoot){Owner=this};if(dialog.ShowDialog()==true){try{await ReloadCoreAsync();}catch(Exception error){_status.Text=$"已保存，但重新读取失败：{error.Message}";}}}; }
+                if (currentRoot is not null && _branches is not null)
+                {
+                    var parents = await _branches.ReadRootParentsAsync(_genealogy, _lineage, person, placement);
+                    if (version != _detailsVersion || _personId != person || _placementId != placement) return;
+                    if (parents.FatherName is not null || parents.MotherName is not null)
+                        _familyDetails.Children.Add(new TextBlock { Text = $"生父：{parents.FatherName ?? "未记录"}\n生母：{parents.MotherName ?? "未记录"}", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) });
+                    var editParents = new Button { Content = "修改生父母", Margin = new Thickness(0, 6, 0, 0) };
+                    editParents.Click += (_, _) =>
+                    {
+                        if (_saving || HasPending || _profileDirty || _input is not null || _personId != person || _placementId != placement) return;
+                        _familyDetails.Children.Clear();
+                        _familyDetails.Children.Add(new TextBlock { Text = "输入新人物姓名，回车或离开输入框后保存；Esc 放弃修改。", TextWrapping = TextWrapping.Wrap });
+                        AddRootParentEditor(person, placement, parents);
+                        var back = new Button { Content = "返回人物资料", Margin = new Thickness(0, 8, 0, 0) };
+                        back.Click += async (_, _) => { if (!_profileDirty && !_saving && !HasPending) await RefreshFamilyDetailsAsync(); };
+                        _familyDetails.Children.Add(back);
+                    };
+                    _familyDetails.Children.Add(editParents);
+                }
             }
             readingOwnOrder = true;
             var snapshot = _selectedSex is PersonSex.Female or PersonSex.Unknown
@@ -736,12 +853,26 @@ public sealed class V1FirstRootWindow : Window
     private void Select(RootNode node) { _personId = node.PersonId; _placementId = node.PlacementId; _details.Text = $"姓名：{(node.Name.Length == 0 ? "（未填写姓名）" : node.Name)}"; foreach (var card in _canvas.Children.OfType<Border>()) if (card.Tag is RootNode value) card.Background = value.PersonId == _personId && value.PlacementId == _placementId ? Brushes.DarkOrange : Brushes.WhiteSmoke; }
     private void ClearFocus() { _detailsVersion++; _personId = null; _placementId = null; _selectedSex = null; _visibleSpouses = Array.Empty<SpouseNode>(); _details.Text = "未选中人物"; _familyDetails.Children.Clear(); RenderCanvas(); UpdateButtons(); }
     private void CancelInput() { if (_input is null) return; if (_inputHost is not null) _canvas.Children.Remove(_inputHost); if (_generationInput is not null) _canvas.Children.Remove(_generationInput); if (_generationLabel is not null) _canvas.Children.Remove(_generationLabel); _generationInput = null; _generationLabel = null; _inputHost = null; _input = null; _siblingDraft = null; _rebindChild.Visibility = Visibility.Collapsed; RenderCanvas(); _status.Text = "已取消输入，未创建人物。"; }
-    private void UpdateButtons() { _create.IsEnabled = _loadedOk && !_saving && !_hasRoot && !HasPending; _reload.IsEnabled = !_saving && !HasPending && !_profileDirty; var ready = _loadedOk && !_saving && !HasPending && !_profileDirty && _input is null && _personId is not null && _placementId is not null; var canAdd = ready && (_profiles is null || _selectedSex == PersonSex.Male); _addChild.IsEnabled = canAdd && _children is not null; _addSibling.IsEnabled = ready && _children is not null && _childNodes.Any(x => x.PersonId == _personId && x.PlacementId == _placementId); _addSpouse.IsEnabled = canAdd && _spouses is not null; _retry.Visibility = _uncertain || _pendingChildOrder is not null ? Visibility.Visible : Visibility.Collapsed; _retry.IsEnabled = !_saving; _abandonOrder.Visibility = _pendingChildOrder is not null && !_childOrderUnknown ? Visibility.Visible : Visibility.Collapsed; _abandonOrder.IsEnabled=!_saving; }
-    internal bool CanCloseForOwner() { if (!_saving && !HasPending && _input is null && !_profileDirty) return true; _status.Text = _uncertain || _childOrderUnknown ? "保存结果尚未确认，请重试以保留输入。" : "请先完成或取消当前输入。"; return false; }
+    private void UpdateButtons() { _create.IsEnabled = _loadedOk && !_saving && !_hasRoot && !HasPending; _reload.IsEnabled = !_saving && !HasPending && !_profileDirty; var ready = _loadedOk && !_saving && !HasPending && !_profileDirty && _input is null && _personId is not null && _placementId is not null; var canAdd = ready && (_profiles is null || _selectedSex == PersonSex.Male); _addChild.IsEnabled = canAdd && _children is not null; _addSibling.IsEnabled = ready && _children is not null && _childNodes.Any(x => x.PersonId == _personId && x.PlacementId == _placementId); _addSpouse.IsEnabled = canAdd && _spouses is not null; _retry.Visibility = _uncertain || _branchUnknown || _pendingChildOrder is not null ? Visibility.Visible : Visibility.Collapsed; _retry.IsEnabled = !_saving; _abandonOrder.Visibility = _pendingChildOrder is not null && !_childOrderUnknown ? Visibility.Visible : Visibility.Collapsed; _abandonOrder.IsEnabled=!_saving; }
+    internal bool CanCloseForOwner() { if (!_saving && !HasPending && _input is null && !_profileDirty) return true; _status.Text = _uncertain || _childOrderUnknown || _branchUnknown ? "保存结果尚未确认，请重试以保留输入。" : "请先完成或取消当前输入。"; return false; }
     private void OnClosing(object? sender, CancelEventArgs e) { if (!CanCloseForOwner()) e.Cancel = true; }
 
     internal Task ReadyForTest => _ready.Task;
     internal Task SwitchLineageForTest(Guid id) => SwitchLineageAsync(id);
+    internal async Task DetachForTest(Guid person, Guid placement)
+    {
+        var node = _childNodes.Single(x => x.PersonId == person && x.PlacementId == placement); var snapshot = _orderSnapshots[node.ParentPlacementId];
+        _personId = person; _placementId = placement;
+        _pendingDetach = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, node.ParentPlacementId, snapshot.Revision, snapshot.Evidence);
+        await SubmitBranchAsync();
+    }
+    internal async Task DeleteBranchForTest(Guid person, Guid placement)
+    {
+        var preview = await _branches!.PreviewDeleteAsync(_genealogy, _lineage, person, placement);
+        _personId = person; _placementId = placement;
+        _pendingDelete = new(Guid.NewGuid(), _genealogy, _lineage, person, placement, preview.Evidence);
+        await SubmitBranchAsync();
+    }
     internal Task EnterCanvasForTest(RootNode root) => EnterCanvasAsync(root);
     internal Guid LineageForTest => _lineage;
     internal bool HomeVisibleForTest => _home.Visibility == Visibility.Visible;
@@ -776,6 +907,9 @@ public sealed class V1FirstRootWindow : Window
     internal Button? RepairButtonForTest => _familyDetails.Children.OfType<Button>().FirstOrDefault(x => Equals(x.Content, "修复配偶顺序"));
     internal Task RebindChildForTest() => RebindChildAsync();
     internal bool CanRebindChildForTest => _rebindChild.Visibility == Visibility.Visible;
+    internal void BeginRootParentEditForTest() => _familyDetails.Children.OfType<Button>().Single(x => Equals(x.Content, "修改生父母")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    internal TextBox? RootFatherInputForTest => _rootFatherInput;
+    internal TextBox? RootMotherInputForTest => _rootMotherInput;
     internal void ClearFocusForTest() => ClearFocus();
     internal void BeginSpouseForTest() => BeginFamilyInput(InputKind.Spouse);
     internal async Task SelectForTest(Guid person, Guid placement) { _personId = person; _placementId = placement; UpdateSelection(); await RefreshFamilyDetailsAsync(); RenderCanvas(); }

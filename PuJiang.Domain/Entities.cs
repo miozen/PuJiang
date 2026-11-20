@@ -61,6 +61,11 @@ public sealed class Placement(Guid id, Guid lineageId, Guid personId, Guid? pare
         if (ParentPlacementId is null || position <= 0) throw new ArgumentException("只有子位置能设置正排行。");
         Position = position;
     }
+    public void Detach()
+    {
+        if (ParentPlacementId is null) throw new InvalidOperationException("当前位置已经是独立分支。");
+        ParentPlacementId = null; Position = null;
+    }
 }
 
 // A recorded biological parent fact; other kinship types are not inferred here.

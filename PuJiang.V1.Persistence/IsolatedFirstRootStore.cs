@@ -49,8 +49,7 @@ public sealed class IsolatedFirstRootStore(IsolatedTestDatabase database) : IFir
         }
         if (!await db.Lineages.AnyAsync(x => x.Id == command.LineageId && x.GenealogyId == command.GenealogyId, cancellationToken))
             throw new InvalidOperationException("目标谱系不存在或不属于该项目。");
-        if (await db.People.AnyAsync(x => x.LineageId == command.LineageId, cancellationToken) ||
-            await db.Placements.AnyAsync(x => x.LineageId == command.LineageId, cancellationToken))
+        if (await db.Placements.AnyAsync(x => x.LineageId == command.LineageId, cancellationToken))
             throw new InvalidOperationException("添加首节点要求空谱系。");
         var person = new Person(Guid.NewGuid(), command.LineageId, command.Name, PersonSex.Male);
         person.SetRootInformation(command.Generation, command.Title, command.Notes);

@@ -15,6 +15,40 @@ namespace PuJiang.Tests;
 public sealed class V1FirstRootWindowTests
 {
     [Fact, Trait("Category", "UI")]
+    public async Task Detached_child_remains_visible_with_parents_after_branch_deletion_and_reopen()
+    {
+        var (db, g, l) = await CreateAsync();
+        var roots = new FirstRootApplication(new IsolatedFirstRootStore(db)); var children = new ChildApplication(new IsolatedChildStore(db));
+        var spouses = new SpouseApplication(new IsolatedSpouseStore(db)); var profiles = new PersonProfileApplication(new IsolatedPersonProfileStore(db));
+        var orders = new ChildOrderApplication(new IsolatedChildOrderStore(db)); var branches = new BranchApplication(new IsolatedBranchStore(db));
+        var root = await roots.ExecuteAsync(new(Guid.NewGuid(), g, l, RootNameMode.Named, "冯父", 1));
+        await spouses.AddAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "虚构母"));
+        var child = await children.ExecuteAsync(new(Guid.NewGuid(), g, l, root.PersonId, root.PlacementId, RootNameMode.Named, "冯子", 1, 2, 1));
+        await RunSta(async () =>
+        {
+            var w = new V1FirstRootWindow(roots, g, l, "冯", children, spouses, profiles, childOrders: orders, branches: branches); w.Show();
+            try
+            {
+                await w.ReadyForTest; await w.DetachForTest(child.PersonId, child.PlacementId);
+                Assert.Equal(2, w.NodeCountForTest); Assert.Contains("生父：冯父", w.FamilyTextForTest); Assert.Contains("生母：虚构母", w.FamilyTextForTest);
+                await w.DeleteBranchForTest(root.PersonId, root.PlacementId); Assert.Equal(1, w.NodeCountForTest);
+                await w.SelectForTest(child.PersonId, child.PlacementId); Assert.Contains("生父：冯父", w.FamilyTextForTest); Assert.Contains("生母：虚构母", w.FamilyTextForTest);
+                w.BeginRootParentEditForTest(); var fatherInput = Assert.IsType<System.Windows.Controls.TextBox>(w.RootFatherInputForTest); fatherInput.Text = "虚构新父";
+                var source = PresentationSource.FromVisual(fatherInput) ?? throw new InvalidOperationException("父母输入控件未显示。");
+                fatherInput.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+                for (var i = 0; i < 300 && !w.FamilyTextForTest.Contains("生父：虚构新父"); i++) await Task.Delay(10);
+                Assert.Contains("生父：虚构新父", w.FamilyTextForTest); Assert.Contains("生母：虚构母", w.FamilyTextForTest);
+            }
+            finally { w.Close(); }
+        });
+        await RunSta(async () =>
+        {
+            var w = new V1FirstRootWindow(roots, g, l, "冯", children, spouses, profiles, childOrders: orders, branches: branches); w.Show();
+            try { await w.ReadyForTest; Assert.Equal(1, w.NodeCountForTest); await w.SelectForTest(child.PersonId, child.PlacementId); Assert.Contains("生父：虚构新父", w.FamilyTextForTest); }
+            finally { w.Close(); }
+        });
+    }
+    [Fact, Trait("Category", "UI")]
     public async Task Child_order_updates_right_panel_and_focus_after_reopen()
     {
         var (db,g,l)=await CreateAsync(); var roots=new FirstRootApplication(new IsolatedFirstRootStore(db)); var children=new ChildApplication(new IsolatedChildStore(db)); var spouses=new SpouseApplication(new IsolatedSpouseStore(db)); var profiles=new PersonProfileApplication(new IsolatedPersonProfileStore(db)); var orders=new ChildOrderApplication(new IsolatedChildOrderStore(db));

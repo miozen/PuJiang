@@ -106,13 +106,10 @@ public sealed class V1Context : DbContext
         b.Entity<SpouseOrderRepairReceipt>().HasKey(x => x.OperationId);
         b.Entity<FirstRootReceipt>().HasKey(x => x.OperationId);
         b.Entity<FirstRootReceipt>().Property(x => x.Name).IsRequired();
-        b.Entity<FirstRootReceipt>().HasOne<Placement>().WithMany().HasForeignKey(x => x.PlacementId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<ChildReceipt>().HasKey(x => x.OperationId);
         b.Entity<ChildReceipt>().Property(x => x.Name).IsRequired();
-        b.Entity<ChildReceipt>().HasOne<Placement>().WithMany().HasForeignKey(x => x.PlacementId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<SpouseReceipt>().HasKey(x => x.OperationId);
         b.Entity<SpouseReceipt>().Property(x => x.Name).IsRequired();
-        b.Entity<SpouseReceipt>().HasOne<SpouseUnion>().WithMany().HasForeignKey(x => x.UnionId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<MotherReceipt>().HasKey(x => x.OperationId);
         b.Entity<PersonProfileReceipt>().HasKey(x => x.OperationId);
     }

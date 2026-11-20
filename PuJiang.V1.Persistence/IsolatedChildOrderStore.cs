@@ -17,8 +17,8 @@ internal static class ChildOrderVersions
 }
 public sealed class IsolatedChildOrderStore(IsolatedTestDatabase database) : IChildOrderStore
 {
-    private static string Evidence(IEnumerable<(Placement Place,Person Person)> items) => JsonSerializer.Serialize(items.Select(x=>new {x.Place.Id,x.Place.PersonId,x.Person.Sex,x.Place.Position}));
-    private static async Task<(long Revision,List<(Placement Place,Person Person)> Items)> Load(V1Context db, Guid g, Guid l, Guid parent, CancellationToken ct)
+    internal static string Evidence(IEnumerable<(Placement Place,Person Person)> items) => JsonSerializer.Serialize(items.Select(x=>new {x.Place.Id,x.Place.PersonId,x.Person.Sex,x.Place.Position}));
+    internal static async Task<(long Revision,List<(Placement Place,Person Person)> Items)> Load(V1Context db, Guid g, Guid l, Guid parent, CancellationToken ct)
     {
         if(!await db.Lineages.AnyAsync(x=>x.Id==l && x.GenealogyId==g,ct)) throw new InvalidOperationException("谱系已失效。");
         var parentPlace=await db.Placements.SingleOrDefaultAsync(x=>x.Id==parent && x.LineageId==l,ct) ?? throw new InvalidOperationException("父位置已失效。");
