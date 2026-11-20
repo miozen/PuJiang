@@ -102,7 +102,8 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
             ?? throw new InvalidOperationException("当前父位置不存在或不属于当前谱系。");
         OrdinaryChildRules.ValidateFather(parent, placement, command.LineageId);
         if (parent.ExplicitGeneration != command.ExpectedParentGeneration) throw new InvalidOperationException("父亲世代已变化，请重新发起录入。");
-        if (await db.Placements.CountAsync(x => x.LineageId == command.LineageId && x.PersonId == parent.Id, cancellationToken) != 1)
+        var parentPositionCount = await db.Placements.CountAsync(x => x.LineageId == command.LineageId && x.PersonId == parent.Id, cancellationToken);
+        if (parentPositionCount != 1 && (parentPositionCount != 2 || !await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && x.ChildId == parent.Id && x.HeirPlacementId == placement.Id, cancellationToken)))
             throw new InvalidOperationException("多位置后代承接尚未接入，请先核实当前父位置。");
         var (group, spouses) = await SpouseOrderQueries.Read(db, command.LineageId, parent.Id, cancellationToken);
         if ((group?.Revision ?? 0) != command.ExpectedSpouseRevision) throw new InvalidOperationException("配偶顺序已变化，请重新发起子女录入。");
@@ -147,14 +148,19 @@ public sealed class IsolatedChildStore(IsolatedTestDatabase database) : IChildSt
                            select new { person.Id, PlacementId = p.Id, ParentPlacementId = p.ParentPlacementId!.Value, person.Name, Position = p.Position!.Value, person.MotherExplicitlyCleared, person.Sex, person.ExplicitGeneration }).ToListAsync(cancellationToken);
         var allPlacements = await db.Placements.AsNoTracking().Where(x => x.LineageId == lineageId).ToListAsync(cancellationToken);
         var relations = await db.BiologicalParents.AsNoTracking().Where(x => x.LineageId == lineageId).ToListAsync(cancellationToken);
+        var successions = await db.Successions.AsNoTracking().Where(x => x.LineageId == lineageId).ToListAsync(cancellationToken);
         var nodes = new List<ChildNode>();
         foreach (var p in placements)
         {
             var parent = allPlacements.SingleOrDefault(x => x.Id == p.ParentPlacementId) ?? throw new InvalidOperationException("父位置不存在，无法读取子女。");
-            var father = relations.SingleOrDefault(x => x.ChildId == p.Id && x.ParentId == parent.PersonId && x.Role == ParentRole.Father) ?? throw new InvalidOperationException("父子关系与位置不一致，无法读取子女。");
+            var succession = successions.SingleOrDefault(x => x.HeirPlacementId == p.PlacementId || x.BirthPlacementId == p.PlacementId);
+            var heir = succession?.HeirPlacementId == p.PlacementId;
+            var father = relations.SingleOrDefault(x => x.ChildId == p.Id && x.ParentId == parent.PersonId && x.Role == ParentRole.Father);
+            if (heir ? succession!.ChildId != p.Id || succession.HeirFatherId != parent.PersonId || succession.HeirFatherPlacementId != parent.Id : father is null)
+                throw new InvalidOperationException("父子关系与位置不一致，无法读取子女。");
             var mother = relations.SingleOrDefault(x => x.ChildId == p.Id && x.Role == ParentRole.Mother);
             if (p.MotherExplicitlyCleared && mother is not null) throw new InvalidOperationException("生母清空状态与关系不一致，请先核实。");
-            nodes.Add(new(p.Id, p.PlacementId, p.ParentPlacementId, p.Name, p.Position, father.Id, mother?.ParentId, p.MotherExplicitlyCleared, p.Sex, p.ExplicitGeneration));
+            nodes.Add(new(p.Id, p.PlacementId, p.ParentPlacementId, p.Name, p.Position, heir ? succession!.Id : father!.Id, mother?.ParentId, p.MotherExplicitlyCleared, p.Sex, p.ExplicitGeneration, heir ? ChildPositionKind.Succession : succession is null ? ChildPositionKind.Ordinary : ChildPositionKind.BirthReference, succession?.Id));
         }
         await tx.CommitAsync(cancellationToken); return nodes.AsReadOnly();
     }

@@ -3,7 +3,8 @@ namespace PuJiang.V1.Application;
 
 public sealed record AddChild(Guid OperationId, Guid GenealogyId, Guid LineageId, Guid ParentPersonId, Guid ParentPlacementId, RootNameMode NameMode, string Name, long ExpectedSpouseRevision = 0, int? Generation = null, int? ExpectedParentGeneration = null);
 public sealed record ChildCreated(Guid PersonId, Guid PlacementId, bool Replayed);
-public sealed record ChildNode(Guid PersonId, Guid PlacementId, Guid ParentPlacementId, string Name, int Position, Guid FatherRelationshipId, Guid? MotherId, bool MotherExplicitlyCleared, PersonSex Sex, int? Generation = null);
+public enum ChildPositionKind { Ordinary, BirthReference, Succession }
+public sealed record ChildNode(Guid PersonId, Guid PlacementId, Guid ParentPlacementId, string Name, int Position, Guid FatherRelationshipId, Guid? MotherId, bool MotherExplicitlyCleared, PersonSex Sex, int? Generation = null, ChildPositionKind PositionKind = ChildPositionKind.Ordinary, Guid? SuccessionId = null);
 public sealed record AddSibling(Guid OperationId, Guid GenealogyId, Guid LineageId, Guid SourcePersonId, Guid SourcePlacementId, Guid ParentPersonId, Guid ParentPlacementId, Guid ExpectedFatherRelationshipId, Guid? ExpectedMotherId, bool ExpectedMotherCleared, string Name, int? Generation = null, int? ExpectedParentGeneration = null);
 public interface IChildStore
 {

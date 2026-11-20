@@ -246,6 +246,7 @@ public sealed class IsolatedBranchStore(IsolatedTestDatabase database) : IBranch
     public async Task<SpouseDeletionPreview> PreviewSpouseAsync(Guid g, Guid l, Guid father, Guid placement, Guid spouse, Guid union, CancellationToken ct)
     {
         await using var db = database.OpenContext(); await using var tx = await db.Database.BeginTransactionAsync(ct);
+        if (await db.Successions.AnyAsync(x => x.LineageId == l && x.HeirFatherId == father && x.HeirMotherId == spouse, ct)) throw new InvalidOperationException("该配偶仍被嗣母关系引用，请先修改或清空嗣母。");
         var s = await LoadSnapshot(db, g, l, father, placement, ct);
         if (!s.Unions.Any(x => x.Id == union && x.FatherId == father && x.SpouseId == spouse)) throw new InvalidOperationException("配偶关系已失效。");
         var target = s.People.SingleOrDefault(x => x.Id == spouse) ?? throw new InvalidOperationException("配偶资料不存在。");
@@ -264,6 +265,7 @@ public sealed class IsolatedBranchStore(IsolatedTestDatabase database) : IBranch
         var payload = "delete-spouse:" + JsonSerializer.Serialize(command);
         var receipt = await db.ChildOrderReceipts.SingleOrDefaultAsync(x => x.OperationId == command.OperationId, ct);
         if (receipt is not null) { if (receipt.Payload != payload) throw new InvalidOperationException("操作身份已用于不同输入。"); return; }
+        if (await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && x.HeirFatherId == command.FatherId && x.HeirMotherId == command.SpouseId, ct)) throw new InvalidOperationException("该配偶仍被嗣母关系引用，请先修改或清空嗣母。");
         var s = await LoadSnapshot(db, command.GenealogyId, command.LineageId, command.FatherId, command.FatherPlacementId, ct);
         if (s.Evidence != command.ExpectedEvidence) throw new InvalidOperationException("配偶或关系已变化，请重新查看并确认。");
         if (!s.Unions.Any(x => x.Id == command.UnionId && x.FatherId == command.FatherId && x.SpouseId == command.SpouseId)) throw new InvalidOperationException("配偶关系已失效。");
@@ -294,6 +296,7 @@ public sealed class IsolatedBranchStore(IsolatedTestDatabase database) : IBranch
         var payload = "detach:" + JsonSerializer.Serialize(command);
         var receipt = await db.ChildOrderReceipts.SingleOrDefaultAsync(x => x.OperationId == command.OperationId, ct);
         if (receipt is not null) { if (receipt.Payload != payload) throw new InvalidOperationException("操作身份已用于不同输入。"); return; }
+        if (await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && (x.BirthPlacementId == command.PlacementId || x.HeirPlacementId == command.PlacementId), ct)) throw new InvalidOperationException("承嗣位置暂不支持拆支，请先核实。");
         var group = await IsolatedChildOrderStore.Load(db, command.GenealogyId, command.LineageId, command.ParentPlacementId, ct);
         if (group.Revision != command.ExpectedRevision || IsolatedChildOrderStore.Evidence(group.Items) != command.ExpectedEvidence) throw new InvalidOperationException("同胞或父位置已变化，请重新发起拆支。");
         var selected = group.Items.SingleOrDefault(x => x.Place.Id == command.PlacementId && x.Person.Id == command.PersonId);

@@ -58,6 +58,8 @@ public sealed class IsolatedPersonProfileStore(IsolatedTestDatabase database) : 
             if (await db.BiologicalParents.AnyAsync(x => x.LineageId == command.LineageId && x.ParentId == person.Id &&
                 (x.Role == ParentRole.Father && command.Sex != PersonSex.Male || x.Role == ParentRole.Mother && command.Sex != PersonSex.Female), cancellationToken))
                 throw new InvalidOperationException("性别与已有父母角色不一致，请先核实。");
+            if (await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && (x.HeirFatherId == person.Id && command.Sex != PersonSex.Male || x.HeirMotherId == person.Id && command.Sex != PersonSex.Female), cancellationToken))
+                throw new InvalidOperationException("性别与已有嗣父母角色不一致，请先核实。");
             if (place.PersonId == person.Id && place.ParentPlacementId is Guid parent)
             {
                 var siblings = await (from p in db.Placements where p.LineageId == command.LineageId && p.ParentPlacementId == parent

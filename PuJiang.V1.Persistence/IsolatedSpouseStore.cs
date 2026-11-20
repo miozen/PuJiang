@@ -112,7 +112,8 @@ public sealed class IsolatedSpouseStore(IsolatedTestDatabase database) : ISpouse
         var father = await db.People.SingleOrDefaultAsync(x => x.Id == p && x.LineageId == l, ct) ?? throw new InvalidOperationException("父亲不存在。");
         var location = await db.Placements.SingleOrDefaultAsync(x => x.Id == place && x.LineageId == l, ct) ?? throw new InvalidOperationException("父位置不存在。");
         OrdinaryChildRules.ValidateFather(father, location, l);
-        if (await db.Placements.CountAsync(x => x.LineageId == l && x.PersonId == p, ct) != 1) throw new InvalidOperationException("多位置承接尚未接入，请先核实。");
+        var count = await db.Placements.CountAsync(x => x.LineageId == l && x.PersonId == p, ct);
+        if (count != 1 && (count != 2 || !await db.Successions.AnyAsync(x => x.LineageId == l && x.ChildId == p && (x.BirthPlacementId == place || x.HeirPlacementId == place), ct))) throw new InvalidOperationException("其他多位置尚未接入，请先核实。");
         return (father, location);
     }
     public async Task<SpouseCreated> AddAsync(AddSpouse command, CancellationToken cancellationToken)
@@ -125,6 +126,7 @@ public sealed class IsolatedSpouseStore(IsolatedTestDatabase database) : ISpouse
             return new(old.PersonId, old.UnionId, true);
         }
         var (father, location) = await ReadFather(db, command.GenealogyId, command.LineageId, command.FatherPersonId, command.FatherPlacementId, cancellationToken);
+        if (await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && x.ChildId == father.Id && x.BirthPlacementId == location.Id, cancellationToken)) throw new InvalidOperationException("出生引用位置不承接后代，请在嗣子位置操作。");
         var (group, unions) = await SpouseOrderQueries.Read(db, command.LineageId, father.Id, cancellationToken);
         var spouse = new Person(Guid.NewGuid(), command.LineageId, command.Name, PersonSex.Female);
         var union = new SpouseUnion(Guid.NewGuid(), command.LineageId, father.Id, spouse.Id);
@@ -139,6 +141,13 @@ public sealed class IsolatedSpouseStore(IsolatedTestDatabase database) : ISpouse
                                   select child).ToListAsync(cancellationToken);
             foreach (var child in children)
             {
+                var heir = await db.Successions.SingleOrDefaultAsync(x => x.LineageId == command.LineageId && x.ChildId == child.Id && x.HeirFatherId == father.Id && x.HeirFatherPlacementId == location.Id, cancellationToken);
+                if (heir is not null)
+                {
+                    if (heir.MotherExplicitlyCleared && heir.HeirMotherId is not null) throw new InvalidOperationException("嗣母清空状态与关系不一致，请先核实。");
+                    if (!heir.MotherExplicitlyCleared && heir.HeirMotherId is null) heir.SetMother(spouse.Id, false);
+                    continue;
+                }
                 if (!await db.BiologicalParents.AnyAsync(r => r.LineageId == command.LineageId && r.ChildId == child.Id && r.ParentId == father.Id && r.Role == ParentRole.Father, cancellationToken)) throw new InvalidOperationException("子位置与父亲关系不一致，请先核实。");
                 var hasMother = await db.BiologicalParents.AnyAsync(r => r.LineageId == command.LineageId && r.ChildId == child.Id && r.Role == ParentRole.Mother, cancellationToken);
                 if (child.MotherExplicitlyCleared && hasMother) throw new InvalidOperationException("生母清空状态与关系不一致，请先核实。");

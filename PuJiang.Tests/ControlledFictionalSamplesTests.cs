@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using PuJiang.Domain;
+using PuJiang.V1.Application;
 using PuJiang.V1.Persistence;
 using Xunit;
 
@@ -14,6 +15,28 @@ public sealed class ControlledSampleCollection;
 [Collection("Controlled sample environment")]
 public sealed class ControlledFictionalSamplesTests
 {
+    [Fact]
+    public async Task Succession_survives_controlled_file_close_and_reopen()
+    {
+        var root=Path.Combine(Path.GetTempPath(),"PuJiang-succession-reopen-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+        var previous=Environment.GetEnvironmentVariable("PUJIANG_TEST_DATA_ROOT");Environment.SetEnvironmentVariable("PUJIANG_TEST_DATA_ROOT",root);
+        try
+        {
+            var sample=await ControlledFictionalSamples.CreateAsync();var g=sample.GenealogyId;var l=sample.LineageId;
+            var roots=new FirstRootApplication(new IsolatedFirstRootStore(sample.Database));var children=new ChildApplication(new IsolatedChildStore(sample.Database));
+            var father=await roots.ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"虚构生父",1));
+            var child=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,father.PersonId,father.PlacementId,RootNameMode.Named,"虚构嗣子",0,2,1));
+            var target=Guid.NewGuid();var targetPlace=Guid.NewGuid();await using(var c=sample.Database.OpenContext()){var p=new Person(target,l,"虚构嗣父",PersonSex.Male);p.SetGeneration(1);c.People.Add(p);c.Placements.Add(new Placement(targetPlace,l,target));await c.SaveChangesAsync();}
+            var app=new SuccessionApplication(new IsolatedSuccessionStore(sample.Database));var preview=await app.PreviewAsync(g,l,child.PersonId,child.PlacementId,targetPlace);var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child.PersonId,child.PlacementId,targetPlace,preview.Evidence));
+            var path=sample.Database.DatabasePath;sample.Database.Dispose();
+            var reopened=await ControlledFictionalSamples.OpenLatestOrCreateAsync();try
+            {
+                Assert.Equal(path,reopened.Database.DatabasePath);var info=await new SuccessionApplication(new IsolatedSuccessionStore(reopened.Database)).ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(info);Assert.Equal(child.PersonId,info.ChildId);Assert.Equal(child.PlacementId,info.BirthPlacementId);
+                var nodes=await new ChildApplication(new IsolatedChildStore(reopened.Database)).ReadAsync(g,l);Assert.Contains(nodes,x=>x.PlacementId==child.PlacementId && x.PositionKind==ChildPositionKind.BirthReference);Assert.Contains(nodes,x=>x.PlacementId==created.HeirPlacementId && x.PositionKind==ChildPositionKind.Succession);
+            }finally{reopened.Database.Dispose();}
+        }
+        finally{Environment.SetEnvironmentVariable("PUJIANG_TEST_DATA_ROOT",previous);}
+    }
     [Fact]
     public async Task Reopen_reads_the_same_data_and_new_sample_does_not_overwrite_it()
     {

@@ -71,6 +71,30 @@ public sealed class Placement(Guid id, Guid lineageId, Guid personId, Guid? pare
         if (ParentPlacementId is not null || parentPlacementId == Id || position <= 0) throw new InvalidOperationException("挂接位置无效。");
         ParentPlacementId = Identity.Require(parentPlacementId); Position = position;
     }
+    public void TransferParent(Guid parentPlacementId)
+    {
+        if (ParentPlacementId is null || parentPlacementId == Id) throw new InvalidOperationException("子位置承接目标无效。");
+        ParentPlacementId = Identity.Require(parentPlacementId);
+    }
+}
+
+// A single confirmed succession: the birth and succession positions reference one person.
+public sealed class Succession(Guid id, Guid lineageId, Guid childId, Guid birthPlacementId, Guid heirPlacementId, Guid heirFatherId, Guid heirFatherPlacementId, Guid? heirMotherId)
+{
+    public Guid Id { get; private set; } = Identity.Require(id);
+    public Guid LineageId { get; private set; } = Identity.Require(lineageId);
+    public Guid ChildId { get; private set; } = Identity.Require(childId);
+    public Guid BirthPlacementId { get; private set; } = Identity.Require(birthPlacementId);
+    public Guid HeirPlacementId { get; private set; } = heirPlacementId != birthPlacementId ? Identity.Require(heirPlacementId) : throw new ArgumentException("出生位置和嗣子位置必须不同。");
+    public Guid HeirFatherId { get; private set; } = heirFatherId != childId ? Identity.Require(heirFatherId) : throw new ArgumentException("嗣父不能是本人。");
+    public Guid HeirFatherPlacementId { get; private set; } = Identity.Require(heirFatherPlacementId);
+    public Guid? HeirMotherId { get; private set; } = heirMotherId;
+    public bool MotherExplicitlyCleared { get; private set; }
+    public void SetMother(Guid? motherId, bool explicitlyCleared)
+    {
+        if (motherId == Guid.Empty || motherId == ChildId || motherId == HeirFatherId || motherId is not null && explicitlyCleared) throw new ArgumentException("嗣母关系无效。");
+        HeirMotherId = motherId; MotherExplicitlyCleared = explicitlyCleared;
+    }
 }
 
 // A recorded biological parent fact; other kinship types are not inferred here.

@@ -1,6 +1,7 @@
 using System.Windows.Threading;
 using System.Windows;
 using System.Windows.Input;
+using System.Runtime.InteropServices;
 using Microsoft.EntityFrameworkCore;
 using PuJiang.Domain;
 using PuJiang.V1.Application;
@@ -14,6 +15,59 @@ namespace PuJiang.Tests;
 [Collection("ProcessWorkerExclusive")]
 public sealed class V1FirstRootWindowTests
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string? className, string? windowName);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [Fact, Trait("Category", "UI")]
+    public async Task Succession_menu_picker_confirmation_cancel_and_save_use_isolated_data()
+    {
+        var (db,g,l)=await CreateAsync();var roots=new FirstRootApplication(new IsolatedFirstRootStore(db));var children=new ChildApplication(new IsolatedChildStore(db));
+        var spouses=new SpouseApplication(new IsolatedSpouseStore(db));var profiles=new PersonProfileApplication(new IsolatedPersonProfileStore(db));var orders=new ChildOrderApplication(new IsolatedChildOrderStore(db));var succession=new SuccessionApplication(new IsolatedSuccessionStore(db));
+        var father=await roots.ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"冯生父",1));var child=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,father.PersonId,father.PlacementId,RootNameMode.Named,"冯嗣子",0,2,1));
+        var target=Guid.NewGuid();var targetPlace=Guid.NewGuid();await using(var c=db.OpenContext()){var p=new Person(target,l,"冯嗣父",PersonSex.Male);p.SetGeneration(1);c.People.Add(p);c.Placements.Add(new Placement(targetPlace,l,target));await c.SaveChangesAsync();}
+        await RunSta(async()=>
+        {
+            var w=new V1FirstRootWindow(roots,g,l,"冯",children,spouses,profiles,childOrders:orders,succession:succession);w.Show();
+            try
+            {
+                await w.ReadyForTest;
+                async Task Attempt(bool accept)
+                {
+                    await w.SelectForTest(child.PersonId,child.PlacementId);
+                    var card=w.CanvasForTest.Children.OfType<System.Windows.Controls.Border>().Single(x=>x.Tag is ChildNode n && n.PlacementId==child.PlacementId);
+                    var menu=Assert.IsType<System.Windows.Controls.ContextMenu>(card.ContextMenu);var item=menu.Items.OfType<System.Windows.Controls.MenuItem>().Single(x=>Equals(x.Header,"挂接为嗣子"));
+                    var timer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(30)};bool selected=false,answered=false;
+                    timer.Tick+=(_,_)=>
+                    {
+                        var picker=w.OwnedWindows.OfType<Window>().FirstOrDefault(x=>x.Title=="选择嗣父");
+                        if(!selected && picker?.Content is System.Windows.Controls.StackPanel panel)
+                        {
+                            var box=panel.Children.OfType<System.Windows.Controls.ComboBox>().Single();box.SelectedItem=box.Items.Cast<object>().Single(x=>x.ToString()!.Contains("冯嗣父"));selected=true;
+                            panel.Children.OfType<System.Windows.Controls.Button>().Single().RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                        }
+                        var dialog=FindWindow(null,"确认承嗣影响");if(!answered && dialog!=IntPtr.Zero){GetWindowThreadProcessId(dialog,out var pid);if(pid==(uint)Environment.ProcessId){answered=true;PostMessage(dialog,0x0111,(IntPtr)(accept?6:7),IntPtr.Zero);}}
+                    };
+                    timer.Start();try{item.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));for(var i=0;i<1000 && !(answered && (accept?w.StatusForTest.Contains("已保存"):w.StatusForTest.Contains("已取消")));i++)await Task.Delay(10);Assert.True(selected);Assert.True(answered);Assert.Contains(accept?"已保存":"已取消",w.StatusForTest);}finally{timer.Stop();}
+                }
+                await Attempt(false);await using(var c=db.OpenContext())Assert.Empty(await c.Successions.ToListAsync());
+                await Attempt(true);Assert.Equal(2,w.ChildCountForTest);Assert.Equal(child.PersonId,w.FocusForTest.Person);Assert.NotEqual(child.PlacementId,w.FocusForTest.Placement);
+            }
+            finally{w.Close();}
+        });
+    }
+    [Fact, Trait("Category", "UI")]
+    public async Task Succession_positions_share_person_and_display_reverse_generation_without_losing_focus()
+    {
+        var (db,g,l)=await CreateAsync(); var roots=new FirstRootApplication(new IsolatedFirstRootStore(db)); var children=new ChildApplication(new IsolatedChildStore(db));
+        var spouses=new SpouseApplication(new IsolatedSpouseStore(db)); var profiles=new PersonProfileApplication(new IsolatedPersonProfileStore(db)); var orders=new ChildOrderApplication(new IsolatedChildOrderStore(db)); var succession=new SuccessionApplication(new IsolatedSuccessionStore(db));
+        var birthFather=await roots.ExecuteAsync(new(Guid.NewGuid(),g,l,RootNameMode.Named,"冯生父",1));
+        var child=await children.ExecuteAsync(new(Guid.NewGuid(),g,l,birthFather.PersonId,birthFather.PlacementId,RootNameMode.Named,"冯嗣子",0,2,1));
+        await children.ExecuteAsync(new(Guid.NewGuid(),g,l,child.PersonId,child.PlacementId,RootNameMode.Named,"冯后代",0,3,2));
+        var target=Guid.NewGuid();var targetPlace=Guid.NewGuid();await using(var c=db.OpenContext()){var p=new Person(target,l,"冯嗣父",PersonSex.Male);p.SetGeneration(3);c.People.Add(p);c.Placements.Add(new Placement(targetPlace,l,target));await c.SaveChangesAsync();}
+        var wife=await spouses.AddAsync(new(Guid.NewGuid(),g,l,target,targetPlace,RootNameMode.Named,"虚构嗣母"));
+        var preview=await succession.PreviewAsync(g,l,child.PersonId,child.PlacementId,targetPlace);var adopted=await succession.CreateAsync(new(Guid.NewGuid(),g,l,child.PersonId,child.PlacementId,targetPlace,preview.Evidence));
+        for(var pass=0;pass<2;pass++) await RunSta(async()=>{var w=new V1FirstRootWindow(roots,g,l,"冯",children,spouses,profiles,childOrders:orders,succession:succession);w.Show();try{await w.ReadyForTest;Assert.Equal(3,w.ChildCountForTest);await w.SelectForTest(child.PersonId,child.PlacementId);Assert.Equal(child.PlacementId,w.FocusForTest.Placement);await w.SelectForTest(child.PersonId,adopted.HeirPlacementId);Assert.Equal(child.PersonId,w.FocusForTest.Person);Assert.Equal(adopted.HeirPlacementId,w.FocusForTest.Placement);Assert.Contains("生父：冯生父",w.FamilyTextForTest);Assert.Contains(wife.PersonId,w.MotherCandidateIdsForTest);}finally{w.Close();}});
+    }
     [Fact, Trait("Category", "UI")]
     public async Task Detached_child_remains_visible_with_parents_after_branch_deletion_and_reopen()
     {

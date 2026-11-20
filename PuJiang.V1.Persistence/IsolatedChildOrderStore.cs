@@ -26,9 +26,19 @@ public sealed class IsolatedChildOrderStore(IsolatedTestDatabase database) : ICh
         var items=rows.OrderBy(x=>x.Place.Position).Select(x=>(x.Place,x.Person)).ToList();
         if(items.Any(x=>x.Person.Sex is not (PersonSex.Male or PersonSex.Female) || x.Place.Position is null) || !items.Select(x=>x.Place.Position!.Value).SequenceEqual(Enumerable.Range(1,items.Count)) || !items.Select(x=>x.Person.Sex).SequenceEqual(items.Select(x=>x.Person.Sex).Order())) throw new InvalidOperationException("子女顺序或性别异常，请先核实。");
         var personIds=items.Select(x=>x.Person.Id).ToArray();
-        if(personIds.Distinct().Count()!=personIds.Length || await db.Placements.CountAsync(x=>x.LineageId==l && personIds.Contains(x.PersonId),ct)!=items.Count || await db.Placements.CountAsync(x=>x.LineageId==l && x.PersonId==parentPlace.PersonId,ct)!=1) throw new InvalidOperationException("多位置排行暂不支持。");
+        var successions=await db.Successions.Where(x=>x.LineageId==l && (personIds.Contains(x.ChildId) || x.ChildId==parentPlace.PersonId)).ToListAsync(ct);
+        if(personIds.Distinct().Count()!=personIds.Length) throw new InvalidOperationException("同组出现重复人物。");
+        foreach(var item in items)
+        {
+            var count=await db.Placements.CountAsync(x=>x.LineageId==l && x.PersonId==item.Person.Id,ct);
+            var succession=successions.SingleOrDefault(x=>x.ChildId==item.Person.Id);
+            if(count!=1 && (count!=2 || succession is null || succession.BirthPlacementId!=item.Place.Id && succession.HeirPlacementId!=item.Place.Id)) throw new InvalidOperationException("其他多位置排行暂不支持。");
+        }
+        var parentCount=await db.Placements.CountAsync(x=>x.LineageId==l && x.PersonId==parentPlace.PersonId,ct);
+        var parentSuccession=successions.SingleOrDefault(x=>x.ChildId==parentPlace.PersonId);
+        if(parentCount!=1 && (parentCount!=2 || parentSuccession?.HeirPlacementId!=parentPlace.Id)) throw new InvalidOperationException("当前位置不承接后代。");
         var fathers=await db.BiologicalParents.Where(x=>x.LineageId==l && x.Role==ParentRole.Father && personIds.Contains(x.ChildId)).ToListAsync(ct);
-        if(items.Any(x=>!fathers.Any(f=>f.ChildId==x.Person.Id && f.ParentId==parentPlace.PersonId))) throw new InvalidOperationException("父子关系与位置不一致，请先核实。");
+        if(items.Any(x=>!fathers.Any(f=>f.ChildId==x.Person.Id && f.ParentId==parentPlace.PersonId) && !successions.Any(s=>s.ChildId==x.Person.Id && s.HeirPlacementId==x.Place.Id && s.HeirFatherId==parentPlace.PersonId && s.HeirFatherPlacementId==parentPlace.Id))) throw new InvalidOperationException("父子关系与位置不一致，请先核实。");
         var version=await db.ChildOrderVersions.SingleOrDefaultAsync(x=>x.LineageId==l && x.ParentPlacementId==parent,ct);
         if(version is null && items.Count>0 || version is not null && version.Revision<=0) throw new InvalidOperationException("子女排行版本缺失或无效，请先核实。");
         return (version?.Revision ?? 0,items);
