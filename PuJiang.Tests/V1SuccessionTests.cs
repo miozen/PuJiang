@@ -6,6 +6,75 @@ using Xunit;
 namespace PuJiang.Tests;
 public sealed class V1SuccessionTests
 {
+    [Fact]
+    public async Task Detach_and_reattach_preserve_identity_parents_and_descendants()
+    {
+        var (db,g,l,f,fp,child,birth,target,tp,desc)=await Setup(); using var owned=db;
+        var wives=new SpouseApplication(new IsolatedSpouseStore(db)); var oldMother=await wives.AddAsync(new(Guid.NewGuid(),g,l,target,tp,RootNameMode.Named,"虚构原嗣母"));
+        var app=new SuccessionApplication(new IsolatedSuccessionStore(db)); var initial=await app.PreviewAsync(g,l,child,birth,tp); var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child,birth,tp,initial.Evidence));
+        var order=new ChildOrderApplication(new IsolatedChildOrderStore(db)); var snapshot=await order.ReadAsync(g,l,tp); var branches=new BranchApplication(new IsolatedBranchStore(db));
+        var detach=new DetachBranch(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,snapshot.Revision,snapshot.Evidence); await branches.DetachAsync(detach); await branches.DetachAsync(detach);
+        await using(var c=db.OpenContext()){Assert.Null((await c.Placements.SingleAsync(x=>x.Id==created.HeirPlacementId)).ParentPlacementId);Assert.Equal(created.HeirPlacementId,(await c.Placements.SingleAsync(x=>x.PersonId==desc)).ParentPlacementId);Assert.Equal(oldMother.PersonId,(await c.Successions.SingleAsync()).HeirMotherId);Assert.True(await c.BiologicalParents.AnyAsync(x=>x.ChildId==child && x.ParentId==f));}
+        var parents=await branches.ReadRootParentsAsync(g,l,child,created.HeirPlacementId);await Assert.ThrowsAsync<InvalidOperationException>(()=>branches.UpdateRootParentsAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,"错误新生父",parents.MotherName,parents.Evidence)));
+        Assert.Contains(await new ChildApplication(new IsolatedChildStore(db)).ReadAsync(g,l),x=>x.PlacementId==birth && x.PositionKind==ChildPositionKind.BirthReference);
+        var newFather=Guid.NewGuid();var newPlace=Guid.NewGuid();await using(var c=db.OpenContext()){var p=new Person(newFather,l,"冯新嗣父",PersonSex.Male);p.SetGeneration(1);c.People.Add(p);c.Placements.Add(new Placement(newPlace,l,newFather));await c.SaveChangesAsync();}
+        var newMother=await wives.AddAsync(new(Guid.NewGuid(),g,l,newFather,newPlace,RootNameMode.Named,"虚构新嗣母"));
+        var preview=await app.PreviewAsync(g,l,child,created.HeirPlacementId,newPlace);Assert.Equal(1,preview.DescendantCount);
+        var reattach=new CreateSuccession(Guid.NewGuid(),g,l,child,created.HeirPlacementId,newPlace,preview.Evidence);var result=await app.CreateAsync(reattach);Assert.Equal(created.HeirPlacementId,result.HeirPlacementId);Assert.True((await app.CreateAsync(reattach)).Replayed);
+        await using(var c=db.OpenContext()){Assert.Equal(2,await c.Placements.CountAsync(x=>x.PersonId==child));Assert.Equal(newPlace,(await c.Placements.SingleAsync(x=>x.Id==created.HeirPlacementId)).ParentPlacementId);Assert.Equal(created.HeirPlacementId,(await c.Placements.SingleAsync(x=>x.PersonId==desc)).ParentPlacementId);var s=await c.Successions.SingleAsync();Assert.Equal(newFather,s.HeirFatherId);Assert.Equal(newMother.PersonId,s.HeirMotherId);Assert.Equal(fp,(await c.Placements.SingleAsync(x=>x.Id==birth)).ParentPlacementId);}
+    }
+    [Fact]
+    public async Task Detach_and_reattach_roll_back_and_reject_stale_confirmation()
+    {
+        var (db,g,l,f,fp,child,birth,target,tp,desc)=await Setup();using var owned=db;var app=new SuccessionApplication(new IsolatedSuccessionStore(db));
+        var initial=await app.PreviewAsync(g,l,child,birth,tp);var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child,birth,tp,initial.Evidence));
+        var order=new ChildOrderApplication(new IsolatedChildOrderStore(db));var snapshot=await order.ReadAsync(g,l,tp);var branches=new BranchApplication(new IsolatedBranchStore(db));
+        var cmd=new DetachBranch(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,snapshot.Revision,snapshot.Evidence);
+        await using(var c=db.OpenContext())await c.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailDetach BEFORE UPDATE ON Placements BEGIN SELECT RAISE(ABORT, 'injected'); END");
+        await Assert.ThrowsAsync<DbUpdateException>(()=>branches.DetachAsync(cmd));await using(var c=db.OpenContext()){Assert.Equal(tp,(await c.Placements.SingleAsync(x=>x.Id==created.HeirPlacementId)).ParentPlacementId);Assert.Equal(created.HeirPlacementId,(await c.Placements.SingleAsync(x=>x.PersonId==desc)).ParentPlacementId);}
+        Assert.False(await branches.HasDetachReceiptAsync(cmd.OperationId));await using(var c=db.OpenContext())await c.Database.ExecuteSqlRawAsync("DROP TRIGGER FailDetach");await branches.DetachAsync(cmd);
+        var newFather=Guid.NewGuid();var newPlace=Guid.NewGuid();await using(var c=db.OpenContext()){var p=new Person(newFather,l,"冯新嗣父",PersonSex.Male);p.SetGeneration(1);c.People.Add(p);c.Placements.Add(new Placement(newPlace,l,newFather));await c.SaveChangesAsync();}
+        var preview=await app.PreviewAsync(g,l,child,created.HeirPlacementId,newPlace);var reattach=new CreateSuccession(Guid.NewGuid(),g,l,child,created.HeirPlacementId,newPlace,preview.Evidence);
+        await using(var c=db.OpenContext())await c.Database.ExecuteSqlRawAsync("CREATE TRIGGER FailReattach BEFORE UPDATE ON Successions BEGIN SELECT RAISE(ABORT, 'injected'); END");
+        await Assert.ThrowsAsync<DbUpdateException>(()=>app.CreateAsync(reattach));await using(var c=db.OpenContext()){Assert.Null((await c.Placements.SingleAsync(x=>x.Id==created.HeirPlacementId)).ParentPlacementId);Assert.Equal(target,(await c.Successions.SingleAsync()).HeirFatherId);}
+        Assert.False(await app.HasReceiptAsync(reattach.OperationId));await using(var c=db.OpenContext())await c.Database.ExecuteSqlRawAsync("DROP TRIGGER FailReattach");
+        await new SpouseApplication(new IsolatedSpouseStore(db)).AddAsync(new(Guid.NewGuid(),g,l,newFather,newPlace,RootNameMode.Named,"虚构配偶"));await Assert.ThrowsAsync<InvalidOperationException>(()=>app.CreateAsync(reattach));
+    }
+    [Fact]
+    public async Task Heir_without_descendants_can_be_detached_and_reattached()
+    {
+        var (db,g,l,f,fp,child,birth,target,tp,desc)=await Setup();using var owned=db;
+        await using(var c=db.OpenContext()){c.BiologicalParents.RemoveRange(await c.BiologicalParents.Where(x=>x.ChildId==desc).ToListAsync());c.Placements.RemoveRange(await c.Placements.Where(x=>x.PersonId==desc).ToListAsync());await c.SaveChangesAsync();}
+        var app=new SuccessionApplication(new IsolatedSuccessionStore(db));var initial=await app.PreviewAsync(g,l,child,birth,tp);Assert.Equal(0,initial.DescendantCount);var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child,birth,tp,initial.Evidence));
+        var group=await new ChildOrderApplication(new IsolatedChildOrderStore(db)).ReadAsync(g,l,tp);await new BranchApplication(new IsolatedBranchStore(db)).DetachAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,group.Revision,group.Evidence));
+        var preview=await app.PreviewAsync(g,l,child,created.HeirPlacementId,tp);Assert.Equal(0,preview.DescendantCount);await app.CreateAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,preview.Evidence));
+        await using var c2=db.OpenContext();Assert.Equal(2,await c2.Placements.CountAsync(x=>x.PersonId==child));Assert.Equal(tp,(await c2.Placements.SingleAsync(x=>x.Id==created.HeirPlacementId)).ParentPlacementId);
+    }
+    [Fact]
+    public async Task Reattachment_restarts_heir_mother_default_and_future_backfill_after_prior_clear()
+    {
+        var (db,g,l,f,fp,child,birth,target,tp,desc)=await Setup();using var owned=db;var app=new SuccessionApplication(new IsolatedSuccessionStore(db));
+        var preview=await app.PreviewAsync(g,l,child,birth,tp);var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child,birth,tp,preview.Evidence));var info=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(info);await app.SetMotherAsync(new(Guid.NewGuid(),g,l,created.SuccessionId,null,null,false,info.Evidence));
+        var group=await new ChildOrderApplication(new IsolatedChildOrderStore(db)).ReadAsync(g,l,tp);await new BranchApplication(new IsolatedBranchStore(db)).DetachAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,group.Revision,group.Evidence));
+        var newFather=Guid.NewGuid();var newPlace=Guid.NewGuid();await using(var c=db.OpenContext()){var p=new Person(newFather,l,"冯新嗣父",PersonSex.Male);p.SetGeneration(1);c.People.Add(p);c.Placements.Add(new Placement(newPlace,l,newFather));await c.SaveChangesAsync();}
+        var retry=await app.PreviewAsync(g,l,child,created.HeirPlacementId,newPlace);await app.CreateAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,newPlace,retry.Evidence));var reattached=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(reattached);Assert.Null(reattached.MotherId);Assert.False(reattached.MotherCleared);
+        var wife=await new SpouseApplication(new IsolatedSpouseStore(db)).AddAsync(new(Guid.NewGuid(),g,l,newFather,newPlace,RootNameMode.Named,"虚构嗣母"));var filled=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(filled);Assert.Equal(wife.PersonId,filled.MotherId);
+        await app.SetMotherAsync(new(Guid.NewGuid(),g,l,created.SuccessionId,null,wife.PersonId,false,filled.Evidence));var cleared=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(cleared);Assert.True(cleared.MotherCleared);Assert.Null(cleared.MotherId);
+    }
+    [Fact]
+    public async Task Reattachment_defaults_new_first_spouse_even_after_prior_clear()
+    {
+        var (db,g,l,f,fp,child,birth,target,tp,desc)=await Setup();using var owned=db;var app=new SuccessionApplication(new IsolatedSuccessionStore(db));var preview=await app.PreviewAsync(g,l,child,birth,tp);var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child,birth,tp,preview.Evidence));var info=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(info);await app.SetMotherAsync(new(Guid.NewGuid(),g,l,created.SuccessionId,null,null,false,info.Evidence));
+        var group=await new ChildOrderApplication(new IsolatedChildOrderStore(db)).ReadAsync(g,l,tp);await new BranchApplication(new IsolatedBranchStore(db)).DetachAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,group.Revision,group.Evidence));
+        var newFather=Guid.NewGuid();var newPlace=Guid.NewGuid();await using(var c=db.OpenContext()){var p=new Person(newFather,l,"冯新嗣父",PersonSex.Male);p.SetGeneration(1);c.People.Add(p);c.Placements.Add(new Placement(newPlace,l,newFather));await c.SaveChangesAsync();}var wife=await new SpouseApplication(new IsolatedSpouseStore(db)).AddAsync(new(Guid.NewGuid(),g,l,newFather,newPlace,RootNameMode.Named,"虚构嗣母"));
+        var next=await app.PreviewAsync(g,l,child,created.HeirPlacementId,newPlace);await app.CreateAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,newPlace,next.Evidence));var result=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(result);Assert.Equal(wife.PersonId,result.MotherId);Assert.False(result.MotherCleared);
+    }
+    [Fact]
+    public async Task Reattachment_to_same_heir_father_preserves_explicit_clear()
+    {
+        var (db,g,l,f,fp,child,birth,target,tp,desc)=await Setup();using var owned=db;var spouses=new SpouseApplication(new IsolatedSpouseStore(db));var wife=await spouses.AddAsync(new(Guid.NewGuid(),g,l,target,tp,RootNameMode.Named,"虚构嗣母"));var app=new SuccessionApplication(new IsolatedSuccessionStore(db));var preview=await app.PreviewAsync(g,l,child,birth,tp);var created=await app.CreateAsync(new(Guid.NewGuid(),g,l,child,birth,tp,preview.Evidence));var info=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(info);await app.SetMotherAsync(new(Guid.NewGuid(),g,l,created.SuccessionId,null,wife.PersonId,false,info.Evidence));
+        var group=await new ChildOrderApplication(new IsolatedChildOrderStore(db)).ReadAsync(g,l,tp);await new BranchApplication(new IsolatedBranchStore(db)).DetachAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,group.Revision,group.Evidence));var again=await app.PreviewAsync(g,l,child,created.HeirPlacementId,tp);Assert.Null(again.HeirMotherName);await app.CreateAsync(new(Guid.NewGuid(),g,l,child,created.HeirPlacementId,tp,again.Evidence));var result=await app.ReadAsync(g,l,created.HeirPlacementId);Assert.NotNull(result);Assert.Null(result.MotherId);Assert.True(result.MotherCleared);
+    }
     private static async Task<(IsolatedTestDatabase db,Guid g,Guid l,Guid birthFather,Guid birthFatherPlace,Guid child,Guid birth,Guid target,Guid targetPlace,Guid descendant)> Setup()
     {
         var db=IsolatedTestDatabase.CreateNew();var g=Guid.NewGuid();var l=Guid.NewGuid();var f=Guid.NewGuid();var fp=Guid.NewGuid();var target=Guid.NewGuid();var tp=Guid.NewGuid();

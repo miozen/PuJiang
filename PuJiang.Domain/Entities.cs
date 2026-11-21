@@ -90,6 +90,12 @@ public sealed class Succession(Guid id, Guid lineageId, Guid childId, Guid birth
     public Guid HeirFatherPlacementId { get; private set; } = Identity.Require(heirFatherPlacementId);
     public Guid? HeirMotherId { get; private set; } = heirMotherId;
     public bool MotherExplicitlyCleared { get; private set; }
+    public void ChangeHeirParents(Guid fatherId, Guid fatherPlacementId, Guid? motherId)
+    {
+        if (fatherId == Guid.Empty || fatherPlacementId == Guid.Empty || fatherId == ChildId || motherId == Guid.Empty || motherId == ChildId || motherId == fatherId) throw new ArgumentException("嗣父母关系无效。");
+        var preserveClear = fatherId == HeirFatherId && MotherExplicitlyCleared;
+        HeirFatherId = fatherId; HeirFatherPlacementId = fatherPlacementId; HeirMotherId = preserveClear ? null : motherId; MotherExplicitlyCleared = preserveClear;
+    }
     public void SetMother(Guid? motherId, bool explicitlyCleared)
     {
         if (motherId == Guid.Empty || motherId == ChildId || motherId == HeirFatherId || motherId is not null && explicitlyCleared) throw new ArgumentException("嗣母关系无效。");

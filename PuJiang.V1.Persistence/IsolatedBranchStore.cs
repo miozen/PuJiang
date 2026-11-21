@@ -117,6 +117,8 @@ public sealed class IsolatedBranchStore(IsolatedTestDatabase database) : IBranch
         var fatherName = string.IsNullOrWhiteSpace(command.FatherName) ? null : command.FatherName.Trim();
         var motherName = string.IsNullOrWhiteSpace(command.MotherName) ? null : command.MotherName.Trim();
         var changeFather = fatherName != current.FatherName; var changeMother = motherName != current.MotherName;
+        if (changeFather && await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && x.ChildId == command.PersonId && x.HeirPlacementId == command.PlacementId, ct))
+            throw new InvalidOperationException("该人物仍有出生位置引用，暂不能从独立分支更改生父，请先核实。");
         var child = await db.People.SingleAsync(x => x.LineageId == command.LineageId && x.Id == command.PersonId, ct);
         var relations = await db.BiologicalParents.Where(x => x.LineageId == command.LineageId && x.ChildId == command.PersonId).ToListAsync(ct);
         foreach (var relation in relations.Where(x => changeFather && x.Role == ParentRole.Father || changeMother && x.Role == ParentRole.Mother)) db.BiologicalParents.Remove(relation);
@@ -296,11 +298,13 @@ public sealed class IsolatedBranchStore(IsolatedTestDatabase database) : IBranch
         var payload = "detach:" + JsonSerializer.Serialize(command);
         var receipt = await db.ChildOrderReceipts.SingleOrDefaultAsync(x => x.OperationId == command.OperationId, ct);
         if (receipt is not null) { if (receipt.Payload != payload) throw new InvalidOperationException("操作身份已用于不同输入。"); return; }
-        if (await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && (x.BirthPlacementId == command.PlacementId || x.HeirPlacementId == command.PlacementId), ct)) throw new InvalidOperationException("承嗣位置暂不支持拆支，请先核实。");
+        if (await db.Successions.AnyAsync(x => x.LineageId == command.LineageId && x.BirthPlacementId == command.PlacementId, ct)) throw new InvalidOperationException("出生引用位置不承接后代，请选择嗣子位置拆支。");
         var group = await IsolatedChildOrderStore.Load(db, command.GenealogyId, command.LineageId, command.ParentPlacementId, ct);
         if (group.Revision != command.ExpectedRevision || IsolatedChildOrderStore.Evidence(group.Items) != command.ExpectedEvidence) throw new InvalidOperationException("同胞或父位置已变化，请重新发起拆支。");
         var selected = group.Items.SingleOrDefault(x => x.Place.Id == command.PlacementId && x.Person.Id == command.PersonId);
         if (selected.Place is null) throw new InvalidOperationException("目标位置已失效。");
+        var succession = await db.Successions.SingleOrDefaultAsync(x => x.LineageId == command.LineageId && x.HeirPlacementId == command.PlacementId, ct);
+        if (succession is not null && (succession.ChildId != command.PersonId || succession.HeirFatherPlacementId != command.ParentPlacementId)) throw new InvalidOperationException("嗣子位置与嗣父关系不一致。");
         selected.Place.Detach(); group.Items.Remove(selected);
         for (var i = 0; i < group.Items.Count; i++) group.Items[i].Place.SetPosition(i + 1);
         await ChildOrderVersions.Touch(db, command.LineageId, command.ParentPlacementId, ct);

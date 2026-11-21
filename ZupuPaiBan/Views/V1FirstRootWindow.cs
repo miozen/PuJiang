@@ -539,6 +539,7 @@ public sealed class V1FirstRootWindow : Window
                 };
                 var special = node.Original is ChildNode { PositionKind: not ChildPositionKind.Ordinary };
                 var reference = node.Original is ChildNode { PositionKind: ChildPositionKind.BirthReference };
+                var detachedHeir = node.Original is RootNode && _childNodes.Any(x => x.PersonId == node.Person && x.PositionKind == ChildPositionKind.BirthReference);
                 var addChild = new MenuItem { Header = "添加子女", IsEnabled = !reference }; addChild.Click += (_, _) => BeginFamilyInput(InputKind.Child); menu.Items.Add(addChild);
                 var addSibling = new MenuItem { Header = "添加兄弟姐妹", IsEnabled = node.Parent is not null && !special }; addSibling.Click += (_, _) => BeginSiblingInput(); menu.Items.Add(addSibling);
                 var addSpouse = new MenuItem { Header = "添加配偶", IsEnabled = !reference }; addSpouse.Click += (_, _) => BeginFamilyInput(InputKind.Spouse); menu.Items.Add(addSpouse);
@@ -548,21 +549,27 @@ public sealed class V1FirstRootWindow : Window
                     inherit.Click += async (_, _) => await BeginSuccessionAsync(source.PersonId, source.PlacementId);
                     menu.Items.Add(inherit);
                 }
+                if (_succession is not null && detachedHeir)
+                {
+                    var inherit = new MenuItem { Header = "挂接为嗣子" };
+                    inherit.Click += async (_, _) => await BeginSuccessionAsync(node.Person, node.Placement);
+                    menu.Items.Add(inherit);
+                }
                 if (_branches is not null)
                 {
-                    if (node.Original is RootNode)
+                    if (node.Original is RootNode && !detachedHeir)
                     {
                         var attach = new MenuItem { Header = "挂接此分支" };
                         attach.Click += async (_, _) => await BeginAttachAsync(node.Person, node.Placement);
                         menu.Items.Add(attach);
                     }
-                    if (node.Original is ChildNode { PositionKind: ChildPositionKind.Ordinary } detachable && _orderSnapshots.TryGetValue(detachable.ParentPlacementId, out var detachGroup))
+                    if (node.Original is ChildNode { PositionKind: ChildPositionKind.Ordinary or ChildPositionKind.Succession } detachable && _orderSnapshots.TryGetValue(detachable.ParentPlacementId, out var detachGroup))
                     {
                         var detach = new MenuItem { Header = "拆支" };
                         detach.Click += async (_, _) => { if (_saving || HasPending || _profileDirty || _input is not null) return; _pendingDetach = new(Guid.NewGuid(), _genealogy, _lineage, detachable.PersonId, detachable.PlacementId, detachable.ParentPlacementId, detachGroup.Revision, detachGroup.Evidence); await SubmitBranchAsync(); };
                         menu.Items.Add(detach);
                     }
-                    var delete = new MenuItem { Header = "删除此分支", IsEnabled = !special };
+                    var delete = new MenuItem { Header = "删除此分支", IsEnabled = !special && !detachedHeir };
                     delete.Click += async (_, _) => await BeginDeleteBranchAsync(node.Person, node.Placement); menu.Items.Add(delete);
                 }
                 if(node.Original is ChildNode childNode && _childOrders is not null && _orderSnapshots.TryGetValue(childNode.ParentPlacementId,out var group))
@@ -930,7 +937,16 @@ public sealed class V1FirstRootWindow : Window
                 }
             }
             var child = _childNodes.FirstOrDefault(x => x.PersonId == person && x.PlacementId == placement);
-            if (child is null) return;
+            if (child is null)
+            {
+                if (_succession is not null && _childNodes.Any(x => x.PersonId == person && x.PositionKind == ChildPositionKind.BirthReference))
+                {
+                    var info = await _succession.ReadAsync(_genealogy, _lineage, placement);
+                    if (version != _detailsVersion || _personId != person || _placementId != placement) return;
+                    if (info is not null) { var fatherName = _rootNodes.Where(x => x.PersonId == info.HeirFatherId).Select(x => x.Name).Concat(_childNodes.Where(x => x.PersonId == info.HeirFatherId).Select(x => x.Name)).FirstOrDefault(); _familyDetails.Children.Add(new TextBlock { Text = $"已拆支 · 保留嗣父：{fatherName ?? "未显示"}\n嗣母：{info.MotherName ?? "未记录"}", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) }); }
+                }
+                return;
+            }
             if (_orderIssues.TryGetValue(child.ParentPlacementId,out var issue)) _familyDetails.Children.Add(new TextBlock { Text="排行暂不可调整："+issue, TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,8,0,0) });
             if (_orderSnapshots.TryGetValue(child.ParentPlacementId,out var rankGroup))
             {
